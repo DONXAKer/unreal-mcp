@@ -5,6 +5,9 @@
 #include "K2Node_Self.h"
 #include "K2Node_ConstructObjectFromClass.h"
 #include "K2Node_Knot.h"
+#include "K2Node_CreateWidget.h"
+#include "Engine/Blueprint.h"
+#include "Blueprint/UserWidget.h"
 #include "EdGraphSchema_K2.h"
 #include "Json.h"
 
@@ -132,4 +135,62 @@ UK2Node* FSpecializedNodeCreator::CreateKnotNode(UEdGraph* Graph, const TSharedP
 	FNodeCreatorUtils::InitializeK2Node(KnotNode, Graph);
 
 	return KnotNode;
+}
+
+UK2Node* FSpecializedNodeCreator::CreateWidgetNode(UEdGraph* Graph, const TSharedPtr<FJsonObject>& Params)
+{
+	if (!Graph || !Params.IsValid())
+	{
+		return nullptr;
+	}
+
+	UK2Node_CreateWidget* CreateWidgetNode = NewObject<UK2Node_CreateWidget>(Graph);
+	if (!CreateWidgetNode)
+	{
+		return nullptr;
+	}
+
+	double PosX, PosY;
+	FNodeCreatorUtils::ExtractNodePosition(Params, PosX, PosY);
+	CreateWidgetNode->NodePosX = static_cast<int32>(PosX);
+	CreateWidgetNode->NodePosY = static_cast<int32>(PosY);
+
+	// Устанавливаем класс виджета если передан
+	FString WidgetClassName;
+	if (Params->TryGetStringField(TEXT("widget_class"), WidgetClassName))
+	{
+		UClass* WidgetClass = nullptr;
+
+		if (WidgetClassName.StartsWith(TEXT("/")))
+		{
+			// Полный путь к ассету Blueprint: /Game/UI/WBP_MyWidget
+			// Сначала пробуем загрузить сгенерированный класс (_C суффикс)
+			WidgetClass = LoadObject<UClass>(nullptr, *(WidgetClassName + TEXT("_C")));
+			if (!WidgetClass)
+			{
+				// Загружаем Blueprint и берём GeneratedClass
+				UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *WidgetClassName);
+				if (BP && BP->GeneratedClass && BP->GeneratedClass->IsChildOf(UUserWidget::StaticClass()))
+				{
+					WidgetClass = BP->GeneratedClass;
+				}
+			}
+		}
+
+		if (!WidgetClass)
+		{
+			WidgetClass = FindFirstObject<UClass>(*WidgetClassName, EFindFirstObjectOptions::None,
+				ELogVerbosity::Warning, TEXT("MCP CreateWidget class lookup"));
+		}
+
+		if (WidgetClass && WidgetClass->IsChildOf(UUserWidget::StaticClass()))
+		{
+			CreateWidgetNode->WidgetType = TSubclassOf<UUserWidget>(WidgetClass);
+		}
+	}
+
+	Graph->AddNode(CreateWidgetNode, true, false);
+	FNodeCreatorUtils::InitializeK2Node(CreateWidgetNode, Graph);
+
+	return CreateWidgetNode;
 }

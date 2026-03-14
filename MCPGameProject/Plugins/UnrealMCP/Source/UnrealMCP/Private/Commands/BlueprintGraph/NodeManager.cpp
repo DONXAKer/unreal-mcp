@@ -139,6 +139,10 @@ TSharedPtr<FJsonObject> FBlueprintNodeManager::AddNode(const TSharedPtr<FJsonObj
 	{
 		NewNode = FControlFlowNodeCreator::CreateExecutionSequenceNode(Graph, NodeParams);
 	}
+	else if (NodeType.Equals(TEXT("ForEachLoop"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FControlFlowNodeCreator::CreateForEachLoopNode(Graph, NodeParams);
+	}
 	// Data Nodes
 	else if (NodeType.Equals(TEXT("VariableGet"), ESearchCase::IgnoreCase))
 	{
@@ -207,6 +211,10 @@ TSharedPtr<FJsonObject> FBlueprintNodeManager::AddNode(const TSharedPtr<FJsonObj
 	else if (NodeType.Equals(TEXT("Knot"), ESearchCase::IgnoreCase))
 	{
 		NewNode = FSpecializedNodeCreator::CreateKnotNode(Graph, NodeParams);
+	}
+	else if (NodeType.Equals(TEXT("CreateWidget"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FSpecializedNodeCreator::CreateWidgetNode(Graph, NodeParams);
 	}
 	// Event nodes (kept for backward compatibility - should use add_event_node)
 	else if (NodeType.Equals(TEXT("Event"), ESearchCase::IgnoreCase))

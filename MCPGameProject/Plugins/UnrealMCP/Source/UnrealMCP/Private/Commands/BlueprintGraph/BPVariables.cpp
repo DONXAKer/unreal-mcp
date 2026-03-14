@@ -9,6 +9,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "PropertyEditorModule.h"
 #include "Modules/ModuleManager.h"
+#include "UObject/UObjectGlobals.h"
 
 TSharedPtr<FJsonObject> FBPVariables::CreateVariable(const TSharedPtr<FJsonObject>& Params)
 {
@@ -397,36 +398,99 @@ FEdGraphPinType FBPVariables::GetPinTypeFromString(const FString& TypeString)
 {
     FEdGraphPinType PinType;
 
-    if (TypeString == "bool")
+    // Поддержка контейнера массива: "array:inner_type"
+    bool bIsArray = TypeString.StartsWith(TEXT("array:"));
+    const FString InnerType = bIsArray ? TypeString.Mid(6) : TypeString;
+
+    if (bIsArray)
+    {
+        PinType.ContainerType = EPinContainerType::Array;
+    }
+
+    if (InnerType == TEXT("bool"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Boolean;
     }
-    else if (TypeString == "int")
+    else if (InnerType == TEXT("int"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Int;
     }
-    else if (TypeString == "float")
+    else if (InnerType == TEXT("float"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Real;
         PinType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
     }
-    else if (TypeString == "string")
+    else if (InnerType == TEXT("string"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_String;
     }
-    else if (TypeString == "vector")
+    else if (InnerType == TEXT("text"))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Text;
+    }
+    else if (InnerType == TEXT("name"))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Name;
+    }
+    else if (InnerType == TEXT("vector"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
         PinType.PinSubCategoryObject = TBaseStructure<FVector>::Get();
     }
-    else if (TypeString == "rotator")
+    else if (InnerType == TEXT("rotator"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
         PinType.PinSubCategoryObject = TBaseStructure<FRotator>::Get();
     }
+    else if (InnerType.StartsWith(TEXT("struct:")))
+    {
+        // Формат: "struct:/Script/PackageName.StructName" или "struct:ShortName"
+        const FString StructPath = InnerType.Mid(7);
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
+
+        UScriptStruct* Struct = FindObject<UScriptStruct>(nullptr, *StructPath);
+        if (!Struct)
+        {
+            Struct = LoadObject<UScriptStruct>(nullptr, *StructPath);
+        }
+        if (!Struct)
+        {
+            Struct = FindFirstObject<UScriptStruct>(*StructPath, EFindFirstObjectOptions::None,
+                ELogVerbosity::Warning, TEXT("MCP struct variable type lookup"));
+        }
+        if (Struct)
+        {
+            PinType.PinSubCategoryObject = Struct;
+        }
+    }
+    else if (InnerType.StartsWith(TEXT("object:")))
+    {
+        // Формат: "object:/Script/PackageName.ClassName" или "object:ShortName"
+        const FString ClassPath = InnerType.Mid(7);
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Object;
+
+        UClass* TargetClass = nullptr;
+        if (ClassPath.StartsWith(TEXT("/")))
+        {
+            TargetClass = Cast<UClass>(StaticFindObject(UClass::StaticClass(), nullptr, *ClassPath));
+            if (!TargetClass)
+            {
+                TargetClass = LoadObject<UClass>(nullptr, *ClassPath);
+            }
+        }
+        if (!TargetClass)
+        {
+            TargetClass = FindFirstObject<UClass>(*ClassPath, EFindFirstObjectOptions::None,
+                ELogVerbosity::Warning, TEXT("MCP object variable type lookup"));
+        }
+        if (TargetClass)
+        {
+            PinType.PinSubCategoryObject = TargetClass;
+        }
+    }
     else
     {
-        // Défaut: float
+        // По умолчанию: float
         PinType.PinCategory = UEdGraphSchema_K2::PC_Real;
         PinType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
     }

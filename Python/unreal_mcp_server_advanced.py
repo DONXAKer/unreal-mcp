@@ -5,49 +5,6 @@ A streamlined MCP server focused on advanced composition tools for Unreal Engine
 Contains only the advanced tools from the expanded MCP tool system to keep tool count manageable.
 """
 
-# ---------------------------------------------------------------------------
-# Патч FastMCP: исправление конвертации JSON bool → Python str.
-# Проблема: FastMCP передаёт значение false (JSON bool) без конвертации
-# в Pydantic-модель где ожидается str, что вызывает ошибку string_type.
-# Патч добавляет принудительный coerce bool/int/float → str когда
-# аннотация поля str.
-# ---------------------------------------------------------------------------
-def _patch_fastmcp_pre_parse_json():
-    try:
-        from fastmcp.utilities.func_metadata import FuncMetadata
-        import json as _json
-
-        original_pre_parse = FuncMetadata.pre_parse_json
-
-        def _patched_pre_parse(self, data):
-            new_data = data.copy()
-            for field_name, field_info in self.arg_model.model_fields.items():
-                if field_name not in data:
-                    continue
-                value = data[field_name]
-                if isinstance(value, str):
-                    try:
-                        pre_parsed = _json.loads(value)
-                    except _json.JSONDecodeError:
-                        continue
-                    if isinstance(pre_parsed, (str, int, float)):
-                        continue
-                    new_data[field_name] = pre_parsed
-                elif isinstance(value, bool) and field_info.annotation is str:
-                    new_data[field_name] = "true" if value else "false"
-                elif isinstance(value, (int, float)) and field_info.annotation is str:
-                    new_data[field_name] = str(value)
-            assert new_data.keys() == data.keys()
-            return new_data
-
-        FuncMetadata.pre_parse_json = _patched_pre_parse
-    except Exception:
-        pass  # Если FastMCP изменится — сервер продолжит работу без патча
-
-
-_patch_fastmcp_pre_parse_json()
-# ---------------------------------------------------------------------------
-
 import logging
 import socket
 import json
@@ -2067,17 +2024,18 @@ def add_node(
     target_function: str = "",
     target_blueprint: Optional[str] = None,
     target_class: Optional[str] = None,
+    widget_class: Optional[str] = None,
     function_name: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Add a node to a Blueprint graph.
 
     Create various types of K2Nodes in a Blueprint's event graph or function graph.
-    Supports 23 node types organized by category.
+    Supports 25 node types organized by category.
 
     Args:
         blueprint_name: Name of the Blueprint to modify
-        node_type: Type of node to create. Supported types (23 total):
+        node_type: Type of node to create. Supported types (25 total):
 
             CONTROL FLOW:
                 "Branch" - Conditional execution (if/then/else)
@@ -2091,6 +2049,8 @@ def add_node(
                     ℹ️ Creates 1 pin at creation; add more via set_node_property with action="add_pin"
                 "ExecutionSequence" - Sequential execution with multiple outputs
                     ℹ️ Creates 1 pin at creation; add/remove via set_node_property (add_pin/remove_pin)
+                "ForEachLoop" - Iterate over array elements (macro)
+                    Pins: Array (input), LoopBody (exec), ArrayElement (data), ArrayIndex (int), Completed (exec)
 
             DATA:
                 "VariableGet" - Read a variable value (⚠️ variable must exist in Blueprint)
@@ -2117,6 +2077,9 @@ def add_node(
                 "AddComponentByClass" - Dynamically add component to actor
                 "Self" - Reference to current actor/object
                 "Knot" - Invisible reroute node (wire organization only)
+                "CreateWidget" - Create a UMG widget instance
+                    ℹ️ Use widget_class="/Game/UI/WBP_MyWidget" to set the widget class
+                    Pins: Owning Player (input), Return Value (UserWidget output)
 
             EVENT:
                 "Event" - Blueprint event (specify event_type: BeginPlay, Tick, etc.)
@@ -2129,6 +2092,8 @@ def add_node(
         variable_name: For Variable nodes, the variable name
         target_function: For CallFunction nodes, the function to call
         target_blueprint: For CallFunction nodes, optional path to target Blueprint
+        target_class: For VariableGet nodes, optional C++ class path to access external UPROPERTY
+        widget_class: For CreateWidget nodes, full asset path or short name of the widget Blueprint
         function_name: Optional name of function graph to add node to (if None, uses EventGraph)
 
     Returns:
@@ -2138,6 +2103,7 @@ def add_node(
         - Most nodes can have pins modified after creation via set_node_property
         - Dynamic pin management: Switch/SwitchEnum/ExecutionSequence/MakeArray support pin operations
         - Timeline is the ONLY node requiring manual implementation (curves must be added in editor)
+        - ForEachLoop is a macro node — pins: Array, LoopBody, ArrayElement, ArrayIndex, Completed
     """
     unreal = get_unreal_connection()
     if not unreal:
@@ -2161,6 +2127,8 @@ def add_node(
             node_params["target_blueprint"] = target_blueprint
         if target_class:
             node_params["target_class"] = target_class
+        if widget_class:
+            node_params["widget_class"] = widget_class
         if function_name:
             node_params["function_name"] = function_name
 
@@ -2240,7 +2208,20 @@ def create_variable(
     Args:
         blueprint_name: Name of the Blueprint to modify
         variable_name: Name of the variable to create
-        variable_type: Type of the variable ("bool", "int", "float", "string", "vector", "rotator")
+        variable_type: Type of the variable. Supported formats:
+            Primitive types:
+                "bool", "int", "float", "string", "text", "name", "vector", "rotator"
+            Object reference:
+                "object:/Script/Module.ClassName"     — e.g. "object:/Script/Client.AGamePhaseManager"
+                "object:ShortClassName"               — e.g. "object:AGamePhaseManager"
+            Struct:
+                "struct:/Script/Module.FStructName"   — e.g. "struct:/Script/Client.FUnitTemplate"
+                "struct:ShortStructName"              — e.g. "struct:FUnitTemplate"
+            Array (prefix any inner type with "array:"):
+                "array:int"
+                "array:string"
+                "array:struct:/Script/Client.FUnitTemplate"
+                "array:object:/Script/Client.AGamePhaseManager"
         default_value: Default value for the variable (optional)
         is_public: Whether the variable should be public/editable (default: False)
         tooltip: Tooltip text for the variable (optional)

@@ -6,6 +6,8 @@
 #include "K2Node_SwitchEnum.h"
 #include "K2Node_SwitchInteger.h"
 #include "K2Node_ExecutionSequence.h"
+#include "K2Node_MacroInstance.h"
+#include "Engine/Blueprint.h"
 #include "EdGraphSchema_K2.h"
 #include "Json.h"
 
@@ -232,4 +234,55 @@ UK2Node* FControlFlowNodeCreator::CreateExecutionSequenceNode(UEdGraph* Graph, c
 	FNodeCreatorUtils::InitializeK2Node(SeqNode, Graph);
 
 	return SeqNode;
+}
+
+UK2Node* FControlFlowNodeCreator::CreateForEachLoopNode(UEdGraph* Graph, const TSharedPtr<FJsonObject>& Params)
+{
+	if (!Graph || !Params.IsValid())
+	{
+		return nullptr;
+	}
+
+	// Загружаем StandardMacros Blueprint из движка
+	UBlueprint* StandardMacros = LoadObject<UBlueprint>(nullptr, TEXT("/Engine/EditorBlueprintResources/StandardMacros.StandardMacros"));
+	if (!StandardMacros)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ControlFlowNodes: не удалось загрузить StandardMacros"));
+		return nullptr;
+	}
+
+	// Ищем граф макроса ForEachLoop
+	UEdGraph* ForEachLoopGraph = nullptr;
+	for (UEdGraph* MacroGraph : StandardMacros->MacroGraphs)
+	{
+		if (MacroGraph && MacroGraph->GetFName() == FName(TEXT("ForEachLoop")))
+		{
+			ForEachLoopGraph = MacroGraph;
+			break;
+		}
+	}
+
+	if (!ForEachLoopGraph)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ControlFlowNodes: макрос ForEachLoop не найден в StandardMacros"));
+		return nullptr;
+	}
+
+	UK2Node_MacroInstance* MacroNode = NewObject<UK2Node_MacroInstance>(Graph);
+	if (!MacroNode)
+	{
+		return nullptr;
+	}
+
+	MacroNode->SetMacroGraph(ForEachLoopGraph);
+
+	double PosX, PosY;
+	FNodeCreatorUtils::ExtractNodePosition(Params, PosX, PosY);
+	MacroNode->NodePosX = static_cast<int32>(PosX);
+	MacroNode->NodePosY = static_cast<int32>(PosY);
+
+	Graph->AddNode(MacroNode, true, false);
+	FNodeCreatorUtils::InitializeK2Node(MacroNode, Graph);
+
+	return MacroNode;
 }

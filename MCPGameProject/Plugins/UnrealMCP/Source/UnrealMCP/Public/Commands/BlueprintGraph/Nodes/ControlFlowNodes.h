@@ -62,4 +62,14 @@ public:
 	 * @return The created node or nullptr on error
 	 */
 	static UK2Node* CreateExecutionSequenceNode(UEdGraph* Graph, const TSharedPtr<class FJsonObject>& Params);
+
+	/**
+	 * Creates a ForEachLoop macro node (K2Node_MacroInstance)
+	 * Pins: Array (input), LoopBody (exec output), ArrayElement (data output),
+	 *        ArrayIndex (int output), Completed (exec output)
+	 * @param Graph - The graph to add the node to
+	 * @param Params - JSON parameters containing pos_x, pos_y
+	 * @return The created node or nullptr on error
+	 */
+	static UK2Node* CreateForEachLoopNode(UEdGraph* Graph, const TSharedPtr<class FJsonObject>& Params);
 };

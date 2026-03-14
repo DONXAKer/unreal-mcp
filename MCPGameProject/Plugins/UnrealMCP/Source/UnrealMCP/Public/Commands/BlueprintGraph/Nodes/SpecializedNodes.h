@@ -52,4 +52,14 @@ public:
 	 * @return The created node or nullptr on error
 	 */
 	static UK2Node* CreateKnotNode(UEdGraph* Graph, const TSharedPtr<class FJsonObject>& Params);
+
+	/**
+	 * Creates a Create Widget node (UK2Node_CreateWidget)
+	 * @param Graph - The graph to add the node to
+	 * @param Params - JSON parameters containing:
+	 *                 - pos_x, pos_y: position
+	 *                 - widget_class: full asset path or short name of the UUserWidget Blueprint class
+	 * @return The created node or nullptr on error
+	 */
+	static UK2Node* CreateWidgetNode(UEdGraph* Graph, const TSharedPtr<class FJsonObject>& Params);
 };
