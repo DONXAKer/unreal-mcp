@@ -104,12 +104,33 @@ UK2Node_Event* FEventManager::CreateEventNode(UEdGraph* Graph, const FString& Ev
 		return nullptr;
 	}
 
-	UFunction* EventFunction = BlueprintClass->FindFunctionByName(FName(*EventName));
+	// Ищем класс, непосредственно объявляющий функцию (не генерированный Blueprint-класс).
+	// Это критично для BlueprintImplementableEvent из C++: если использовать GeneratedClass,
+	// AllocateDefaultPins() не создаёт параметрные пины (например, TArray<FUnitTemplate> Units).
+	UClass* DeclaringClass = nullptr;
+	UFunction* EventFunction = nullptr;
+	for (UClass* Class = BlueprintClass; Class; Class = Class->GetSuperClass())
+	{
+		UFunction* Func = Class->FindFunctionByName(FName(*EventName), EIncludeSuperFlag::ExcludeSuper);
+		if (Func)
+		{
+			EventFunction = Func;
+			DeclaringClass = Class;
+			break;
+		}
+	}
+
+	// Запасной вариант: функция найдена через наследование, но декларирующий класс не определён
+	if (!EventFunction)
+	{
+		EventFunction = BlueprintClass->FindFunctionByName(FName(*EventName));
+		DeclaringClass = BlueprintClass;
+	}
 
 	if (EventFunction)
 	{
 		EventNode = NewObject<UK2Node_Event>(Graph);
-		EventNode->EventReference.SetExternalMember(FName(*EventName), BlueprintClass);
+		EventNode->EventReference.SetExternalMember(FName(*EventName), DeclaringClass);
 		EventNode->NodePosX = static_cast<int32>(Position.X);
 		EventNode->NodePosY = static_cast<int32>(Position.Y);
 		Graph->AddNode(EventNode, true);

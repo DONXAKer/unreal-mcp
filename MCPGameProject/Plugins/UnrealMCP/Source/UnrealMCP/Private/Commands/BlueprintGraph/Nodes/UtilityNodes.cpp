@@ -121,11 +121,35 @@ UK2Node* FUtilityNodeCreator::CreateCallFunctionNode(UEdGraph* Graph, const TSha
 	}
 	else
 	{
-		// Try common Unreal classes in order
+		// Поиск по популярным Unreal-классам в порядке приоритета
 		TargetFunc = UKismetSystemLibrary::StaticClass()->FindFunctionByName(FName(*TargetFunction));
 		if (!TargetFunc)
 		{
 			TargetFunc = UKismetMathLibrary::StaticClass()->FindFunctionByName(FName(*TargetFunction));
+		}
+		// UMG-классы: UTextBlock (SetText), UWidget (SetIsEnabled, SetVisibility), UButton, UPanelWidget (AddChild, ClearChildren)
+		if (!TargetFunc)
+		{
+			static const TCHAR* UMGClassPaths[] = {
+				TEXT("/Script/UMG.TextBlock"),
+				TEXT("/Script/UMG.Widget"),
+				TEXT("/Script/UMG.Button"),
+				TEXT("/Script/UMG.PanelWidget"),
+				TEXT("/Script/UMG.UserWidget"),
+				TEXT("/Script/UMG.WidgetBlueprintLibrary"),
+			};
+			for (const TCHAR* ClassPath : UMGClassPaths)
+			{
+				UClass* UMGClass = FindObject<UClass>(nullptr, ClassPath);
+				if (UMGClass)
+				{
+					TargetFunc = UMGClass->FindFunctionByName(FName(*TargetFunction));
+					if (TargetFunc)
+					{
+						break;
+					}
+				}
+			}
 		}
 	}
 
