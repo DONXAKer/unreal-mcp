@@ -8,12 +8,11 @@
 #include "Json.h"
 #include "Interfaces/IPv4/IPv4Address.h"
 #include "Interfaces/IPv4/IPv4Endpoint.h"
-#include "Commands/UnrealMCPEditorCommands.h"
-#include "Commands/UnrealMCPBlueprintCommands.h"
-#include "Commands/UnrealMCPBlueprintNodeCommands.h"
-#include "Commands/UnrealMCPProjectCommands.h"
-#include "Commands/UnrealMCPUMGCommands.h"
-#include "UnrealMCPBridge.generated.h"
+#include "Commands/EpicUnrealMCPEditorCommands.h"
+#include "Commands/EpicUnrealMCPBlueprintCommands.h"
+#include "Commands/EpicUnrealMCPBlueprintGraphCommands.h"
+#include "Commands/UMGCommands.h"
+#include "EpicUnrealMCPBridge.generated.h"
 
 class FMCPServerRunnable;
 
@@ -24,13 +23,13 @@ class FMCPServerRunnable;
  * routed to appropriate command handlers.
  */
 UCLASS()
-class UNREALMCP_API UUnrealMCPBridge : public UEditorSubsystem
+class UNREALMCP_API UEpicUnrealMCPBridge : public UEditorSubsystem
 {
 	GENERATED_BODY()
 
 public:
-	UUnrealMCPBridge();
-	virtual ~UUnrealMCPBridge();
+	UEpicUnrealMCPBridge();
+	virtual ~UEpicUnrealMCPBridge();
 
 	// UEditorSubsystem implementation
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
@@ -56,9 +55,8 @@ private:
 	uint16 Port;
 
 	// Command handler instances
-	TSharedPtr<FUnrealMCPEditorCommands> EditorCommands;
-	TSharedPtr<FUnrealMCPBlueprintCommands> BlueprintCommands;
-	TSharedPtr<FUnrealMCPBlueprintNodeCommands> BlueprintNodeCommands;
-	TSharedPtr<FUnrealMCPProjectCommands> ProjectCommands;
+	TSharedPtr<FEpicUnrealMCPEditorCommands> EditorCommands;
+	TSharedPtr<FEpicUnrealMCPBlueprintCommands> BlueprintCommands;
+	TSharedPtr<FEpicUnrealMCPBlueprintGraphCommands> BlueprintGraphCommands;
 	TSharedPtr<FUnrealMCPUMGCommands> UMGCommands;
 }; 

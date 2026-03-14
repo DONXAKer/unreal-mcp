@@ -18,9 +18,9 @@ class UK2Node_Self;
 class UFunction;
 
 /**
- * Common utilities for UnrealMCP commands
+ * Common utilities for EpicUnrealMCP commands
  */
-class UNREALMCP_API FUnrealMCPCommonUtils
+class UNREALMCP_API FEpicUnrealMCPCommonUtils
 {
 public:
     // JSON utilities

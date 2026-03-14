@@ -1,4 +1,4 @@
-#include "UnrealMCPBridge.h"
+#include "EpicUnrealMCPBridge.h"
 #include "MCPServerRunnable.h"
 #include "Sockets.h"
 #include "SocketSubsystem.h"
@@ -51,39 +51,36 @@
 #include "EditorSubsystem.h"
 #include "Subsystems/EditorActorSubsystem.h"
 // Include our new command handler classes
-#include "Commands/UnrealMCPEditorCommands.h"
-#include "Commands/UnrealMCPBlueprintCommands.h"
-#include "Commands/UnrealMCPBlueprintNodeCommands.h"
-#include "Commands/UnrealMCPProjectCommands.h"
-#include "Commands/UnrealMCPCommonUtils.h"
-#include "Commands/UnrealMCPUMGCommands.h"
+#include "Commands/EpicUnrealMCPEditorCommands.h"
+#include "Commands/EpicUnrealMCPBlueprintCommands.h"
+#include "Commands/EpicUnrealMCPBlueprintGraphCommands.h"
+#include "Commands/EpicUnrealMCPCommonUtils.h"
+#include "Commands/UMGCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
 #define MCP_SERVER_PORT 55557
 
-UUnrealMCPBridge::UUnrealMCPBridge()
+UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
 {
-    EditorCommands = MakeShared<FUnrealMCPEditorCommands>();
-    BlueprintCommands = MakeShared<FUnrealMCPBlueprintCommands>();
-    BlueprintNodeCommands = MakeShared<FUnrealMCPBlueprintNodeCommands>();
-    ProjectCommands = MakeShared<FUnrealMCPProjectCommands>();
+    EditorCommands = MakeShared<FEpicUnrealMCPEditorCommands>();
+    BlueprintCommands = MakeShared<FEpicUnrealMCPBlueprintCommands>();
+    BlueprintGraphCommands = MakeShared<FEpicUnrealMCPBlueprintGraphCommands>();
     UMGCommands = MakeShared<FUnrealMCPUMGCommands>();
 }
 
-UUnrealMCPBridge::~UUnrealMCPBridge()
+UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
 {
     EditorCommands.Reset();
     BlueprintCommands.Reset();
-    BlueprintNodeCommands.Reset();
-    ProjectCommands.Reset();
+    BlueprintGraphCommands.Reset();
     UMGCommands.Reset();
 }
 
 // Initialize subsystem
-void UUnrealMCPBridge::Initialize(FSubsystemCollectionBase& Collection)
+void UEpicUnrealMCPBridge::Initialize(FSubsystemCollectionBase& Collection)
 {
-    UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Initializing"));
+    UE_LOG(LogTemp, Display, TEXT("EpicUnrealMCPBridge: Initializing"));
     
     bIsRunning = false;
     ListenerSocket = nullptr;
@@ -97,18 +94,18 @@ void UUnrealMCPBridge::Initialize(FSubsystemCollectionBase& Collection)
 }
 
 // Clean up resources when subsystem is destroyed
-void UUnrealMCPBridge::Deinitialize()
+void UEpicUnrealMCPBridge::Deinitialize()
 {
-    UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Shutting down"));
+    UE_LOG(LogTemp, Display, TEXT("EpicUnrealMCPBridge: Shutting down"));
     StopServer();
 }
 
 // Start the MCP server
-void UUnrealMCPBridge::StartServer()
+void UEpicUnrealMCPBridge::StartServer()
 {
     if (bIsRunning)
     {
-        UE_LOG(LogTemp, Warning, TEXT("UnrealMCPBridge: Server is already running"));
+        UE_LOG(LogTemp, Warning, TEXT("EpicUnrealMCPBridge: Server is already running"));
         return;
     }
 
@@ -116,7 +113,7 @@ void UUnrealMCPBridge::StartServer()
     ISocketSubsystem* SocketSubsystem = ISocketSubsystem::Get(PLATFORM_SOCKETSUBSYSTEM);
     if (!SocketSubsystem)
     {
-        UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to get socket subsystem"));
+        UE_LOG(LogTemp, Error, TEXT("EpicUnrealMCPBridge: Failed to get socket subsystem"));
         return;
     }
 
@@ -124,7 +121,7 @@ void UUnrealMCPBridge::StartServer()
     TSharedPtr<FSocket> NewListenerSocket = MakeShareable(SocketSubsystem->CreateSocket(NAME_Stream, TEXT("UnrealMCPListener"), false));
     if (!NewListenerSocket.IsValid())
     {
-        UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to create listener socket"));
+        UE_LOG(LogTemp, Error, TEXT("EpicUnrealMCPBridge: Failed to create listener socket"));
         return;
     }
 
@@ -136,20 +133,20 @@ void UUnrealMCPBridge::StartServer()
     FIPv4Endpoint Endpoint(ServerAddress, Port);
     if (!NewListenerSocket->Bind(*Endpoint.ToInternetAddr()))
     {
-        UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to bind listener socket to %s:%d"), *ServerAddress.ToString(), Port);
+        UE_LOG(LogTemp, Error, TEXT("EpicUnrealMCPBridge: Failed to bind listener socket to %s:%d"), *ServerAddress.ToString(), Port);
         return;
     }
 
     // Start listening
     if (!NewListenerSocket->Listen(5))
     {
-        UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to start listening"));
+        UE_LOG(LogTemp, Error, TEXT("EpicUnrealMCPBridge: Failed to start listening"));
         return;
     }
 
     ListenerSocket = NewListenerSocket;
     bIsRunning = true;
-    UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Server started on %s:%d"), *ServerAddress.ToString(), Port);
+    UE_LOG(LogTemp, Display, TEXT("EpicUnrealMCPBridge: Server started on %s:%d"), *ServerAddress.ToString(), Port);
 
     // Start server thread
     ServerThread = FRunnableThread::Create(
@@ -160,14 +157,14 @@ void UUnrealMCPBridge::StartServer()
 
     if (!ServerThread)
     {
-        UE_LOG(LogTemp, Error, TEXT("UnrealMCPBridge: Failed to create server thread"));
+        UE_LOG(LogTemp, Error, TEXT("EpicUnrealMCPBridge: Failed to create server thread"));
         StopServer();
         return;
     }
 }
 
 // Stop the MCP server
-void UUnrealMCPBridge::StopServer()
+void UEpicUnrealMCPBridge::StopServer()
 {
     if (!bIsRunning)
     {
@@ -197,13 +194,13 @@ void UUnrealMCPBridge::StopServer()
         ListenerSocket.Reset();
     }
 
-    UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Server stopped"));
+    UE_LOG(LogTemp, Display, TEXT("EpicUnrealMCPBridge: Server stopped"));
 }
 
 // Execute a command received from a client
-FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
+FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
 {
-    UE_LOG(LogTemp, Display, TEXT("UnrealMCPBridge: Executing command: %s"), *CommandType);
+    UE_LOG(LogTemp, Display, TEXT("EpicUnrealMCPBridge: Executing command: %s"), *CommandType);
     
     // Create a promise to wait for the result
     TPromise<FString> Promise;
@@ -227,56 +224,53 @@ FString UUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TShar
             else if (CommandType == TEXT("get_actors_in_level") || 
                      CommandType == TEXT("find_actors_by_name") ||
                      CommandType == TEXT("spawn_actor") ||
-                     CommandType == TEXT("create_actor") ||
                      CommandType == TEXT("delete_actor") || 
                      CommandType == TEXT("set_actor_transform") ||
-                     CommandType == TEXT("get_actor_properties") ||
-                     CommandType == TEXT("set_actor_property") ||
-                     CommandType == TEXT("spawn_blueprint_actor") ||
-                     CommandType == TEXT("focus_viewport") || 
-                     CommandType == TEXT("take_screenshot"))
+                     CommandType == TEXT("spawn_blueprint_actor"))
             {
                 ResultJson = EditorCommands->HandleCommand(CommandType, Params);
             }
             // Blueprint Commands
-            else if (CommandType == TEXT("create_blueprint") || 
-                     CommandType == TEXT("add_component_to_blueprint") || 
-                     CommandType == TEXT("set_component_property") || 
-                     CommandType == TEXT("set_physics_properties") || 
-                     CommandType == TEXT("compile_blueprint") || 
-                     CommandType == TEXT("set_blueprint_property") || 
+            else if (CommandType == TEXT("create_blueprint") ||
+                     CommandType == TEXT("add_component_to_blueprint") ||
+                     CommandType == TEXT("set_physics_properties") ||
+                     CommandType == TEXT("compile_blueprint") ||
                      CommandType == TEXT("set_static_mesh_properties") ||
-                     CommandType == TEXT("set_pawn_properties"))
+                     CommandType == TEXT("set_mesh_material_color") ||
+                     CommandType == TEXT("get_available_materials") ||
+                     CommandType == TEXT("apply_material_to_actor") ||
+                     CommandType == TEXT("apply_material_to_blueprint") ||
+                     CommandType == TEXT("get_actor_material_info") ||
+                     CommandType == TEXT("get_blueprint_material_info") ||
+                     CommandType == TEXT("read_blueprint_content") ||
+                     CommandType == TEXT("analyze_blueprint_graph") ||
+                     CommandType == TEXT("get_blueprint_variable_details") ||
+                     CommandType == TEXT("get_blueprint_function_details"))
             {
                 ResultJson = BlueprintCommands->HandleCommand(CommandType, Params);
             }
-            // Blueprint Node Commands
-            else if (CommandType == TEXT("connect_blueprint_nodes") || 
-                     CommandType == TEXT("add_blueprint_get_self_component_reference") ||
-                     CommandType == TEXT("add_blueprint_self_reference") ||
-                     CommandType == TEXT("find_blueprint_nodes") ||
-                     CommandType == TEXT("add_blueprint_event_node") ||
-                     CommandType == TEXT("add_blueprint_input_action_node") ||
-                     CommandType == TEXT("add_blueprint_function_node") ||
-                     CommandType == TEXT("add_blueprint_get_component_node") ||
-                     CommandType == TEXT("add_blueprint_variable"))
-            {
-                ResultJson = BlueprintNodeCommands->HandleCommand(CommandType, Params);
-            }
-            // Project Commands
-            else if (CommandType == TEXT("create_input_mapping"))
-            {
-                ResultJson = ProjectCommands->HandleCommand(CommandType, Params);
-            }
-            // UMG Commands
-            else if (CommandType == TEXT("create_umg_widget_blueprint") ||
-                     CommandType == TEXT("add_text_block_to_widget") ||
-                     CommandType == TEXT("add_button_to_widget") ||
-                     CommandType == TEXT("bind_widget_event") ||
-                     CommandType == TEXT("set_text_block_binding") ||
-                     CommandType == TEXT("add_widget_to_viewport"))
+            // UMG Widget Commands
+            else if (CommandType == TEXT("add_widget_to_umg") ||
+                     CommandType == TEXT("set_widget_property") ||
+                     CommandType == TEXT("get_umg_hierarchy"))
             {
                 ResultJson = UMGCommands->HandleCommand(CommandType, Params);
+            }
+            // Blueprint Graph Commands
+            else if (CommandType == TEXT("add_blueprint_node") ||
+                     CommandType == TEXT("connect_nodes") ||
+                     CommandType == TEXT("create_variable") ||
+                     CommandType == TEXT("set_blueprint_variable_properties") ||
+                     CommandType == TEXT("add_event_node") ||
+                     CommandType == TEXT("delete_node") ||
+                     CommandType == TEXT("set_node_property") ||
+                     CommandType == TEXT("create_function") ||
+                     CommandType == TEXT("add_function_input") ||
+                     CommandType == TEXT("add_function_output") ||
+                     CommandType == TEXT("delete_function") ||
+                     CommandType == TEXT("rename_function"))
+            {
+                ResultJson = BlueprintGraphCommands->HandleCommand(CommandType, Params);
             }
             else
             {

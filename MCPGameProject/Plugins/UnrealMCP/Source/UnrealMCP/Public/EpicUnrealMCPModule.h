@@ -3,16 +3,16 @@
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
 
-class FUnrealMCPModule : public IModuleInterface
+class FEpicUnrealMCPModule : public IModuleInterface
 {
 public:
 	/** IModuleInterface implementation */
 	virtual void StartupModule() override;
 	virtual void ShutdownModule() override;
 
-	static inline FUnrealMCPModule& Get()
+	static inline FEpicUnrealMCPModule& Get()
 	{
-		return FModuleManager::LoadModuleChecked<FUnrealMCPModule>("UnrealMCP");
+		return FModuleManager::LoadModuleChecked<FEpicUnrealMCPModule>("UnrealMCP");
 	}
 
 	static inline bool IsAvailable()
