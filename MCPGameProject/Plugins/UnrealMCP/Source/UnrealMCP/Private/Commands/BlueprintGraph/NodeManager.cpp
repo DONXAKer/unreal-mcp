@@ -216,6 +216,10 @@ TSharedPtr<FJsonObject> FBlueprintNodeManager::AddNode(const TSharedPtr<FJsonObj
 	{
 		NewNode = FSpecializedNodeCreator::CreateWidgetNode(Graph, NodeParams);
 	}
+	else if (NodeType.Equals(TEXT("BreakStruct"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FSpecializedNodeCreator::CreateBreakStructNode(Graph, NodeParams);
+	}
 	// Event nodes (kept for backward compatibility - should use add_event_node)
 	else if (NodeType.Equals(TEXT("Event"), ESearchCase::IgnoreCase))
 	{
@@ -480,8 +484,71 @@ UK2Node* FBlueprintNodeManager::CreateCallFunctionNode(UEdGraph* Graph, const TS
 	// Create GUID for the node
 	CallNode->CreateNewGuid();
 
-	// Set the function reference
-	CallNode->FunctionReference.SetSelfMember(*TargetFunction);
+	// Определяем класс-владелец функции: target_blueprint или target_class задают внешнюю функцию
+	FString TargetBlueprintPath;
+	FString TargetClassPath;
+	UClass* OwnerClass = nullptr;
+
+	if (Params->TryGetStringField(TEXT("target_blueprint"), TargetBlueprintPath) && !TargetBlueprintPath.IsEmpty())
+	{
+		// Загружаем Blueprint через EditorAssetLibrary (принимает /Game/... пути)
+		UBlueprint* TargetBP = Cast<UBlueprint>(UEditorAssetLibrary::LoadAsset(TargetBlueprintPath));
+		if (!TargetBP)
+		{
+			// Пробуем как прямой объектный путь Package.Asset
+			TargetBP = LoadObject<UBlueprint>(nullptr, *TargetBlueprintPath);
+		}
+		if (!TargetBP)
+		{
+			// Строим объектный путь из пути пакета: /Game/UI/Foo → /Game/UI/Foo.Foo
+			int32 LastSlash;
+			if (TargetBlueprintPath.FindLastChar(TEXT('/'), LastSlash))
+			{
+				FString AssetName = TargetBlueprintPath.Mid(LastSlash + 1);
+				FString ObjectPath = TargetBlueprintPath + TEXT(".") + AssetName;
+				TargetBP = LoadObject<UBlueprint>(nullptr, *ObjectPath);
+			}
+		}
+		if (TargetBP && TargetBP->GeneratedClass)
+		{
+			OwnerClass = TargetBP->GeneratedClass;
+			UE_LOG(LogTemp, Display, TEXT("CreateCallFunctionNode: loaded Blueprint '%s', GeneratedClass='%s'"), *TargetBlueprintPath, *OwnerClass->GetName());
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("CreateCallFunctionNode: failed to load Blueprint '%s'"), *TargetBlueprintPath);
+		}
+	}
+	else if (Params->TryGetStringField(TEXT("target_class"), TargetClassPath) && !TargetClassPath.IsEmpty())
+	{
+		OwnerClass = FindObject<UClass>(nullptr, *TargetClassPath);
+		if (!OwnerClass)
+		{
+			OwnerClass = LoadObject<UClass>(nullptr, *TargetClassPath);
+		}
+	}
+
+	if (OwnerClass)
+	{
+		// Внешняя функция — ищем UFunction на целевом классе (включая суперклассы)
+		UFunction* TargetFunc = OwnerClass->FindFunctionByName(*TargetFunction, EIncludeSuperFlag::IncludeSuper);
+		if (TargetFunc)
+		{
+			UE_LOG(LogTemp, Display, TEXT("CreateCallFunctionNode: found UFunction '%s' on class '%s'"), *TargetFunction, *OwnerClass->GetName());
+			CallNode->FunctionReference.SetExternalMember(*TargetFunction, OwnerClass);
+		}
+		else
+		{
+			// Функция не найдена — устанавливаем ExternalMember без валидации (UE восстановит при компиляции)
+			UE_LOG(LogTemp, Warning, TEXT("CreateCallFunctionNode: UFunction '%s' not found on class '%s', using SetExternalMember without validation"), *TargetFunction, *OwnerClass->GetName());
+			CallNode->FunctionReference.SetExternalMember(*TargetFunction, OwnerClass);
+		}
+	}
+	else
+	{
+		// Функция на самом Blueprint (Self)
+		CallNode->FunctionReference.SetSelfMember(*TargetFunction);
+	}
 
 	// Add node to graph with proper initialization
 	Graph->AddNode(CallNode, true, false);

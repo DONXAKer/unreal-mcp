@@ -337,10 +337,51 @@ FEdGraphPinType FFunctionIO::GetPropertyTypeFromString(const FString& TypeName)
 	{
 		PinType.PinCategory = UEdGraphSchema_K2::PC_Object;
 	}
+	else if (TypeName == TEXT("text"))
+	{
+		PinType.PinCategory = UEdGraphSchema_K2::PC_Text;
+	}
+	else if (TypeName == TEXT("name"))
+	{
+		PinType.PinCategory = UEdGraphSchema_K2::PC_Name;
+	}
 	else
 	{
-		// Default to object for unknown types
-		PinType.PinCategory = UEdGraphSchema_K2::PC_Object;
+		// Попытка найти UScriptStruct по имени типа (для USTRUCT-параметров вида FUnitTemplate)
+		UScriptStruct* FoundStruct = nullptr;
+
+		// Полный путь вида /Script/Module.FStructName
+		if (TypeName.StartsWith(TEXT("/")))
+		{
+			FoundStruct = FindObject<UScriptStruct>(nullptr, *TypeName);
+			if (!FoundStruct)
+			{
+				FoundStruct = LoadObject<UScriptStruct>(nullptr, *TypeName);
+			}
+		}
+
+		// Короткое имя вида FUnitTemplate или UnitTemplate
+		if (!FoundStruct)
+		{
+			FoundStruct = FindFirstObject<UScriptStruct>(*TypeName, EFindFirstObjectOptions::None, ELogVerbosity::Warning, TEXT("MCP FunctionIO"));
+			// Пробуем без F-префикса
+			if (!FoundStruct && TypeName.StartsWith(TEXT("F")) && TypeName.Len() > 1)
+			{
+				FoundStruct = FindFirstObject<UScriptStruct>(*TypeName.Mid(1), EFindFirstObjectOptions::None, ELogVerbosity::Warning, TEXT("MCP FunctionIO"));
+			}
+		}
+
+		if (FoundStruct)
+		{
+			PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
+			PinType.PinSubCategoryObject = FoundStruct;
+		}
+		else
+		{
+			// Fallback: object для неизвестных типов
+			UE_LOG(LogTemp, Warning, TEXT("FunctionIO: Unknown param type '%s', defaulting to object"), *TypeName);
+			PinType.PinCategory = UEdGraphSchema_K2::PC_Object;
+		}
 	}
 
 	return PinType;

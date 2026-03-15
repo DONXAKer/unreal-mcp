@@ -1,5 +1,6 @@
 #include "Commands/BlueprintGraph/Nodes/SpecializedNodes.h"
 #include "Commands/BlueprintGraph/Nodes/NodeCreatorUtils.h"
+#include "K2Node_BreakStruct.h"
 #include "K2Node_GetDataTableRow.h"
 #include "K2Node_AddComponentByClass.h"
 #include "K2Node_Self.h"
@@ -137,6 +138,89 @@ UK2Node* FSpecializedNodeCreator::CreateKnotNode(UEdGraph* Graph, const TSharedP
 	return KnotNode;
 }
 
+UK2Node* FSpecializedNodeCreator::CreateBreakStructNode(UEdGraph* Graph, const TSharedPtr<FJsonObject>& Params)
+{
+	if (!Graph || !Params.IsValid())
+	{
+		return nullptr;
+	}
+
+	// Получаем тип структуры — принимаем struct_type или target_class как альтернативу
+	FString StructTypePath;
+	if (!Params->TryGetStringField(TEXT("struct_type"), StructTypePath))
+	{
+		if (!Params->TryGetStringField(TEXT("target_class"), StructTypePath))
+		{
+			return nullptr;
+		}
+	}
+
+	// Ищем UScriptStruct по пути — пробуем несколько вариантов написания
+	UScriptStruct* StructType = FindObject<UScriptStruct>(nullptr, *StructTypePath);
+
+	// UE5 регистрирует структуры без F-префикса: FUnitTemplate → UnitTemplate
+	if (!StructType && StructTypePath.Contains(TEXT(".")))
+	{
+		int32 DotIdx;
+		StructTypePath.FindLastChar(TEXT('.'), DotIdx);
+		FString Package = StructTypePath.Left(DotIdx + 1);
+		FString StructName = StructTypePath.Mid(DotIdx + 1);
+		// Убираем F-префикс если есть
+		if (StructName.StartsWith(TEXT("F")) && StructName.Len() > 1 && FChar::IsUpper(StructName[1]))
+		{
+			FString WithoutF = Package + StructName.Mid(1);
+			StructType = FindObject<UScriptStruct>(nullptr, *WithoutF);
+			UE_LOG(LogTemp, Display, TEXT("BreakStruct: trying without F-prefix: %s"), *WithoutF);
+		}
+	}
+
+	if (!StructType)
+	{
+		StructType = LoadObject<UScriptStruct>(nullptr, *StructTypePath);
+	}
+
+	// Fallback: поиск по короткому имени через FindFirstObject
+	if (!StructType)
+	{
+		int32 DotIdx;
+		if (StructTypePath.FindLastChar(TEXT('.'), DotIdx))
+		{
+			FString ShortName = StructTypePath.Mid(DotIdx + 1);
+			// Пробуем с F-префиксом и без
+			StructType = FindFirstObject<UScriptStruct>(*ShortName, EFindFirstObjectOptions::None, ELogVerbosity::Warning, TEXT("MCP BreakStruct"));
+			if (!StructType && ShortName.StartsWith(TEXT("F")))
+			{
+				StructType = FindFirstObject<UScriptStruct>(*ShortName.Mid(1), EFindFirstObjectOptions::None, ELogVerbosity::Warning, TEXT("MCP BreakStruct"));
+			}
+		}
+	}
+
+	if (!StructType)
+	{
+		UE_LOG(LogTemp, Error, TEXT("BreakStruct: struct type not found: %s"), *StructTypePath);
+		return nullptr;
+	}
+	UE_LOG(LogTemp, Display, TEXT("BreakStruct: found struct '%s'"), *StructType->GetName());
+
+	UK2Node_BreakStruct* BreakNode = NewObject<UK2Node_BreakStruct>(Graph);
+	if (!BreakNode)
+	{
+		return nullptr;
+	}
+
+	BreakNode->StructType = StructType;
+
+	double PosX, PosY;
+	FNodeCreatorUtils::ExtractNodePosition(Params, PosX, PosY);
+	BreakNode->NodePosX = static_cast<int32>(PosX);
+	BreakNode->NodePosY = static_cast<int32>(PosY);
+
+	Graph->AddNode(BreakNode, true, false);
+	FNodeCreatorUtils::InitializeK2Node(BreakNode, Graph);
+
+	return BreakNode;
+}
+
 UK2Node* FSpecializedNodeCreator::CreateWidgetNode(UEdGraph* Graph, const TSharedPtr<FJsonObject>& Params)
 {
 	if (!Graph || !Params.IsValid())
@@ -155,7 +239,10 @@ UK2Node* FSpecializedNodeCreator::CreateWidgetNode(UEdGraph* Graph, const TShare
 	CreateWidgetNode->NodePosX = static_cast<int32>(PosX);
 	CreateWidgetNode->NodePosY = static_cast<int32>(PosY);
 
-	// Устанавливаем класс виджета если передан
+	Graph->AddNode(CreateWidgetNode, true, false);
+	FNodeCreatorUtils::InitializeK2Node(CreateWidgetNode, Graph);
+
+	// Устанавливаем класс виджета через Class-пин после AllocateDefaultPins (UE5.7 API)
 	FString WidgetClassName;
 	if (Params->TryGetStringField(TEXT("widget_class"), WidgetClassName))
 	{
@@ -185,12 +272,14 @@ UK2Node* FSpecializedNodeCreator::CreateWidgetNode(UEdGraph* Graph, const TShare
 
 		if (WidgetClass && WidgetClass->IsChildOf(UUserWidget::StaticClass()))
 		{
-			CreateWidgetNode->WidgetType = TSubclassOf<UUserWidget>(WidgetClass);
+			UEdGraphPin* ClassPin = CreateWidgetNode->GetClassPin();
+			if (ClassPin)
+			{
+				ClassPin->DefaultObject = WidgetClass;
+				CreateWidgetNode->ReconstructNode();
+			}
 		}
 	}
-
-	Graph->AddNode(CreateWidgetNode, true, false);
-	FNodeCreatorUtils::InitializeK2Node(CreateWidgetNode, Graph);
 
 	return CreateWidgetNode;
 }

@@ -62,4 +62,12 @@ public:
 	 * @return The created node or nullptr on error
 	 */
 	static UK2Node* CreateWidgetNode(UEdGraph* Graph, const TSharedPtr<class FJsonObject>& Params);
+
+	/**
+	 * Создаёт ноду Break Struct (K2Node_BreakStruct) — разбивает структуру на отдельные поля
+	 * @param Graph - граф для добавления ноды
+	 * @param Params - JSON параметры: pos_x, pos_y, struct_type (полный путь, напр. "/Script/Client.FUnitTemplate")
+	 * @return Созданная нода или nullptr при ошибке
+	 */
+	static UK2Node* CreateBreakStructNode(UEdGraph* Graph, const TSharedPtr<class FJsonObject>& Params);
 };
