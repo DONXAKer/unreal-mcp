@@ -7,9 +7,11 @@
 #include "K2Node_ConstructObjectFromClass.h"
 #include "K2Node_Knot.h"
 #include "K2Node_CreateWidget.h"
+#include "K2Node_CallFunction.h"
 #include "Engine/Blueprint.h"
 #include "Blueprint/UserWidget.h"
 #include "EdGraphSchema_K2.h"
+#include "Subsystems/SubsystemBlueprintLibrary.h"
 #include "Json.h"
 
 UK2Node* FSpecializedNodeCreator::CreateGetDataTableRowNode(UEdGraph* Graph, const TSharedPtr<FJsonObject>& Params)
@@ -282,4 +284,96 @@ UK2Node* FSpecializedNodeCreator::CreateWidgetNode(UEdGraph* Graph, const TShare
 	}
 
 	return CreateWidgetNode;
+}
+
+UK2Node* FSpecializedNodeCreator::CreateGetWorldSubsystemNode(UEdGraph* Graph, const TSharedPtr<FJsonObject>& Params)
+{
+	if (!Graph || !Params.IsValid())
+	{
+		return nullptr;
+	}
+
+	// Читаем путь к классу сабсистема — сначала subsystem_class, fallback на target_class
+	FString SubsystemClassPath;
+	if (!Params->TryGetStringField(TEXT("subsystem_class"), SubsystemClassPath))
+	{
+		if (!Params->TryGetStringField(TEXT("target_class"), SubsystemClassPath))
+		{
+			UE_LOG(LogTemp, Error, TEXT("GetWorldSubsystem: отсутствует параметр 'subsystem_class' или 'target_class'"));
+			return nullptr;
+		}
+	}
+
+	// Ищем UFunction GetWorldSubsystem на USubsystemBlueprintLibrary
+	UFunction* GetSubsystemFunc = USubsystemBlueprintLibrary::StaticClass()->FindFunctionByName(
+		FName(TEXT("GetWorldSubsystem"))
+	);
+
+	if (!GetSubsystemFunc)
+	{
+		UE_LOG(LogTemp, Error, TEXT("GetWorldSubsystem: не найдена UFunction GetWorldSubsystem на USubsystemBlueprintLibrary"));
+		return nullptr;
+	}
+
+	// Разрешаем класс сабсистема — пробуем FindObject, LoadObject и FindFirstObject
+	UClass* SubsystemClass = FindObject<UClass>(nullptr, *SubsystemClassPath);
+	if (!SubsystemClass)
+	{
+		SubsystemClass = LoadObject<UClass>(nullptr, *SubsystemClassPath);
+	}
+	if (!SubsystemClass)
+	{
+		// Короткое имя — fallback через FindFirstObject
+		int32 DotIdx;
+		if (SubsystemClassPath.FindLastChar(TEXT('.'), DotIdx))
+		{
+			FString ShortName = SubsystemClassPath.Mid(DotIdx + 1);
+			SubsystemClass = FindFirstObject<UClass>(*ShortName,
+				EFindFirstObjectOptions::None, ELogVerbosity::Warning,
+				TEXT("MCP GetWorldSubsystem class lookup"));
+		}
+	}
+
+	if (!SubsystemClass)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("GetWorldSubsystem: класс '%s' не найден — нода будет создана без привязки класса"), *SubsystemClassPath);
+	}
+
+	// Создаём CallFunction-ноду для GetWorldSubsystem
+	UK2Node_CallFunction* CallNode = NewObject<UK2Node_CallFunction>(Graph);
+	if (!CallNode)
+	{
+		return nullptr;
+	}
+
+	// Привязываем функцию ДО инициализации, чтобы AllocateDefaultPins создал пины
+	CallNode->SetFromFunction(GetSubsystemFunc);
+
+	double PosX, PosY;
+	FNodeCreatorUtils::ExtractNodePosition(Params, PosX, PosY);
+	CallNode->NodePosX = static_cast<int32>(PosX);
+	CallNode->NodePosY = static_cast<int32>(PosY);
+
+	Graph->AddNode(CallNode, true, false);
+	FNodeCreatorUtils::InitializeK2Node(CallNode, Graph);
+
+	// Устанавливаем класс сабсистема в пин "Class" — это заставит UE5 уточнить
+	// тип ReturnValue до конкретного UWorldSubsystem-класса
+	if (SubsystemClass)
+	{
+		UEdGraphPin* ClassPin = CallNode->FindPin(TEXT("Class"));
+		if (ClassPin)
+		{
+			ClassPin->DefaultObject = SubsystemClass;
+			// ReconstructNode обновляет тип ReturnValue до SubsystemClass*
+			CallNode->ReconstructNode();
+			UE_LOG(LogTemp, Display, TEXT("GetWorldSubsystem: класс '%s' установлен, ReturnValue типизирован"), *SubsystemClass->GetName());
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("GetWorldSubsystem: пин 'Class' не найден после AllocateDefaultPins"));
+		}
+	}
+
+	return CallNode;
 }

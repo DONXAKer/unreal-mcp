@@ -2025,7 +2025,9 @@ def add_node(
     target_blueprint: Optional[str] = None,
     target_class: Optional[str] = None,
     widget_class: Optional[str] = None,
-    function_name: Optional[str] = None
+    function_name: Optional[str] = None,
+    struct_type: Optional[str] = None,
+    subsystem_class: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Add a node to a Blueprint graph.
@@ -2080,6 +2082,10 @@ def add_node(
                 "CreateWidget" - Create a UMG widget instance
                     ℹ️ Use widget_class="/Game/UI/WBP_MyWidget" to set the widget class
                     Pins: Owning Player (input), Return Value (UserWidget output)
+                "GetWorldSubsystem" - Get a UWorldSubsystem instance (typed ReturnValue)
+                    ℹ️ Use subsystem_class="/Script/Module.MySubsystem" to specify the subsystem
+                    Pins: WorldContextObject (input), Class (input), ReturnValue (typed subsystem output)
+                    Example: subsystem_class="/Script/Client.DeploymentSubsystem"
 
             EVENT:
                 "Event" - Blueprint event (specify event_type: BeginPlay, Tick, etc.)
@@ -2095,6 +2101,8 @@ def add_node(
         target_class: For VariableGet nodes, optional C++ class path to access external UPROPERTY
         widget_class: For CreateWidget nodes, full asset path or short name of the widget Blueprint
         function_name: Optional name of function graph to add node to (if None, uses EventGraph)
+        subsystem_class: For GetWorldSubsystem nodes, full path to the UWorldSubsystem class
+                         e.g. "/Script/Client.DeploymentSubsystem"
 
     Returns:
         Dictionary with success status, node_id, and position
@@ -2127,10 +2135,17 @@ def add_node(
             node_params["target_blueprint"] = target_blueprint
         if target_class:
             node_params["target_class"] = target_class
+            # Для GetWorldSubsystem: target_class используется как subsystem_class
+            if node_type.lower() == "getworldsubsystem":
+                node_params["subsystem_class"] = target_class
         if widget_class:
             node_params["widget_class"] = widget_class
         if function_name:
             node_params["function_name"] = function_name
+        if struct_type:
+            node_params["struct_type"] = struct_type
+        if subsystem_class:
+            node_params["subsystem_class"] = subsystem_class
 
         result = node_manager.add_node(
             unreal,

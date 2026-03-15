@@ -220,6 +220,10 @@ TSharedPtr<FJsonObject> FBlueprintNodeManager::AddNode(const TSharedPtr<FJsonObj
 	{
 		NewNode = FSpecializedNodeCreator::CreateBreakStructNode(Graph, NodeParams);
 	}
+	else if (NodeType.Equals(TEXT("GetWorldSubsystem"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FSpecializedNodeCreator::CreateGetWorldSubsystemNode(Graph, NodeParams);
+	}
 	// Event nodes (kept for backward compatibility - should use add_event_node)
 	else if (NodeType.Equals(TEXT("Event"), ESearchCase::IgnoreCase))
 	{

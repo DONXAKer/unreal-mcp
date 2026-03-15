@@ -70,4 +70,15 @@ public:
 	 * @return Созданная нода или nullptr при ошибке
 	 */
 	static UK2Node* CreateBreakStructNode(UEdGraph* Graph, const TSharedPtr<class FJsonObject>& Params);
+
+	/**
+	 * Создаёт ноду Get World Subsystem (CallFunction на USubsystemBlueprintLibrary::GetWorldSubsystem)
+	 * с правильно типизированным ReturnValue для конкретного UWorldSubsystem-класса.
+	 * @param Graph - граф для добавления ноды
+	 * @param Params - JSON параметры:
+	 *                 - pos_x, pos_y: позиция
+	 *                 - subsystem_class: полный путь класса, напр. "/Script/Client.DeploymentSubsystem"
+	 * @return Созданная нода или nullptr при ошибке
+	 */
+	static UK2Node* CreateGetWorldSubsystemNode(UEdGraph* Graph, const TSharedPtr<class FJsonObject>& Params);
 };
