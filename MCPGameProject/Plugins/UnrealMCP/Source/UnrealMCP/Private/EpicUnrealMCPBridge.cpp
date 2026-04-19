@@ -251,6 +251,8 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             }
             // UMG Widget Commands
             else if (CommandType == TEXT("add_widget_to_umg") ||
+                     CommandType == TEXT("add_text_block_to_widget") ||
+                     CommandType == TEXT("add_button_to_widget") ||
                      CommandType == TEXT("set_widget_property") ||
                      CommandType == TEXT("get_umg_hierarchy"))
             {
