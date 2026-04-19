@@ -119,6 +119,107 @@ namespace UMGCommandsUtils
         if (Str == TEXT("SelfHitTestInvisible")) return ESlateVisibility::SelfHitTestInvisible;
         return ESlateVisibility::Visible;
     }
+
+    /** Read a JSON array of numbers into a FVector2D. Returns false if missing/too short. */
+    static bool GetVector2DFromArray(const TSharedPtr<FJsonObject>& Params, const FString& FieldName, FVector2D& Out)
+    {
+        const TArray<TSharedPtr<FJsonValue>>* Arr = nullptr;
+        if (!Params->TryGetArrayField(FieldName, Arr) || !Arr || Arr->Num() < 2) return false;
+        Out.X = (float)(*Arr)[0]->AsNumber();
+        Out.Y = (float)(*Arr)[1]->AsNumber();
+        return true;
+    }
+
+    /** Read a JSON array of numbers into a FLinearColor. Returns false if missing/too short. */
+    static bool GetLinearColorFromArray(const TSharedPtr<FJsonObject>& Params, const FString& FieldName, FLinearColor& Out)
+    {
+        const TArray<TSharedPtr<FJsonValue>>* Arr = nullptr;
+        if (!Params->TryGetArrayField(FieldName, Arr) || !Arr || Arr->Num() < 3) return false;
+        Out.R = (float)(*Arr)[0]->AsNumber();
+        Out.G = (float)(*Arr)[1]->AsNumber();
+        Out.B = (float)(*Arr)[2]->AsNumber();
+        Out.A = Arr->Num() >= 4 ? (float)(*Arr)[3]->AsNumber() : 1.0f;
+        return true;
+    }
+
+    /**
+     * Load a Widget Blueprint by short name or full content path.
+     * Tries several common UI asset locations ( /Game/UI, /Game/Blueprints, /Game/Widgets ).
+     */
+    static UWidgetBlueprint* LoadWidgetBlueprintByName(const FString& WidgetName)
+    {
+        // If caller passed a full path ( /Game/... ), try that first.
+        if (WidgetName.StartsWith(TEXT("/")))
+        {
+            if (UObject* Asset = UEditorAssetLibrary::LoadAsset(WidgetName))
+            {
+                if (UWidgetBlueprint* WB = Cast<UWidgetBlueprint>(Asset)) return WB;
+            }
+        }
+
+        // Try common UI paths by short name.
+        const TArray<FString> SearchPaths = {
+            TEXT("/Game/UI/"),
+            TEXT("/Game/Blueprints/"),
+            TEXT("/Game/Widgets/"),
+            TEXT("/Game/UI/Widgets/"),
+        };
+        for (const FString& Dir : SearchPaths)
+        {
+            const FString ObjectPath = Dir + WidgetName + TEXT(".") + WidgetName;
+            if (UObject* Asset = UEditorAssetLibrary::LoadAsset(ObjectPath))
+            {
+                if (UWidgetBlueprint* WB = Cast<UWidgetBlueprint>(Asset)) return WB;
+            }
+            const FString PackagePath = Dir + WidgetName;
+            if (UObject* Asset = UEditorAssetLibrary::LoadAsset(PackagePath))
+            {
+                if (UWidgetBlueprint* WB = Cast<UWidgetBlueprint>(Asset)) return WB;
+            }
+        }
+
+        // Last resort: shared Blueprint finder (handles /Game/Blueprints/ too).
+        if (UBlueprint* BP = FEpicUnrealMCPCommonUtils::FindBlueprint(WidgetName))
+        {
+            return Cast<UWidgetBlueprint>(BP);
+        }
+        return nullptr;
+    }
+
+    /** Ensure WidgetTree has a UCanvasPanel as root; return it (or nullptr if root is wrong type). */
+    static UCanvasPanel* EnsureRootCanvasPanel(UWidgetBlueprint* WB)
+    {
+        if (!WB || !WB->WidgetTree) return nullptr;
+        if (!WB->WidgetTree->RootWidget)
+        {
+            UCanvasPanel* NewRoot = WB->WidgetTree->ConstructWidget<UCanvasPanel>(
+                UCanvasPanel::StaticClass(), TEXT("RootCanvas"));
+            WB->WidgetTree->RootWidget = NewRoot;
+            return NewRoot;
+        }
+        return Cast<UCanvasPanel>(WB->WidgetTree->RootWidget);
+    }
+
+    /** Persist Widget Blueprint: mark dirty + save package to disk. */
+    static void MarkAndSaveWidgetBlueprint(UWidgetBlueprint* WB)
+    {
+        if (!WB) return;
+        FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WB);
+        if (UPackage* Pkg = WB->GetPackage())
+        {
+            Pkg->MarkPackageDirty();
+        }
+        // UEditorAssetLibrary::SaveAsset expects the object path (e.g. /Game/UI/WBP_Foo).
+        const FString ObjectPath = WB->GetPathName();
+        // Strip the trailing ".WBP_Foo" class/object suffix if present.
+        FString PackageName = ObjectPath;
+        int32 DotIdx;
+        if (PackageName.FindChar('.', DotIdx))
+        {
+            PackageName = PackageName.Left(DotIdx);
+        }
+        UEditorAssetLibrary::SaveAsset(PackageName, /*bOnlyIfIsDirty=*/ false);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,9 +232,11 @@ FUnrealMCPUMGCommands::FUnrealMCPUMGCommands()
 
 TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
 {
-    if (CommandType == TEXT("add_widget_to_umg"))       return HandleAddWidgetToUMG(Params);
-    if (CommandType == TEXT("set_widget_property"))     return HandleSetWidgetProperty(Params);
-    if (CommandType == TEXT("get_umg_hierarchy"))       return HandleGetUMGHierarchy(Params);
+    if (CommandType == TEXT("add_widget_to_umg"))         return HandleAddWidgetToUMG(Params);
+    if (CommandType == TEXT("add_text_block_to_widget"))  return HandleAddTextBlockToWidget(Params);
+    if (CommandType == TEXT("add_button_to_widget"))      return HandleAddButtonToWidget(Params);
+    if (CommandType == TEXT("set_widget_property"))       return HandleSetWidgetProperty(Params);
+    if (CommandType == TEXT("get_umg_hierarchy"))         return HandleGetUMGHierarchy(Params);
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown UMG command: %s"), *CommandType));
@@ -265,6 +368,225 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddWidgetToUMG(const TShare
     Result->SetStringField(TEXT("widget_type"), WidgetType);
     Result->SetStringField(TEXT("parent_name"), ParentName.IsEmpty() ? TEXT("(root)") : ParentName);
     Result->SetBoolField(TEXT("is_variable"), bIsVariable);
+    return Result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// add_text_block_to_widget
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddTextBlockToWidget(const TSharedPtr<FJsonObject>& Params)
+{
+    using namespace UMGCommandsUtils;
+
+    // ── Required params ──────────────────────────────────────────────────────
+    FString WidgetName;
+    if (!Params->TryGetStringField(TEXT("widget_name"), WidgetName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
+
+    FString TextBlockName;
+    if (!Params->TryGetStringField(TEXT("text_block_name"), TextBlockName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'text_block_name' parameter"));
+
+    // ── Optional params ──────────────────────────────────────────────────────
+    FString Text;
+    Params->TryGetStringField(TEXT("text"), Text);
+
+    FVector2D Position(0.0f, 0.0f);
+    GetVector2DFromArray(Params, TEXT("position"), Position);
+
+    FVector2D Size(200.0f, 50.0f);
+    GetVector2DFromArray(Params, TEXT("size"), Size);
+
+    int32 FontSize = 12;
+    Params->TryGetNumberField(TEXT("font_size"), FontSize);
+
+    FLinearColor Color(1.0f, 1.0f, 1.0f, 1.0f);
+    GetLinearColorFromArray(Params, TEXT("color"), Color);
+
+    // ── Load Widget Blueprint ────────────────────────────────────────────────
+    UWidgetBlueprint* WB = LoadWidgetBlueprintByName(WidgetName);
+    if (!WB)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget Blueprint '%s' not found in /Game/UI, /Game/Blueprints, or /Game/Widgets"), *WidgetName));
+
+    if (!WB->WidgetTree)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Widget Blueprint has no WidgetTree"));
+
+    // ── Ensure root canvas panel ─────────────────────────────────────────────
+    UCanvasPanel* CanvasPanel = EnsureRootCanvasPanel(WB);
+    if (!CanvasPanel)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("Widget Blueprint's root is not a CanvasPanel; cannot place TextBlock by absolute position"));
+
+    // ── Name uniqueness ──────────────────────────────────────────────────────
+    if (WB->WidgetTree->FindWidget(FName(*TextBlockName)))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget '%s' already exists in '%s'"), *TextBlockName, *WidgetName));
+
+    // ── Construct TextBlock ──────────────────────────────────────────────────
+    UTextBlock* NewText = WB->WidgetTree->ConstructWidget<UTextBlock>(
+        UTextBlock::StaticClass(), FName(*TextBlockName));
+    if (!NewText)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("ConstructWidget<UTextBlock> returned null"));
+
+    NewText->bIsVariable = true;  // required for BindWidget auto-binding
+    NewText->SetText(FText::FromString(Text));
+
+    // Font — note UTextBlock stores its font in a Slate FSlateFontInfo struct;
+    // we mutate the existing copy to keep the default font family/typeface
+    // and only override the Size.
+    FSlateFontInfo FontInfo = NewText->GetFont();
+    FontInfo.Size = FontSize;
+    NewText->SetFont(FontInfo);
+
+    NewText->SetColorAndOpacity(FSlateColor(Color));
+
+    // ── Add to canvas and configure slot ─────────────────────────────────────
+    UPanelSlot* RawSlot = CanvasPanel->AddChild(NewText);
+    UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(RawSlot);
+    if (CanvasSlot)
+    {
+        CanvasSlot->SetPosition(Position);
+        CanvasSlot->SetSize(Size);
+    }
+
+    // ── Persist ──────────────────────────────────────────────────────────────
+    MarkAndSaveWidgetBlueprint(WB);
+
+    // ── Build response ───────────────────────────────────────────────────────
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("name"), WidgetName);
+    Result->SetStringField(TEXT("child_name"), TextBlockName);
+    Result->SetStringField(TEXT("type"), TEXT("TextBlock"));
+    {
+        TArray<TSharedPtr<FJsonValue>> PosArr;
+        PosArr.Add(MakeShared<FJsonValueNumber>(Position.X));
+        PosArr.Add(MakeShared<FJsonValueNumber>(Position.Y));
+        Result->SetArrayField(TEXT("position"), PosArr);
+
+        TArray<TSharedPtr<FJsonValue>> SizeArr;
+        SizeArr.Add(MakeShared<FJsonValueNumber>(Size.X));
+        SizeArr.Add(MakeShared<FJsonValueNumber>(Size.Y));
+        Result->SetArrayField(TEXT("size"), SizeArr);
+    }
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// add_button_to_widget
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddButtonToWidget(const TSharedPtr<FJsonObject>& Params)
+{
+    using namespace UMGCommandsUtils;
+
+    // ── Required params ──────────────────────────────────────────────────────
+    FString WidgetName;
+    if (!Params->TryGetStringField(TEXT("widget_name"), WidgetName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
+
+    FString ButtonName;
+    if (!Params->TryGetStringField(TEXT("button_name"), ButtonName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'button_name' parameter"));
+
+    // ── Optional params ──────────────────────────────────────────────────────
+    FString Text;
+    Params->TryGetStringField(TEXT("text"), Text);
+
+    FVector2D Position(0.0f, 0.0f);
+    GetVector2DFromArray(Params, TEXT("position"), Position);
+
+    FVector2D Size(200.0f, 50.0f);
+    GetVector2DFromArray(Params, TEXT("size"), Size);
+
+    int32 FontSize = 12;
+    Params->TryGetNumberField(TEXT("font_size"), FontSize);
+
+    FLinearColor TextColor(1.0f, 1.0f, 1.0f, 1.0f);
+    GetLinearColorFromArray(Params, TEXT("color"), TextColor);
+
+    FLinearColor BgColor(0.1f, 0.1f, 0.1f, 1.0f);
+    GetLinearColorFromArray(Params, TEXT("background_color"), BgColor);
+
+    // ── Load Widget Blueprint ────────────────────────────────────────────────
+    UWidgetBlueprint* WB = LoadWidgetBlueprintByName(WidgetName);
+    if (!WB)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget Blueprint '%s' not found in /Game/UI, /Game/Blueprints, or /Game/Widgets"), *WidgetName));
+
+    if (!WB->WidgetTree)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Widget Blueprint has no WidgetTree"));
+
+    // ── Ensure root canvas panel ─────────────────────────────────────────────
+    UCanvasPanel* CanvasPanel = EnsureRootCanvasPanel(WB);
+    if (!CanvasPanel)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("Widget Blueprint's root is not a CanvasPanel; cannot place Button by absolute position"));
+
+    // ── Name uniqueness ──────────────────────────────────────────────────────
+    if (WB->WidgetTree->FindWidget(FName(*ButtonName)))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget '%s' already exists in '%s'"), *ButtonName, *WidgetName));
+
+    // ── Construct Button ─────────────────────────────────────────────────────
+    UButton* NewButton = WB->WidgetTree->ConstructWidget<UButton>(
+        UButton::StaticClass(), FName(*ButtonName));
+    if (!NewButton)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("ConstructWidget<UButton> returned null"));
+
+    NewButton->bIsVariable = true;
+    NewButton->SetBackgroundColor(BgColor);
+
+    // ── Construct child TextBlock label (not BindWidget-named — internal) ────
+    // Give it a unique auto-name; BindWidget only matters for the Button itself.
+    const FName LabelName(*FString::Printf(TEXT("%s_Label"), *ButtonName));
+    UTextBlock* Label = WB->WidgetTree->ConstructWidget<UTextBlock>(
+        UTextBlock::StaticClass(), LabelName);
+    if (Label)
+    {
+        Label->bIsVariable = false;
+        Label->SetText(FText::FromString(Text));
+
+        FSlateFontInfo FontInfo = Label->GetFont();
+        FontInfo.Size = FontSize;
+        Label->SetFont(FontInfo);
+
+        Label->SetColorAndOpacity(FSlateColor(TextColor));
+
+        NewButton->AddChild(Label);
+    }
+
+    // ── Add button to canvas and configure slot ──────────────────────────────
+    UPanelSlot* RawSlot = CanvasPanel->AddChild(NewButton);
+    UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(RawSlot);
+    if (CanvasSlot)
+    {
+        CanvasSlot->SetPosition(Position);
+        CanvasSlot->SetSize(Size);
+    }
+
+    // ── Persist ──────────────────────────────────────────────────────────────
+    MarkAndSaveWidgetBlueprint(WB);
+
+    // ── Build response ───────────────────────────────────────────────────────
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("name"), WidgetName);
+    Result->SetStringField(TEXT("child_name"), ButtonName);
+    Result->SetStringField(TEXT("type"), TEXT("Button"));
+    {
+        TArray<TSharedPtr<FJsonValue>> PosArr;
+        PosArr.Add(MakeShared<FJsonValueNumber>(Position.X));
+        PosArr.Add(MakeShared<FJsonValueNumber>(Position.Y));
+        Result->SetArrayField(TEXT("position"), PosArr);
+
+        TArray<TSharedPtr<FJsonValue>> SizeArr;
+        SizeArr.Add(MakeShared<FJsonValueNumber>(Size.X));
+        SizeArr.Add(MakeShared<FJsonValueNumber>(Size.Y));
+        Result->SetArrayField(TEXT("size"), SizeArr);
+    }
+    Result->SetBoolField(TEXT("success"), true);
     return Result;
 }
 

@@ -73,6 +73,9 @@ public class UnrealMCP : ModuleRules
 					"UMG"                  // For UUserWidget
 				}
 			);
+
+			// K2Node_CreateWidget.h находится в Private/Nodes папке UMGEditor
+			PrivateIncludePaths.Add(System.IO.Path.Combine(EngineDirectory, "Source/Editor/UMGEditor/Private/Nodes"));
 		}
 		
 		DynamicallyLoadedModuleNames.AddRange(

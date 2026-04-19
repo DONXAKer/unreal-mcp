@@ -18,7 +18,8 @@ public:
 
     /**
      * Routes an incoming UMG command to the appropriate handler.
-     * @param CommandType  Command name (add_widget_to_umg, set_widget_property, get_umg_hierarchy)
+     * @param CommandType  Command name (add_widget_to_umg, add_text_block_to_widget,
+     *                     add_button_to_widget, set_widget_property, get_umg_hierarchy)
      * @param Params       JSON parameters
      * @return JSON response with result or error
      */
@@ -30,6 +31,23 @@ private:
      * Params: blueprint_path, widget_type, widget_name, parent_name (opt), is_variable (opt, default true)
      */
     TSharedPtr<FJsonObject> HandleAddWidgetToUMG(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * Add a UTextBlock to a Widget Blueprint's root canvas panel.
+     * Params: widget_name (short Widget Blueprint name), text_block_name,
+     *         text (opt), position [X,Y], size [W,H], font_size (int), color [R,G,B,A].
+     * The TextBlock is named so it matches a UPROPERTY(meta=(BindWidget)) field
+     * in the parent C++ class, enabling auto-binding at runtime.
+     */
+    TSharedPtr<FJsonObject> HandleAddTextBlockToWidget(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * Add a UButton with a child UTextBlock label to a Widget Blueprint's root canvas panel.
+     * Params: widget_name, button_name, text (opt), position, size,
+     *         font_size, color (text), background_color (button bg).
+     * The Button is named so it matches a UPROPERTY(meta=(BindWidget)) field.
+     */
+    TSharedPtr<FJsonObject> HandleAddButtonToWidget(const TSharedPtr<FJsonObject>& Params);
 
     /**
      * Set a property on a widget inside a Widget Blueprint.
