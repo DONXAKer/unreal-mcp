@@ -42,6 +42,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     {
         return HandleCreateBlueprint(Params);
     }
+    else if (CommandType == TEXT("reparent_blueprint"))
+    {
+        return HandleReparentBlueprint(Params);
+    }
     else if (CommandType == TEXT("add_component_to_blueprint"))
     {
         return HandleAddComponentToBlueprint(Params);
@@ -218,6 +222,129 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCreateBlueprint(c
     }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to create blueprint"));
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleReparentBlueprint(const TSharedPtr<FJsonObject>& Params)
+{
+    // ── Required params ──────────────────────────────────────────────────────
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    FString NewParentClass;
+    if (!Params->TryGetStringField(TEXT("new_parent_class"), NewParentClass))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'new_parent_class' parameter"));
+    }
+
+    // ── Load the Blueprint (supports short name or full /Game/... path) ──────
+    UBlueprint* Blueprint = nullptr;
+    if (BlueprintName.StartsWith(TEXT("/")))
+    {
+        Blueprint = Cast<UBlueprint>(UEditorAssetLibrary::LoadAsset(BlueprintName));
+    }
+    if (!Blueprint)
+    {
+        Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    }
+    // Widget-blueprint fallback: try /Game/UI/, /Game/Widgets/, /Game/UI/Widgets/ too.
+    if (!Blueprint)
+    {
+        const TArray<FString> SearchPaths = {
+            TEXT("/Game/UI/"),
+            TEXT("/Game/Widgets/"),
+            TEXT("/Game/UI/Widgets/"),
+        };
+        for (const FString& Dir : SearchPaths)
+        {
+            const FString ObjectPath = Dir + BlueprintName + TEXT(".") + BlueprintName;
+            if (UObject* Asset = UEditorAssetLibrary::LoadAsset(ObjectPath))
+            {
+                Blueprint = Cast<UBlueprint>(Asset);
+                if (Blueprint) break;
+            }
+        }
+    }
+
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+
+    // ── Resolve new parent class — same lookup pattern as HandleCreateBlueprint ──
+    UClass* FoundClass = nullptr;
+
+    if (NewParentClass == TEXT("UserWidget") || NewParentClass == TEXT("UUserWidget"))
+    {
+        FoundClass = UUserWidget::StaticClass();
+    }
+    else if (NewParentClass == TEXT("Pawn") || NewParentClass == TEXT("APawn"))
+    {
+        FoundClass = APawn::StaticClass();
+    }
+    else if (NewParentClass == TEXT("Actor") || NewParentClass == TEXT("AActor"))
+    {
+        FoundClass = AActor::StaticClass();
+    }
+    else
+    {
+        const TArray<FString> SearchPaths = {
+            NewParentClass,
+            FString::Printf(TEXT("/Script/UMG.%s"), *NewParentClass),
+            FString::Printf(TEXT("/Script/Engine.%s"), *NewParentClass),
+            FString::Printf(TEXT("/Script/Client.%s"), *NewParentClass),
+        };
+
+        for (const FString& Path : SearchPaths)
+        {
+            FoundClass = LoadClass<UObject>(nullptr, *Path);
+            if (FoundClass)
+            {
+                break;
+            }
+        }
+    }
+
+    if (!FoundClass)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Could not resolve parent class: %s"), *NewParentClass));
+    }
+
+    // ── Perform the reparent ─────────────────────────────────────────────────
+    // Standard UE flow: swap ParentClass → refresh all nodes (rebuilds graphs against new
+    // parent's functions/variables) → recompile so the generated class matches.
+    UClass* OldParent = Blueprint->ParentClass;
+    Blueprint->ParentClass = FoundClass;
+
+    FBlueprintEditorUtils::RefreshAllNodes(Blueprint);
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    if (UPackage* Pkg = Blueprint->GetPackage())
+    {
+        Pkg->MarkPackageDirty();
+    }
+
+    // Save asset. Strip trailing ".Name" from object path to get package name.
+    FString PackageName = Blueprint->GetPathName();
+    int32 DotIdx;
+    if (PackageName.FindChar('.', DotIdx))
+    {
+        PackageName = PackageName.Left(DotIdx);
+    }
+    UEditorAssetLibrary::SaveAsset(PackageName, /*bOnlyIfIsDirty=*/ false);
+
+    // ── Build response ───────────────────────────────────────────────────────
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+    Result->SetStringField(TEXT("old_parent_class"), OldParent ? OldParent->GetName() : TEXT("None"));
+    Result->SetStringField(TEXT("new_parent_class"), FoundClass->GetName());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
 }
 
 TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleAddComponentToBlueprint(const TSharedPtr<FJsonObject>& Params)

@@ -48,6 +48,52 @@ def register_blueprint_tools(mcp: FastMCP):
             return {"success": False, "message": error_msg}
     
     @mcp.tool()
+    def reparent_blueprint(
+        ctx: Context,
+        blueprint_name: str,
+        new_parent_class: str
+    ) -> Dict[str, Any]:
+        """
+        Change the parent class of an existing Blueprint (including Widget Blueprints).
+
+        Args:
+            blueprint_name: Short name or full /Game/... path of the target Blueprint
+            new_parent_class: Short class name (e.g. "MyCppUserWidget") or full path
+                (e.g. "/Script/Client.MyCppUserWidget"). Recognizes UserWidget, Pawn,
+                Actor directly; otherwise searches /Script/UMG, /Script/Engine, /Script/Client.
+
+        Returns:
+            Dict with old_parent_class, new_parent_class, success status
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                logger.error("Failed to connect to Unreal Engine")
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
+            params = {
+                "blueprint_name": blueprint_name,
+                "new_parent_class": new_parent_class
+            }
+
+            logger.info(f"Reparenting blueprint with params: {params}")
+            response = unreal.send_command("reparent_blueprint", params)
+
+            if not response:
+                logger.error("No response from Unreal Engine")
+                return {"success": False, "message": "No response from Unreal Engine"}
+
+            logger.info(f"Reparent blueprint response: {response}")
+            return response
+
+        except Exception as e:
+            error_msg = f"Error reparenting blueprint: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
     def add_component_to_blueprint(
         ctx: Context,
         blueprint_name: str,

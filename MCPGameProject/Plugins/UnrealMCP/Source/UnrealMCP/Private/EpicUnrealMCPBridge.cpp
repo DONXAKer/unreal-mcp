@@ -232,6 +232,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             }
             // Blueprint Commands
             else if (CommandType == TEXT("create_blueprint") ||
+                     CommandType == TEXT("reparent_blueprint") ||
                      CommandType == TEXT("add_component_to_blueprint") ||
                      CommandType == TEXT("set_physics_properties") ||
                      CommandType == TEXT("compile_blueprint") ||
@@ -253,6 +254,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             else if (CommandType == TEXT("add_widget_to_umg") ||
                      CommandType == TEXT("add_text_block_to_widget") ||
                      CommandType == TEXT("add_button_to_widget") ||
+                     CommandType == TEXT("add_panel_widget_to_widget") ||
                      CommandType == TEXT("set_widget_property") ||
                      CommandType == TEXT("get_umg_hierarchy"))
             {

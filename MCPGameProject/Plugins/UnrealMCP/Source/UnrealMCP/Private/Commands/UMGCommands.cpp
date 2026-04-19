@@ -30,6 +30,10 @@
 #include "Components/PanelWidget.h"
 #include "Components/Widget.h"
 #include "Components/PanelSlot.h"
+#include "Components/UniformGridPanel.h"
+#include "Components/UniformGridSlot.h"
+#include "Components/WrapBox.h"
+#include "Components/WrapBoxSlot.h"
 
 // Blueprint editor utils
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -232,11 +236,12 @@ FUnrealMCPUMGCommands::FUnrealMCPUMGCommands()
 
 TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
 {
-    if (CommandType == TEXT("add_widget_to_umg"))         return HandleAddWidgetToUMG(Params);
-    if (CommandType == TEXT("add_text_block_to_widget"))  return HandleAddTextBlockToWidget(Params);
-    if (CommandType == TEXT("add_button_to_widget"))      return HandleAddButtonToWidget(Params);
-    if (CommandType == TEXT("set_widget_property"))       return HandleSetWidgetProperty(Params);
-    if (CommandType == TEXT("get_umg_hierarchy"))         return HandleGetUMGHierarchy(Params);
+    if (CommandType == TEXT("add_widget_to_umg"))            return HandleAddWidgetToUMG(Params);
+    if (CommandType == TEXT("add_text_block_to_widget"))     return HandleAddTextBlockToWidget(Params);
+    if (CommandType == TEXT("add_button_to_widget"))         return HandleAddButtonToWidget(Params);
+    if (CommandType == TEXT("add_panel_widget_to_widget"))   return HandleAddPanelWidgetToWidget(Params);
+    if (CommandType == TEXT("set_widget_property"))          return HandleSetWidgetProperty(Params);
+    if (CommandType == TEXT("get_umg_hierarchy"))            return HandleGetUMGHierarchy(Params);
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown UMG command: %s"), *CommandType));
@@ -575,6 +580,119 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddButtonToWidget(const TSh
     Result->SetStringField(TEXT("name"), WidgetName);
     Result->SetStringField(TEXT("child_name"), ButtonName);
     Result->SetStringField(TEXT("type"), TEXT("Button"));
+    {
+        TArray<TSharedPtr<FJsonValue>> PosArr;
+        PosArr.Add(MakeShared<FJsonValueNumber>(Position.X));
+        PosArr.Add(MakeShared<FJsonValueNumber>(Position.Y));
+        Result->SetArrayField(TEXT("position"), PosArr);
+
+        TArray<TSharedPtr<FJsonValue>> SizeArr;
+        SizeArr.Add(MakeShared<FJsonValueNumber>(Size.X));
+        SizeArr.Add(MakeShared<FJsonValueNumber>(Size.Y));
+        Result->SetArrayField(TEXT("size"), SizeArr);
+    }
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// add_panel_widget_to_widget
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace UMGCommandsUtils
+{
+    /** Map requested panel type name → UClass. Returns nullptr for unsupported types. */
+    static UClass* ResolvePanelClass(const FString& TypeName)
+    {
+        const TMap<FString, UClass*> Map = {
+            { TEXT("HorizontalBox"),     UHorizontalBox::StaticClass()    },
+            { TEXT("VerticalBox"),       UVerticalBox::StaticClass()      },
+            { TEXT("UniformGridPanel"),  UUniformGridPanel::StaticClass() },
+            { TEXT("CanvasPanel"),       UCanvasPanel::StaticClass()      },
+            { TEXT("ScrollBox"),         UScrollBox::StaticClass()        },
+            { TEXT("WrapBox"),           UWrapBox::StaticClass()          },
+            { TEXT("Overlay"),           UOverlay::StaticClass()          },
+        };
+        UClass* const* Found = Map.Find(TypeName);
+        return Found ? *Found : nullptr;
+    }
+}
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddPanelWidgetToWidget(const TSharedPtr<FJsonObject>& Params)
+{
+    using namespace UMGCommandsUtils;
+
+    // ── Required params ──────────────────────────────────────────────────────
+    FString WidgetName;
+    if (!Params->TryGetStringField(TEXT("widget_name"), WidgetName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
+
+    FString PanelName;
+    if (!Params->TryGetStringField(TEXT("panel_name"), PanelName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'panel_name' parameter"));
+
+    FString PanelType;
+    if (!Params->TryGetStringField(TEXT("panel_type"), PanelType))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'panel_type' parameter"));
+
+    // ── Optional params ──────────────────────────────────────────────────────
+    FVector2D Position(0.0f, 0.0f);
+    GetVector2DFromArray(Params, TEXT("position"), Position);
+
+    FVector2D Size(400.0f, 100.0f);
+    GetVector2DFromArray(Params, TEXT("size"), Size);
+
+    // ── Resolve panel class ──────────────────────────────────────────────────
+    UClass* PanelClass = ResolvePanelClass(PanelType);
+    if (!PanelClass)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Unsupported panel_type '%s'. Supported: HorizontalBox, VerticalBox, "
+                "UniformGridPanel, CanvasPanel, ScrollBox, WrapBox, Overlay"), *PanelType));
+
+    // ── Load Widget Blueprint ────────────────────────────────────────────────
+    UWidgetBlueprint* WB = LoadWidgetBlueprintByName(WidgetName);
+    if (!WB)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget Blueprint '%s' not found in /Game/UI, /Game/Blueprints, or /Game/Widgets"), *WidgetName));
+
+    if (!WB->WidgetTree)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Widget Blueprint has no WidgetTree"));
+
+    // ── Ensure root canvas panel ─────────────────────────────────────────────
+    UCanvasPanel* CanvasPanel = EnsureRootCanvasPanel(WB);
+    if (!CanvasPanel)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("Widget Blueprint's root is not a CanvasPanel; cannot place panel by absolute position"));
+
+    // ── Name uniqueness ──────────────────────────────────────────────────────
+    if (WB->WidgetTree->FindWidget(FName(*PanelName)))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget '%s' already exists in '%s'"), *PanelName, *WidgetName));
+
+    // ── Construct the panel widget ───────────────────────────────────────────
+    UPanelWidget* NewPanel = WB->WidgetTree->ConstructWidget<UPanelWidget>(PanelClass, FName(*PanelName));
+    if (!NewPanel)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("ConstructWidget<UPanelWidget> returned null"));
+
+    NewPanel->bIsVariable = true;  // required for BindWidget auto-binding
+
+    // ── Add to root canvas and configure slot ────────────────────────────────
+    UPanelSlot* RawSlot = CanvasPanel->AddChild(NewPanel);
+    UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(RawSlot);
+    if (CanvasSlot)
+    {
+        CanvasSlot->SetPosition(Position);
+        CanvasSlot->SetSize(Size);
+    }
+
+    // ── Persist ──────────────────────────────────────────────────────────────
+    MarkAndSaveWidgetBlueprint(WB);
+
+    // ── Build response ───────────────────────────────────────────────────────
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("name"), WidgetName);
+    Result->SetStringField(TEXT("child_name"), PanelName);
+    Result->SetStringField(TEXT("type"), PanelType);
     {
         TArray<TSharedPtr<FJsonValue>> PosArr;
         PosArr.Add(MakeShared<FJsonValueNumber>(Position.X));

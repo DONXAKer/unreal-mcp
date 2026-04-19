@@ -19,7 +19,8 @@ public:
     /**
      * Routes an incoming UMG command to the appropriate handler.
      * @param CommandType  Command name (add_widget_to_umg, add_text_block_to_widget,
-     *                     add_button_to_widget, set_widget_property, get_umg_hierarchy)
+     *                     add_button_to_widget, add_panel_widget_to_widget,
+     *                     set_widget_property, get_umg_hierarchy)
      * @param Params       JSON parameters
      * @return JSON response with result or error
      */
@@ -56,6 +57,15 @@ private:
      * Params: blueprint_path, widget_name, property_name, property_value
      */
     TSharedPtr<FJsonObject> HandleSetWidgetProperty(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * Add a panel-type widget (HorizontalBox, VerticalBox, UniformGridPanel, CanvasPanel,
+     * ScrollBox, WrapBox, Overlay) to a Widget Blueprint's root canvas panel.
+     * Params: widget_name, panel_name, panel_type, position [X,Y] (opt, default [0,0]),
+     *         size [W,H] (opt, default [400,100]).
+     * The panel is named so it matches a UPROPERTY(meta=(BindWidget)) field in the parent C++ class.
+     */
+    TSharedPtr<FJsonObject> HandleAddPanelWidgetToWidget(const TSharedPtr<FJsonObject>& Params);
 
     /**
      * Get the widget hierarchy of a Widget Blueprint as a JSON tree.

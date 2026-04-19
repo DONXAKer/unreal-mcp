@@ -183,6 +183,61 @@ def register_umg_tools(mcp: FastMCP):
             return {"success": False, "message": error_msg}
 
     @mcp.tool()
+    def add_panel_widget_to_widget(
+        ctx: Context,
+        widget_name: str,
+        panel_name: str,
+        panel_type: str,
+        position: List[float] = [0.0, 0.0],
+        size: List[float] = [400.0, 100.0]
+    ) -> Dict[str, Any]:
+        """
+        Add a container/panel widget (HorizontalBox, VerticalBox, UniformGridPanel,
+        CanvasPanel, ScrollBox, WrapBox, Overlay) to a Widget Blueprint's root canvas.
+
+        Args:
+            widget_name: Name of the target Widget Blueprint (short or full path)
+            panel_name: Name for the new panel (matches UPROPERTY(meta=(BindWidget)))
+            panel_type: One of "HorizontalBox", "VerticalBox", "UniformGridPanel",
+                "CanvasPanel", "ScrollBox", "WrapBox", "Overlay"
+            position: [X, Y] position in the root canvas panel
+            size: [Width, Height] of the panel
+
+        Returns:
+            Dict containing success status and panel properties
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                logger.error("Failed to connect to Unreal Engine")
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
+            params = {
+                "widget_name": widget_name,
+                "panel_name": panel_name,
+                "panel_type": panel_type,
+                "position": position,
+                "size": size
+            }
+
+            logger.info(f"Adding panel widget to widget with params: {params}")
+            response = unreal.send_command("add_panel_widget_to_widget", params)
+
+            if not response:
+                logger.error("No response from Unreal Engine")
+                return {"success": False, "message": "No response from Unreal Engine"}
+
+            logger.info(f"Add panel widget response: {response}")
+            return response
+
+        except Exception as e:
+            error_msg = f"Error adding panel widget to widget: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
     def bind_widget_event(
         ctx: Context,
         widget_name: str,
