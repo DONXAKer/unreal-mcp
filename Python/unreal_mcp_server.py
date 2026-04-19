@@ -277,7 +277,36 @@ register_editor_tools(mcp)
 register_blueprint_tools(mcp)
 register_blueprint_node_tools(mcp)
 register_project_tools(mcp)
-register_umg_tools(mcp)  
+register_umg_tools(mcp)
+
+# --- MCP Content Pipeline (MCP-CONTENT-001): config + recipe framework ---
+from tools import project_config as _project_config
+from tools import recipe_framework as _recipe_framework
+
+_recipe_framework.init_registry(mcp)
+
+@mcp.tool()
+def reload_config() -> Dict[str, Any]:
+    """Reload <ProjectRoot>/mcp-project.json from disk."""
+    return _project_config.reload_config()
+
+@mcp.tool()
+def reload_recipes() -> Dict[str, Any]:
+    """Rediscover and re-register all recipes under the configured recipesDir."""
+    return _recipe_framework.reload_recipes_impl()
+
+try:
+    if _project_config.load_config() is not None:
+        _count, _names, _errors = _recipe_framework.register_all_recipes()
+        logger.info(
+            "MCP Content Pipeline startup: %d recipes registered (errors=%s)",
+            _count,
+            _errors or "none",
+        )
+    else:
+        logger.info("MCP Content Pipeline: no mcp-project.json — recipes not loaded")
+except Exception as _startup_err:  # noqa: BLE001
+    logger.exception("MCP Content Pipeline startup failed: %s", _startup_err)
 
 @mcp.prompt()
 def info():
