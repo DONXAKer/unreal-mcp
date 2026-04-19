@@ -4,6 +4,7 @@
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Factories/BlueprintFactory.h"
 #include "WidgetBlueprintFactory.h"
+#include "WidgetBlueprint.h"
 #include "Blueprint/UserWidget.h"
 #include "EdGraphSchema_K2.h"
 #include "K2Node_Event.h"
@@ -179,13 +180,17 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCreateBlueprint(c
         }
     }
 
-    // Выбор фабрики в зависимости от типа родительского класса
+    // Выбор фабрики и типа создаваемого blueprint'а в зависимости от родительского класса.
+    // UWidgetBlueprintFactory::FactoryCreateNew assert'ит, что передан UWidgetBlueprint::StaticClass(),
+    // а UBlueprintFactory требует UBlueprint::StaticClass() — разный класс для разных фабрик.
     UFactory* Factory = nullptr;
+    UClass* BlueprintClassToCreate = UBlueprint::StaticClass();
     if (SelectedParentClass->IsChildOf(UUserWidget::StaticClass()))
     {
         UWidgetBlueprintFactory* WidgetFactory = NewObject<UWidgetBlueprintFactory>();
         WidgetFactory->ParentClass = SelectedParentClass;
         Factory = WidgetFactory;
+        BlueprintClassToCreate = UWidgetBlueprint::StaticClass();
     }
     else
     {
@@ -196,7 +201,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCreateBlueprint(c
 
     // Create the blueprint
     UPackage* Package = CreatePackage(*(PackagePath + AssetName));
-    UBlueprint* NewBlueprint = Cast<UBlueprint>(Factory->FactoryCreateNew(UBlueprint::StaticClass(), Package, *AssetName, RF_Standalone | RF_Public, nullptr, GWarn));
+    UBlueprint* NewBlueprint = Cast<UBlueprint>(Factory->FactoryCreateNew(BlueprintClassToCreate, Package, *AssetName, RF_Standalone | RF_Public, nullptr, GWarn));
 
     if (NewBlueprint)
     {
