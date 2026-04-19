@@ -12,6 +12,7 @@
 #include "Commands/EpicUnrealMCPBlueprintCommands.h"
 #include "Commands/EpicUnrealMCPBlueprintGraphCommands.h"
 #include "Commands/UMGCommands.h"
+#include "Commands/AssetCommands.h"
 #include "EpicUnrealMCPBridge.generated.h"
 
 class FMCPServerRunnable;
@@ -59,4 +60,5 @@ private:
 	TSharedPtr<FEpicUnrealMCPBlueprintCommands> BlueprintCommands;
 	TSharedPtr<FEpicUnrealMCPBlueprintGraphCommands> BlueprintGraphCommands;
 	TSharedPtr<FUnrealMCPUMGCommands> UMGCommands;
-}; 
+	TSharedPtr<FAssetCommands> AssetCommands;
+};

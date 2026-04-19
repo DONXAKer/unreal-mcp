@@ -56,6 +56,7 @@
 #include "Commands/EpicUnrealMCPBlueprintGraphCommands.h"
 #include "Commands/EpicUnrealMCPCommonUtils.h"
 #include "Commands/UMGCommands.h"
+#include "Commands/AssetCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -67,6 +68,7 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     BlueprintCommands = MakeShared<FEpicUnrealMCPBlueprintCommands>();
     BlueprintGraphCommands = MakeShared<FEpicUnrealMCPBlueprintGraphCommands>();
     UMGCommands = MakeShared<FUnrealMCPUMGCommands>();
+    AssetCommands = MakeShared<FAssetCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -75,6 +77,7 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     BlueprintCommands.Reset();
     BlueprintGraphCommands.Reset();
     UMGCommands.Reset();
+    AssetCommands.Reset();
 }
 
 // Initialize subsystem
@@ -259,6 +262,12 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("get_umg_hierarchy"))
             {
                 ResultJson = UMGCommands->HandleCommand(CommandType, Params);
+            }
+            // Asset Pipeline Commands (MCP Content Pipeline foundation)
+            else if (CommandType == TEXT("asset_exists") ||
+                     CommandType == TEXT("delete_asset"))
+            {
+                ResultJson = AssetCommands->HandleCommand(CommandType, Params);
             }
             // Blueprint Graph Commands
             else if (CommandType == TEXT("add_blueprint_node") ||
