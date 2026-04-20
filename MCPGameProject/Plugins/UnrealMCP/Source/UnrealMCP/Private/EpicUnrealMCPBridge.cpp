@@ -59,6 +59,7 @@
 #include "Commands/AssetCommands.h"
 #include "Commands/TextureCommands.h"
 #include "Commands/MaterialCommands.h"
+#include "Commands/MeshCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -73,6 +74,7 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     AssetCommands = MakeShared<FAssetCommands>();
     TextureCommands = MakeShared<FTextureCommands>();
     MaterialCommands = MakeShared<FMaterialCommands>();
+    MeshCommands = MakeShared<FMeshCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -84,6 +86,7 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     AssetCommands.Reset();
     TextureCommands.Reset();
     MaterialCommands.Reset();
+    MeshCommands.Reset();
 }
 
 // Initialize subsystem
@@ -287,6 +290,11 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("set_material_instance_params"))
             {
                 ResultJson = MaterialCommands->HandleCommand(CommandType, Params);
+            }
+            // Mesh Pipeline Commands (MCP-CONTENT-003a)
+            else if (CommandType == TEXT("import_static_mesh"))
+            {
+                ResultJson = MeshCommands->HandleCommand(CommandType, Params);
             }
             // Blueprint Graph Commands
             else if (CommandType == TEXT("add_blueprint_node") ||

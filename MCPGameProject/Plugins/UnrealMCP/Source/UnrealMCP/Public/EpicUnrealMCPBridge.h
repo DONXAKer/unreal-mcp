@@ -15,6 +15,7 @@
 #include "Commands/AssetCommands.h"
 #include "Commands/TextureCommands.h"
 #include "Commands/MaterialCommands.h"
+#include "Commands/MeshCommands.h"
 #include "EpicUnrealMCPBridge.generated.h"
 
 class FMCPServerRunnable;
@@ -65,4 +66,5 @@ private:
 	TSharedPtr<FAssetCommands> AssetCommands;
 	TSharedPtr<FTextureCommands> TextureCommands;
 	TSharedPtr<FMaterialCommands> MaterialCommands;
+	TSharedPtr<FMeshCommands> MeshCommands;
 };
