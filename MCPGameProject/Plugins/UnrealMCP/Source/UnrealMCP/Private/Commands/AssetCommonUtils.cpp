@@ -9,6 +9,9 @@
 #include "UObject/SoftObjectPath.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "Editor.h"
+#include "Engine/World.h"
+#include "FileHelpers.h" // UEditorLoadingAndSavingUtils
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Asset Registry / lookup
@@ -209,5 +212,73 @@ bool FAssetCommonUtils::RequireAssetPath(
         return false;
     }
 
+    return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Level context resolver (MCP-CONTENT-003b)
+// ─────────────────────────────────────────────────────────────────────────────
+
+bool FAssetCommonUtils::ResolveLevelContext(
+    const FString& MapPath,
+    UWorld*& OutWorld,
+    bool& bOutOpened,
+    FString& OutError)
+{
+    OutWorld = nullptr;
+    bOutOpened = false;
+    OutError.Reset();
+
+    if (!GEditor)
+    {
+        OutError = TEXT("GEditor is null; cannot resolve level context");
+        return false;
+    }
+
+    if (MapPath.IsEmpty())
+    {
+        // Active-editor-world path. No load, no save.
+        UWorld* Active = GEditor->GetEditorWorldContext().World();
+        if (!Active)
+        {
+            OutError = TEXT("No active editor world");
+            return false;
+        }
+        OutWorld = Active;
+        bOutOpened = false;
+        return true;
+    }
+
+    // If the requested map is already the active editor world, short-circuit.
+    // Calling LoadMap on the current world triggers a "World Memory Leaks"
+    // fatal in EditorServer.cpp line 2524 — the live world is still rooted
+    // as the editor-world context, and LoadMap's own sanity check refuses
+    // to reload the same map while its old instance is alive.
+    UWorld* Active = GEditor->GetEditorWorldContext().World();
+    if (Active && Active->GetOutermost() &&
+        Active->GetOutermost()->GetName() == MapPath)
+    {
+        OutWorld = Active;
+        bOutOpened = false; // Caller shouldn't auto-save as if we opened it here.
+        return true;
+    }
+
+    // Force a GC pass to release any stale refs before switching the editor
+    // world — guards against leaks from prior create_level / spawn work
+    // that can otherwise surface as the same EditorServer.cpp:2524 fatal.
+    CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+
+    // Explicit map path — blocking load. LoadMap sets the loaded world as
+    // the active editor world on success, so after this call GEditor's
+    // editor-world context reflects the freshly loaded map.
+    UWorld* Loaded = UEditorLoadingAndSavingUtils::LoadMap(MapPath);
+    if (!Loaded)
+    {
+        OutError = FString::Printf(TEXT("LoadMap failed for '%s'"), *MapPath);
+        return false;
+    }
+
+    OutWorld = Loaded;
+    bOutOpened = true;
     return true;
 }

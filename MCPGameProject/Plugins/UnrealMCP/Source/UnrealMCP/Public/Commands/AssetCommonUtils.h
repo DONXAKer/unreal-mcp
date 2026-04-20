@@ -3,6 +3,8 @@
 #include "CoreMinimal.h"
 #include "Json.h"
 
+class UWorld;
+
 /**
  * Shared helpers for MCP Asset Pipeline commands (Texture / Material / Mesh / Level / ...).
  *
@@ -124,4 +126,32 @@ public:
      * Validates asset path shape ("/Game/..."). Returns true if acceptable.
      */
     static bool IsValidAssetPath(const FString& AssetPath);
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Level context resolver (MCP-CONTENT-003b)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Resolves the target UWorld for a level-pipeline operation.
+     *
+     * If MapPath is empty, the caller targets the active editor world:
+     *   OutWorld      = GEditor->GetEditorWorldContext().World()
+     *   bOutOpened    = false     (no load happened; caller should NOT SaveMap)
+     *
+     * If MapPath is non-empty, the level is loaded via
+     * UEditorLoadingAndSavingUtils::LoadMap (blocking):
+     *   OutWorld      = GEditor world after load (LoadMap makes it active)
+     *   bOutOpened    = true      (caller is expected to SaveMap after mutation)
+     *
+     * On any failure (no editor, no world, LoadMap returned null), returns false
+     * and writes a one-line diagnostic into OutError.
+     *
+     * Note: LoadMap is synchronous. There is no Interchange / TaskGraph pump
+     * involved, so this is safe from the bridge's GameThread AsyncTask handler.
+     */
+    static bool ResolveLevelContext(
+        const FString& MapPath,
+        UWorld*& OutWorld,
+        bool& bOutOpened,
+        FString& OutError);
 };

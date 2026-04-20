@@ -60,6 +60,7 @@
 #include "Commands/TextureCommands.h"
 #include "Commands/MaterialCommands.h"
 #include "Commands/MeshCommands.h"
+#include "Commands/LevelCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -75,6 +76,7 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     TextureCommands = MakeShared<FTextureCommands>();
     MaterialCommands = MakeShared<FMaterialCommands>();
     MeshCommands = MakeShared<FMeshCommands>();
+    LevelCommands = MakeShared<FLevelCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -87,6 +89,7 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     TextureCommands.Reset();
     MaterialCommands.Reset();
     MeshCommands.Reset();
+    LevelCommands.Reset();
 }
 
 // Initialize subsystem
@@ -295,6 +298,17 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             else if (CommandType == TEXT("import_static_mesh"))
             {
                 ResultJson = MeshCommands->HandleCommand(CommandType, Params);
+            }
+            // Level Pipeline Commands (MCP-CONTENT-003b)
+            else if (CommandType == TEXT("create_level") ||
+                     CommandType == TEXT("load_level") ||
+                     CommandType == TEXT("save_level") ||
+                     CommandType == TEXT("spawn_actor_in_level") ||
+                     CommandType == TEXT("remove_actor_from_level") ||
+                     CommandType == TEXT("set_actor_transform_in_level") ||
+                     CommandType == TEXT("list_actors_in_level"))
+            {
+                ResultJson = LevelCommands->HandleCommand(CommandType, Params);
             }
             // Blueprint Graph Commands
             else if (CommandType == TEXT("add_blueprint_node") ||
