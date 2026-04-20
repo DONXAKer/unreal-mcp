@@ -112,6 +112,9 @@ def resolve_project_root(explicit: Optional[str] = None) -> Optional[Path]:
       1. Explicit argument (if passed).
       2. $MCP_PROJECT_ROOT env var.
       3. Walk up from CWD looking for a `*.uproject` sibling.
+      4. Walk up from this module's location (plugin lives inside the
+         project, so climbing from Python/tools/project_config.py hits
+         the .uproject reliably regardless of MCP-server CWD and env).
     """
     if explicit:
         root = Path(explicit).resolve()
@@ -123,11 +126,38 @@ def resolve_project_root(explicit: Optional[str] = None) -> Optional[Path]:
         if root.is_dir():
             return root
 
-    cwd = Path.cwd().resolve()
-    for parent in (cwd, *cwd.parents):
-        if any(parent.glob("*.uproject")):
-            return parent
-    return None
+    def _find_root(start: Path) -> Optional[Path]:
+        # Walk up; at each level also scan immediate children so monorepos
+        # (e.g. D:/WarCard/client/ when the MCP server runs from a sibling
+        # unreal-mcp/ dir) are discoverable without env vars. Prefer a dir
+        # with mcp-project.json — in a monorepo multiple .uproject files
+        # can exist (e.g. the plugin's own test project) and only one owns
+        # the content config.
+        for parent in (start, *start.parents):
+            if (parent / CONFIG_FILENAME).is_file():
+                return parent
+            try:
+                for child in parent.iterdir():
+                    if child.is_dir() and (child / CONFIG_FILENAME).is_file():
+                        return child
+            except (PermissionError, OSError):
+                continue
+        for parent in (start, *start.parents):
+            if any(parent.glob("*.uproject")):
+                return parent
+            try:
+                for child in parent.iterdir():
+                    if child.is_dir() and any(child.glob("*.uproject")):
+                        return child
+            except (PermissionError, OSError):
+                continue
+        return None
+
+    cwd_hit = _find_root(Path.cwd().resolve())
+    if cwd_hit is not None:
+        return cwd_hit
+
+    return _find_root(Path(__file__).resolve().parent)
 
 
 def load_config(project_root: Optional[str] = None) -> Optional[ProjectConfig]:

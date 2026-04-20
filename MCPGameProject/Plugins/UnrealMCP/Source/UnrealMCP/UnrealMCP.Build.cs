@@ -57,7 +57,9 @@ public class UnrealMCP : ModuleRules
 				"SlateCore",
 				"Kismet",
 				"Projects",
-				"AssetRegistry"
+				"AssetRegistry",
+				"AssetTools",       // For UTextureFactory + UMaterialInstanceConstantFactoryNew (MCP-CONTENT-002)
+				"MaterialEditor"    // For UMaterialEditingLibrary (MCP-CONTENT-002)
 			}
 		);
 		

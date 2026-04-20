@@ -1,5 +1,6 @@
 #include "Commands/EpicUnrealMCPBlueprintCommands.h"
 #include "Commands/EpicUnrealMCPCommonUtils.h"
+#include "Commands/AssetCommonUtils.h"
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
 #include "Factories/BlueprintFactory.h"
@@ -41,6 +42,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     if (CommandType == TEXT("create_blueprint"))
     {
         return HandleCreateBlueprint(Params);
+    }
+    else if (CommandType == TEXT("create_blueprint_from_template"))
+    {
+        return HandleCreateBlueprintFromTemplate(Params);
     }
     else if (CommandType == TEXT("reparent_blueprint"))
     {
@@ -1787,4 +1792,258 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleGetBlueprintFunct
 
     ResultObj->SetBoolField(TEXT("success"), true);
     return ResultObj;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// create_blueprint_from_template (MCP-CONTENT-002)
+//
+// Duplicates an existing Blueprint asset and applies optional defaultsOverride
+// to the duplicated Blueprint's CDO (properties on the generated class default
+// object). The BP is compiled after overrides are applied so defaults take
+// effect in spawned instances.
+//
+// Returns the unified pipeline response ({ ok, status, assetPath, meta }).
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCreateBlueprintFromTemplate(const TSharedPtr<FJsonObject>& Params)
+{
+    // assetPath (new BP) is required.
+    FString AssetPath;
+    TSharedPtr<FJsonObject> ParamFailure;
+    if (!FAssetCommonUtils::RequireAssetPath(Params, AssetPath, ParamFailure))
+    {
+        return ParamFailure;
+    }
+
+    FString TemplatePath;
+    if (!Params->TryGetStringField(TEXT("templatePath"), TemplatePath) || TemplatePath.IsEmpty())
+    {
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"),
+            TEXT("MISSING_TEMPLATE_PATH"),
+            TEXT("Required param 'templatePath' is missing or empty"));
+    }
+
+    UObject* TemplateObj = UEditorAssetLibrary::LoadAsset(TemplatePath);
+    UBlueprint* TemplateBP = Cast<UBlueprint>(TemplateObj);
+    if (!TemplateBP)
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetStringField(TEXT("templatePath"), TemplatePath);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"),
+            TEXT("TEMPLATE_NOT_FOUND"),
+            FString::Printf(TEXT("Template BP not found at '%s'"), *TemplatePath),
+            Details);
+    }
+
+    FString IfExists;
+    Params->TryGetStringField(TEXT("ifExists"), IfExists);
+
+    FAssetCommonUtils::FIdempotencyDecision Decision =
+        FAssetCommonUtils::ResolveIdempotency(AssetPath, IfExists);
+    if (Decision.Action == TEXT("skip") || Decision.Action == TEXT("fail"))
+    {
+        return Decision.SkipResponse;
+    }
+
+    const bool bUpdate = (Decision.Action == TEXT("update"));
+    const bool bOverwrite = (Decision.Action == TEXT("overwrite"));
+
+    UBlueprint* TargetBP = nullptr;
+
+    if (bUpdate && Decision.ExistingAsset)
+    {
+        // "update" reuses the existing BP; we just apply defaultsOverride + recompile.
+        TargetBP = Cast<UBlueprint>(Decision.ExistingAsset);
+        if (!TargetBP)
+        {
+            return FAssetCommonUtils::MakeFailureResponse(
+                TEXT("user"),
+                TEXT("EXISTING_ASSET_NOT_BP"),
+                FString::Printf(TEXT("Asset at '%s' exists but is not a UBlueprint"), *AssetPath));
+        }
+    }
+    else
+    {
+        // "overwrite": delete old first. "create": no preexisting.
+        if (bOverwrite && Decision.ExistingAsset)
+        {
+            if (!UEditorAssetLibrary::DeleteAsset(AssetPath))
+            {
+                return FAssetCommonUtils::MakeFailureResponse(
+                    TEXT("ue_internal"),
+                    TEXT("DELETE_BEFORE_DUPLICATE_FAILED"),
+                    FString::Printf(TEXT("Could not delete existing asset at '%s' before overwrite"), *AssetPath));
+            }
+        }
+
+        UObject* Duplicated = UEditorAssetLibrary::DuplicateAsset(TemplatePath, AssetPath);
+        TargetBP = Cast<UBlueprint>(Duplicated);
+        if (!TargetBP)
+        {
+            TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+            Details->SetStringField(TEXT("templatePath"), TemplatePath);
+            Details->SetStringField(TEXT("destPath"), AssetPath);
+            return FAssetCommonUtils::MakeFailureResponse(
+                TEXT("ue_internal"),
+                TEXT("BP_DUPLICATE_FAILED"),
+                TEXT("UEditorAssetLibrary::DuplicateAsset returned null or non-BP"),
+                Details);
+        }
+    }
+
+    // Compile once before applying CDO overrides so the generated class exists
+    // with all inherited properties available.
+    FKismetEditorUtilities::CompileBlueprint(TargetBP);
+
+    // Apply defaultsOverride to CDO.
+    TArray<FString> AppliedKeys;
+    TMap<FString, FString> SkippedKeys;
+
+    const TSharedPtr<FJsonObject>* DefaultsObjPtr = nullptr;
+    const bool bHasDefaults =
+        Params->TryGetObjectField(TEXT("defaultsOverride"), DefaultsObjPtr) &&
+        DefaultsObjPtr && (*DefaultsObjPtr).IsValid();
+
+    if (bHasDefaults)
+    {
+        UClass* GeneratedClass = TargetBP->GeneratedClass;
+        UObject* CDO = GeneratedClass ? GeneratedClass->GetDefaultObject() : nullptr;
+
+        if (!CDO)
+        {
+            return FAssetCommonUtils::MakeFailureResponse(
+                TEXT("ue_internal"),
+                TEXT("CDO_UNAVAILABLE"),
+                FString::Printf(TEXT("GeneratedClass CDO missing for '%s' after compile"), *AssetPath));
+        }
+
+        for (const TPair<FString, TSharedPtr<FJsonValue>>& Pair : (*DefaultsObjPtr)->Values)
+        {
+            const FString& PropName = Pair.Key;
+            const TSharedPtr<FJsonValue>& Value = Pair.Value;
+
+            FProperty* Prop = GeneratedClass->FindPropertyByName(FName(*PropName));
+            if (!Prop)
+            {
+                SkippedKeys.Add(PropName, TEXT("property_not_found"));
+                continue;
+            }
+
+            void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(CDO);
+
+            // Numeric → FNumericProperty handles int / float / etc.
+            if (Value->Type == EJson::Number)
+            {
+                if (FNumericProperty* NumProp = CastField<FNumericProperty>(Prop))
+                {
+                    if (NumProp->IsFloatingPoint())
+                    {
+                        NumProp->SetFloatingPointPropertyValue(ValuePtr, Value->AsNumber());
+                    }
+                    else
+                    {
+                        NumProp->SetIntPropertyValue(ValuePtr, static_cast<int64>(Value->AsNumber()));
+                    }
+                    AppliedKeys.Add(PropName);
+                }
+                else if (FBoolProperty* BoolProp = CastField<FBoolProperty>(Prop))
+                {
+                    BoolProp->SetPropertyValue(ValuePtr, Value->AsNumber() != 0.0);
+                    AppliedKeys.Add(PropName);
+                }
+                else
+                {
+                    SkippedKeys.Add(PropName, TEXT("property_not_numeric"));
+                }
+            }
+            else if (Value->Type == EJson::Boolean)
+            {
+                if (FBoolProperty* BoolProp = CastField<FBoolProperty>(Prop))
+                {
+                    BoolProp->SetPropertyValue(ValuePtr, Value->AsBool());
+                    AppliedKeys.Add(PropName);
+                }
+                else
+                {
+                    SkippedKeys.Add(PropName, TEXT("property_not_bool"));
+                }
+            }
+            else if (Value->Type == EJson::String)
+            {
+                const FString Str = Value->AsString();
+
+                // Object properties — treat string as asset path and LoadAsset it.
+                if (FObjectProperty* ObjProp = CastField<FObjectProperty>(Prop))
+                {
+                    UObject* Loaded = UEditorAssetLibrary::LoadAsset(Str);
+                    if (!Loaded)
+                    {
+                        SkippedKeys.Add(PropName, FString::Printf(TEXT("asset_not_found:%s"), *Str));
+                    }
+                    else if (!Loaded->IsA(ObjProp->PropertyClass))
+                    {
+                        SkippedKeys.Add(PropName, FString::Printf(TEXT("asset_wrong_class:%s"), *Loaded->GetClass()->GetName()));
+                    }
+                    else
+                    {
+                        ObjProp->SetObjectPropertyValue(ValuePtr, Loaded);
+                        AppliedKeys.Add(PropName);
+                    }
+                }
+                else if (FStrProperty* StrProp = CastField<FStrProperty>(Prop))
+                {
+                    StrProp->SetPropertyValue(ValuePtr, Str);
+                    AppliedKeys.Add(PropName);
+                }
+                else if (FNameProperty* NameProp = CastField<FNameProperty>(Prop))
+                {
+                    NameProp->SetPropertyValue(ValuePtr, FName(*Str));
+                    AppliedKeys.Add(PropName);
+                }
+                else if (FTextProperty* TextProp = CastField<FTextProperty>(Prop))
+                {
+                    TextProp->SetPropertyValue(ValuePtr, FText::FromString(Str));
+                    AppliedKeys.Add(PropName);
+                }
+                else
+                {
+                    SkippedKeys.Add(PropName, TEXT("string_for_non_string_prop"));
+                }
+            }
+            else
+            {
+                SkippedKeys.Add(PropName, TEXT("unsupported_json_type"));
+            }
+        }
+
+        CDO->Modify();
+    }
+
+    // Recompile + save to persist CDO overrides.
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(TargetBP);
+    FKismetEditorUtilities::CompileBlueprint(TargetBP);
+    TargetBP->MarkPackageDirty();
+    UEditorAssetLibrary::SaveAsset(AssetPath, /*bOnlyIfIsDirty=*/false);
+
+    TSharedPtr<FJsonObject> Meta = MakeShared<FJsonObject>();
+    Meta->SetStringField(TEXT("templatePath"), TemplatePath);
+
+    TArray<TSharedPtr<FJsonValue>> AppliedJson;
+    for (const FString& K : AppliedKeys) AppliedJson.Add(MakeShared<FJsonValueString>(K));
+    Meta->SetArrayField(TEXT("appliedDefaults"), AppliedJson);
+
+    if (SkippedKeys.Num() > 0)
+    {
+        TSharedPtr<FJsonObject> Sk = MakeShared<FJsonObject>();
+        for (const TPair<FString, FString>& P : SkippedKeys)
+        {
+            Sk->SetStringField(P.Key, P.Value);
+        }
+        Meta->SetObjectField(TEXT("skippedDefaults"), Sk);
+    }
+
+    const FString Status = bUpdate ? TEXT("updated") : (bOverwrite ? TEXT("overwritten") : TEXT("created"));
+    return FAssetCommonUtils::MakeSuccessResponse(Status, AssetPath, Meta);
 }

@@ -57,6 +57,8 @@
 #include "Commands/EpicUnrealMCPCommonUtils.h"
 #include "Commands/UMGCommands.h"
 #include "Commands/AssetCommands.h"
+#include "Commands/TextureCommands.h"
+#include "Commands/MaterialCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -69,6 +71,8 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     BlueprintGraphCommands = MakeShared<FEpicUnrealMCPBlueprintGraphCommands>();
     UMGCommands = MakeShared<FUnrealMCPUMGCommands>();
     AssetCommands = MakeShared<FAssetCommands>();
+    TextureCommands = MakeShared<FTextureCommands>();
+    MaterialCommands = MakeShared<FMaterialCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -78,6 +82,8 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     BlueprintGraphCommands.Reset();
     UMGCommands.Reset();
     AssetCommands.Reset();
+    TextureCommands.Reset();
+    MaterialCommands.Reset();
 }
 
 // Initialize subsystem
@@ -235,6 +241,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             }
             // Blueprint Commands
             else if (CommandType == TEXT("create_blueprint") ||
+                     CommandType == TEXT("create_blueprint_from_template") ||
                      CommandType == TEXT("reparent_blueprint") ||
                      CommandType == TEXT("add_component_to_blueprint") ||
                      CommandType == TEXT("set_physics_properties") ||
@@ -268,6 +275,18 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("delete_asset"))
             {
                 ResultJson = AssetCommands->HandleCommand(CommandType, Params);
+            }
+            // Texture Pipeline Commands (MCP-CONTENT-002)
+            else if (CommandType == TEXT("import_texture") ||
+                     CommandType == TEXT("generate_placeholder_texture"))
+            {
+                ResultJson = TextureCommands->HandleCommand(CommandType, Params);
+            }
+            // Material Pipeline Commands (MCP-CONTENT-002)
+            else if (CommandType == TEXT("create_material_instance") ||
+                     CommandType == TEXT("set_material_instance_params"))
+            {
+                ResultJson = MaterialCommands->HandleCommand(CommandType, Params);
             }
             // Blueprint Graph Commands
             else if (CommandType == TEXT("add_blueprint_node") ||

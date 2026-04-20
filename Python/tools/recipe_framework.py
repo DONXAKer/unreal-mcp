@@ -209,6 +209,15 @@ class RecipeRegistry:
         tool_impl.__name__ = qualified.replace(".", "_")
         tool_impl.__doc__ = spec.description
 
+        # FastMCP's ToolManager.add_tool silently keeps the existing entry if
+        # the name is already registered, so hot reload wouldn't replace the
+        # captured closure. Pop first, then register.
+        tool_manager = getattr(self.mcp, "_tool_manager", None)
+        if tool_manager is not None:
+            store = getattr(tool_manager, "_tools", None)
+            if isinstance(store, dict):
+                store.pop(qualified, None)
+
         self.mcp.tool(name=qualified, description=spec.description)(tool_impl)
 
 
