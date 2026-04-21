@@ -126,8 +126,38 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCreateBlueprint(c
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
     }
 
-    // Check if blueprint already exists
+    // Read optional folder_path and normalize to /Game/<...>/ form
     FString PackagePath = TEXT("/Game/Blueprints/");
+    FString FolderPathRaw;
+    if (Params->TryGetStringField(TEXT("folder_path"), FolderPathRaw) && !FolderPathRaw.IsEmpty())
+    {
+        FolderPathRaw.TrimStartAndEndInline();
+
+        // If the user omitted the /Game/ prefix, prepend it
+        if (!FolderPathRaw.StartsWith(TEXT("/Game/")) && !FolderPathRaw.StartsWith(TEXT("Game/")))
+        {
+            FolderPathRaw = TEXT("/Game/") + FolderPathRaw;
+        }
+        // Handle bare "Game/..." -> "/Game/..."
+        if (FolderPathRaw.StartsWith(TEXT("Game/")))
+        {
+            FolderPathRaw = TEXT("/") + FolderPathRaw;
+        }
+
+        // Ensure leading /
+        if (!FolderPathRaw.StartsWith(TEXT("/")))
+        {
+            FolderPathRaw = TEXT("/") + FolderPathRaw;
+        }
+        // Ensure trailing /
+        if (!FolderPathRaw.EndsWith(TEXT("/")))
+        {
+            FolderPathRaw += TEXT("/");
+        }
+
+        PackagePath = FolderPathRaw;
+    }
+
     FString AssetName = BlueprintName;
     if (UEditorAssetLibrary::DoesAssetExist(PackagePath + AssetName))
     {
@@ -220,9 +250,17 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCreateBlueprint(c
         // Mark the package dirty
         Package->MarkPackageDirty();
 
+        // Save the asset to disk immediately so it persists without a manual Save All
+        FString FullAssetPath = PackagePath + AssetName;
+        if (!UEditorAssetLibrary::SaveAsset(FullAssetPath, /*bOnlyIfIsDirty=*/ false))
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Blueprint created but failed to save asset: %s"), *FullAssetPath));
+        }
+
         TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
         ResultObj->SetStringField(TEXT("name"), AssetName);
-        ResultObj->SetStringField(TEXT("path"), PackagePath + AssetName);
+        ResultObj->SetStringField(TEXT("path"), FullAssetPath);
         return ResultObj;
     }
 
