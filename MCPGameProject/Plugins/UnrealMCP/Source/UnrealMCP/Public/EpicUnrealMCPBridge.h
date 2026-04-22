@@ -17,6 +17,8 @@
 #include "Commands/MaterialCommands.h"
 #include "Commands/MeshCommands.h"
 #include "Commands/LevelCommands.h"
+#include "Commands/DataAssetCommands.h"
+#include "Commands/NiagaraCommands.h"
 #include "EpicUnrealMCPBridge.generated.h"
 
 class FMCPServerRunnable;
@@ -69,4 +71,6 @@ private:
 	TSharedPtr<FMaterialCommands> MaterialCommands;
 	TSharedPtr<FMeshCommands> MeshCommands;
 	TSharedPtr<FLevelCommands> LevelCommands;
+	TSharedPtr<FDataAssetCommands> DataAssetCommands;
+	TSharedPtr<FNiagaraCommands> NiagaraCommands;
 };

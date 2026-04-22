@@ -61,6 +61,8 @@
 #include "Commands/MaterialCommands.h"
 #include "Commands/MeshCommands.h"
 #include "Commands/LevelCommands.h"
+#include "Commands/DataAssetCommands.h"
+#include "Commands/NiagaraCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -77,6 +79,8 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     MaterialCommands = MakeShared<FMaterialCommands>();
     MeshCommands = MakeShared<FMeshCommands>();
     LevelCommands = MakeShared<FLevelCommands>();
+    DataAssetCommands = MakeShared<FDataAssetCommands>();
+    NiagaraCommands = MakeShared<FNiagaraCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -90,6 +94,8 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     MaterialCommands.Reset();
     MeshCommands.Reset();
     LevelCommands.Reset();
+    DataAssetCommands.Reset();
+    NiagaraCommands.Reset();
 }
 
 // Initialize subsystem
@@ -309,6 +315,20 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("list_actors_in_level"))
             {
                 ResultJson = LevelCommands->HandleCommand(CommandType, Params);
+            }
+            // Data Asset + Sound Pipeline Commands
+            else if (CommandType == TEXT("import_datatable_from_csv") ||
+                     CommandType == TEXT("set_datatable_row") ||
+                     CommandType == TEXT("get_datatable_rows") ||
+                     CommandType == TEXT("import_sound_wave"))
+            {
+                ResultJson = DataAssetCommands->HandleCommand(CommandType, Params);
+            }
+            // Niagara VFX Pipeline Commands
+            else if (CommandType == TEXT("copy_niagara_system") ||
+                     CommandType == TEXT("set_niagara_parameters"))
+            {
+                ResultJson = NiagaraCommands->HandleCommand(CommandType, Params);
             }
             // Blueprint Graph Commands
             else if (CommandType == TEXT("add_blueprint_node") ||
