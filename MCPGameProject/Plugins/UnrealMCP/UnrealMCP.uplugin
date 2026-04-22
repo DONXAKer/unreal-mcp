@@ -30,6 +30,11 @@
 		{
 			"Name": "EditorScriptingUtilities",
 			"Enabled": true
+		},
+		{
+			"Name": "Niagara",
+			"Enabled": true,
+			"Optional": true
 		}
 	]
 } 
