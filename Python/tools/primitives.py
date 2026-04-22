@@ -113,3 +113,68 @@ def create_blueprint_from_template(
         "defaultsOverride": defaultsOverride or {},
         "ifExists": ifExists,
     })
+
+
+# ── Level primitives (MCP-CONTENT-003b) ──────────────────────────────────────
+
+def create_level(
+    destMapPath: str,
+    template: str = "Empty",
+    ifExists: str = "skip",
+) -> Dict[str, Any]:
+    return _call("create_level", {
+        "destMapPath": destMapPath,
+        "template": template,
+        "ifExists": ifExists,
+    })
+
+
+def load_level(mapPath: str) -> Dict[str, Any]:
+    return _call("load_level", {"mapPath": mapPath})
+
+
+def save_level(mapPath: Optional[str] = None) -> Dict[str, Any]:
+    params: Dict[str, Any] = {}
+    if mapPath:
+        params["mapPath"] = mapPath
+    return _call("save_level", params)
+
+
+def spawn_actor_in_level(
+    actorClass: str,
+    mapPath: Optional[str] = None,
+    name: Optional[str] = None,
+    transform: Optional[Dict[str, Any]] = None,
+    properties: Optional[Dict[str, Any]] = None,
+    ifExists: str = "skip",
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {"actorClass": actorClass, "ifExists": ifExists}
+    if mapPath:
+        params["mapPath"] = mapPath
+    if name:
+        params["name"] = name
+    if transform:
+        params["transform"] = transform
+    if properties:
+        params["properties"] = properties
+    return _call("spawn_actor_in_level", params)
+
+
+def list_actors_in_level(
+    mapPath: Optional[str] = None,
+    classFilter: Optional[str] = None,
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {}
+    if mapPath:
+        params["mapPath"] = mapPath
+    if classFilter:
+        params["classFilter"] = classFilter
+    return _call("list_actors_in_level", params)
+
+
+def asset_exists(assetPath: str) -> Dict[str, Any]:
+    return _call("asset_exists", {"assetPath": assetPath})
+
+
+def delete_asset(assetPath: str, ifMissing: str = "skip") -> Dict[str, Any]:
+    return _call("delete_asset", {"assetPath": assetPath, "ifMissing": ifMissing})
