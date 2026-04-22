@@ -25,7 +25,8 @@
 namespace
 {
     // Split "/Game/Data/DT_Foo" into ("/Game/Data", "DT_Foo").
-    bool SplitAssetPath(const FString& InAssetPath, FString& OutPackagePath, FString& OutAssetName)
+    // Prefixed DA_ to avoid anonymous-namespace ODR clash in unity builds.
+    bool DA_SplitAssetPath(const FString& InAssetPath, FString& OutPackagePath, FString& OutAssetName)
     {
         int32 LastSlash = INDEX_NONE;
         if (!InAssetPath.FindLastChar(TCHAR('/'), LastSlash) || LastSlash <= 0)
@@ -112,7 +113,7 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleImportDataTableFromCsv(const T
     }
 
     FString PackagePath, AssetName;
-    if (!SplitAssetPath(AssetPath, PackagePath, AssetName))
+    if (!DA_SplitAssetPath(AssetPath, PackagePath, AssetName))
     {
         TSharedPtr<FJsonObject> D = MakeShared<FJsonObject>();
         D->SetStringField(TEXT("assetPath"), AssetPath);
@@ -125,19 +126,18 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleImportDataTableFromCsv(const T
     UCSVImportFactory* Factory = NewObject<UCSVImportFactory>();
     Factory->AddToRoot(); // prevent GC during import
 
-    // Optional rowStruct override.
+    // Optional rowStruct override — set on AutomatedImportSettings, not on the factory directly.
     FString RowStructPath;
     if (Params->TryGetStringField(TEXT("rowStruct"), RowStructPath) && !RowStructPath.IsEmpty())
     {
         UScriptStruct* RowStruct = FindObject<UScriptStruct>(nullptr, *RowStructPath, false);
         if (!RowStruct)
         {
-            // Attempt a load (handles assets that haven't been loaded yet).
             RowStruct = LoadObject<UScriptStruct>(nullptr, *RowStructPath);
         }
         if (RowStruct)
         {
-            Factory->ImportRowStruct = RowStruct;
+            Factory->AutomatedImportSettings.ImportRowStruct = RowStruct;
         }
         else
         {
@@ -145,26 +145,19 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleImportDataTableFromCsv(const T
         }
     }
 
-    // Run import via AssetTools.
+    // Run import via AssetTools.ImportAssets (not ImportAssetsWithDialog which opens a file dialog).
     IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 
-    bool bOutCancelled = false;
-    TArray<UObject*> Imported = AssetTools.ImportAssetsWithDialog(
-        // We call the lower-level path so we can pass a factory directly.
-        // ImportAssets(source, dest_package, factory) → array of created objects.
-        // UE 5.x signature:
-        // TArray<UObject*> ImportAssetsWithDialog(const TArray<FString>& Files, const FString& DestPath, UFactory* Factory, bool bSyncToBrowser, TArray<TPair<FString,FString>>* FilesAndDest, bool* bOutOperationCancelled)
+    TArray<UObject*> Imported = AssetTools.ImportAssets(
         TArray<FString>{ CsvPath },
         PackagePath,
         Factory,
-        /*bSyncToBrowser=*/false,
-        /*FilesAndDest=*/nullptr,
-        &bOutCancelled
+        /*bSyncToBrowser=*/false
     );
 
     Factory->RemoveFromRoot();
 
-    if (bOutCancelled || Imported.Num() == 0 || !Imported[0])
+    if (Imported.Num() == 0 || !Imported[0])
     {
         return FAssetCommonUtils::MakeFailureResponse(
             TEXT("ue_internal"), TEXT("DATATABLE_IMPORT_FAILED"),
@@ -482,7 +475,7 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleImportSoundWave(const TSharedP
     }
 
     FString PackagePath, AssetName;
-    if (!SplitAssetPath(AssetPath, PackagePath, AssetName))
+    if (!DA_SplitAssetPath(AssetPath, PackagePath, AssetName))
     {
         TSharedPtr<FJsonObject> D = MakeShared<FJsonObject>();
         D->SetStringField(TEXT("assetPath"), AssetPath);
@@ -496,19 +489,16 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleImportSoundWave(const TSharedP
 
     IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 
-    bool bOutCancelled = false;
-    TArray<UObject*> Imported = AssetTools.ImportAssetsWithDialog(
+    TArray<UObject*> Imported = AssetTools.ImportAssets(
         TArray<FString>{ WavPath },
         PackagePath,
         Factory,
-        /*bSyncToBrowser=*/false,
-        /*FilesAndDest=*/nullptr,
-        &bOutCancelled
+        /*bSyncToBrowser=*/false
     );
 
     Factory->RemoveFromRoot();
 
-    if (bOutCancelled || Imported.Num() == 0 || !Imported[0])
+    if (Imported.Num() == 0 || !Imported[0])
     {
         return FAssetCommonUtils::MakeFailureResponse(
             TEXT("ue_internal"), TEXT("SOUND_IMPORT_FAILED"),

@@ -220,7 +220,7 @@ TSharedPtr<FJsonObject> FNiagaraCommands::HandleSetNiagaraParameters(const TShar
         {
             Val->TryGetBool(BoolVal);
             FNiagaraVariable BoolVar(FNiagaraTypeDefinition::GetBoolDef(), FName(*QualifiedName));
-            if (ExposedParams.FindParameterOffset(BoolVar) != INDEX_NONE)
+            if (ExposedParams.FindParameterOffset(BoolVar) != nullptr)
             {
                 FNiagaraBool NiagaraBool;
                 NiagaraBool.SetValue(BoolVal);
@@ -244,7 +244,7 @@ TSharedPtr<FJsonObject> FNiagaraCommands::HandleSetNiagaraParameters(const TShar
                     // FVector4
                     const float W = (float)(*Arr)[3]->AsNumber();
                     FNiagaraVariable Vec4Var(FNiagaraTypeDefinition::GetVec4Def(), FName(*QualifiedName));
-                    if (ExposedParams.FindParameterOffset(Vec4Var) != INDEX_NONE)
+                    if (ExposedParams.FindParameterOffset(Vec4Var) != nullptr)
                     {
                         ExposedParams.SetParameterValue(FVector4f(X, Y, Z, W), Vec4Var);
                         bApplied = true;
@@ -253,7 +253,7 @@ TSharedPtr<FJsonObject> FNiagaraCommands::HandleSetNiagaraParameters(const TShar
                 if (!bApplied)
                 {
                     FNiagaraVariable Vec3Var(FNiagaraTypeDefinition::GetVec3Def(), FName(*QualifiedName));
-                    if (ExposedParams.FindParameterOffset(Vec3Var) != INDEX_NONE)
+                    if (ExposedParams.FindParameterOffset(Vec3Var) != nullptr)
                     {
                         ExposedParams.SetParameterValue(FVector3f(X, Y, Z), Vec3Var);
                         bApplied = true;
@@ -269,7 +269,7 @@ TSharedPtr<FJsonObject> FNiagaraCommands::HandleSetNiagaraParameters(const TShar
 
             // Prefer float.
             FNiagaraVariable FloatVar(FNiagaraTypeDefinition::GetFloatDef(), FName(*QualifiedName));
-            if (ExposedParams.FindParameterOffset(FloatVar) != INDEX_NONE)
+            if (ExposedParams.FindParameterOffset(FloatVar) != nullptr)
             {
                 ExposedParams.SetParameterValue((float)NumVal, FloatVar);
                 bApplied = true;
@@ -277,7 +277,7 @@ TSharedPtr<FJsonObject> FNiagaraCommands::HandleSetNiagaraParameters(const TShar
             else
             {
                 FNiagaraVariable IntVar(FNiagaraTypeDefinition::GetIntDef(), FName(*QualifiedName));
-                if (ExposedParams.FindParameterOffset(IntVar) != INDEX_NONE)
+                if (ExposedParams.FindParameterOffset(IntVar) != nullptr)
                 {
                     ExposedParams.SetParameterValue((int32)NumVal, IntVar);
                     bApplied = true;
