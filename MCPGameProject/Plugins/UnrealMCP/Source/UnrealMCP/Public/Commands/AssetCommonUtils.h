@@ -127,6 +127,13 @@ public:
      */
     static bool IsValidAssetPath(const FString& AssetPath);
 
+    /**
+     * Splits "/Game/Path/AssetName" into ("/Game/Path", "AssetName").
+     * Returns false when the path shape is unexpected (no slash or empty parts).
+     * Centralized to avoid ODR violations in unity builds.
+     */
+    static bool SplitAssetPath(const FString& InAssetPath, FString& OutPackagePath, FString& OutAssetName);
+
     // ─────────────────────────────────────────────────────────────────────────
     // Level context resolver (MCP-CONTENT-003b)
     // ─────────────────────────────────────────────────────────────────────────

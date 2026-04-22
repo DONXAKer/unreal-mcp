@@ -50,19 +50,6 @@ namespace
         return TMGS_FromTextureGroup;
     }
 
-    // Split "/Game/Path/Name" into ("/Game/Path", "Name"). Returns false when
-    // the shape is unexpected.
-    bool SplitAssetPath(const FString& InAssetPath, FString& OutPackagePath, FString& OutAssetName)
-    {
-        int32 LastSlash = INDEX_NONE;
-        if (!InAssetPath.FindLastChar(TCHAR('/'), LastSlash) || LastSlash <= 0)
-        {
-            return false;
-        }
-        OutPackagePath = InAssetPath.Left(LastSlash);
-        OutAssetName = InAssetPath.Mid(LastSlash + 1);
-        return !OutPackagePath.IsEmpty() && !OutAssetName.IsEmpty();
-    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -221,7 +208,7 @@ TSharedPtr<FJsonObject> FTextureCommands::HandleImportTexture(const TSharedPtr<F
 
     // Split asset path.
     FString PackagePath, AssetName;
-    if (!SplitAssetPath(AssetPath, PackagePath, AssetName))
+    if (!FAssetCommonUtils::SplitAssetPath(AssetPath, PackagePath, AssetName))
     {
         TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
         Details->SetStringField(TEXT("assetPath"), AssetPath);
@@ -375,7 +362,7 @@ TSharedPtr<FJsonObject> FTextureCommands::HandleGeneratePlaceholderTexture(const
 
     // Split /Game/Path/Name.
     FString PackagePath, AssetName;
-    if (!SplitAssetPath(AssetPath, PackagePath, AssetName))
+    if (!FAssetCommonUtils::SplitAssetPath(AssetPath, PackagePath, AssetName))
     {
         TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
         Details->SetStringField(TEXT("assetPath"), AssetPath);

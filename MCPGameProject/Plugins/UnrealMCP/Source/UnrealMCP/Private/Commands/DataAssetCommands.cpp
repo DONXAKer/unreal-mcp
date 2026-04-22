@@ -22,22 +22,6 @@
 // Local helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-namespace
-{
-    // Split "/Game/Data/DT_Foo" into ("/Game/Data", "DT_Foo").
-    // Prefixed DA_ to avoid anonymous-namespace ODR clash in unity builds.
-    bool DA_SplitAssetPath(const FString& InAssetPath, FString& OutPackagePath, FString& OutAssetName)
-    {
-        int32 LastSlash = INDEX_NONE;
-        if (!InAssetPath.FindLastChar(TCHAR('/'), LastSlash) || LastSlash <= 0)
-        {
-            return false;
-        }
-        OutPackagePath = InAssetPath.Left(LastSlash);
-        OutAssetName = InAssetPath.Mid(LastSlash + 1);
-        return !OutPackagePath.IsEmpty() && !OutAssetName.IsEmpty();
-    }
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FDataAssetCommands
@@ -113,7 +97,7 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleImportDataTableFromCsv(const T
     }
 
     FString PackagePath, AssetName;
-    if (!DA_SplitAssetPath(AssetPath, PackagePath, AssetName))
+    if (!FAssetCommonUtils::SplitAssetPath(AssetPath, PackagePath, AssetName))
     {
         TSharedPtr<FJsonObject> D = MakeShared<FJsonObject>();
         D->SetStringField(TEXT("assetPath"), AssetPath);
@@ -130,7 +114,7 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleImportDataTableFromCsv(const T
     FString RowStructPath;
     if (Params->TryGetStringField(TEXT("rowStruct"), RowStructPath) && !RowStructPath.IsEmpty())
     {
-        UScriptStruct* RowStruct = FindObject<UScriptStruct>(nullptr, *RowStructPath, false);
+        UScriptStruct* RowStruct = FindObject<UScriptStruct>(nullptr, *RowStructPath);
         if (!RowStruct)
         {
             RowStruct = LoadObject<UScriptStruct>(nullptr, *RowStructPath);
@@ -233,7 +217,7 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleSetDataTableRow(const TSharedP
             FString::Printf(TEXT("No UDataTable at '%s'"), *AssetPath), D);
     }
 
-    UScriptStruct* RowStruct = DataTable->GetRowStruct();
+    const UScriptStruct* RowStruct = DataTable->GetRowStruct();
     if (!RowStruct)
     {
         return FAssetCommonUtils::MakeFailureResponse(
@@ -363,7 +347,7 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleGetDataTableRows(const TShared
             FString::Printf(TEXT("No UDataTable at '%s'"), *AssetPath), D);
     }
 
-    UScriptStruct* RowStruct = DataTable->GetRowStruct();
+    const UScriptStruct* RowStruct = DataTable->GetRowStruct();
 
     TArray<TSharedPtr<FJsonValue>> RowsJson;
     for (const TPair<FName, uint8*>& RowPair : DataTable->GetRowMap())
@@ -475,7 +459,7 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleImportSoundWave(const TSharedP
     }
 
     FString PackagePath, AssetName;
-    if (!DA_SplitAssetPath(AssetPath, PackagePath, AssetName))
+    if (!FAssetCommonUtils::SplitAssetPath(AssetPath, PackagePath, AssetName))
     {
         TSharedPtr<FJsonObject> D = MakeShared<FJsonObject>();
         D->SetStringField(TEXT("assetPath"), AssetPath);

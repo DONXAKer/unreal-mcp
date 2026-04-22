@@ -22,19 +22,6 @@
 
 namespace
 {
-    // Split "/Game/X/Foo" into ("/Game/X", "Foo").
-    bool SplitAssetPath(const FString& InAssetPath, FString& OutPackagePath, FString& OutAssetName)
-    {
-        int32 LastSlash = INDEX_NONE;
-        if (!InAssetPath.FindLastChar(TCHAR('/'), LastSlash) || LastSlash <= 0)
-        {
-            return false;
-        }
-        OutPackagePath = InAssetPath.Left(LastSlash);
-        OutAssetName = InAssetPath.Mid(LastSlash + 1);
-        return !OutPackagePath.IsEmpty() && !OutAssetName.IsEmpty();
-    }
-
     enum class EParamKind
     {
         Unknown,
@@ -275,7 +262,7 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleCreateMaterialInstance(const TS
         }
 
         FString PackagePath, AssetName;
-        if (!SplitAssetPath(AssetPath, PackagePath, AssetName))
+        if (!FAssetCommonUtils::SplitAssetPath(AssetPath, PackagePath, AssetName))
         {
             TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
             Details->SetStringField(TEXT("assetPath"), AssetPath);

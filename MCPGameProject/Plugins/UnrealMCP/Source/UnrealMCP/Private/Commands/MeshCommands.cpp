@@ -23,19 +23,6 @@
 
 namespace
 {
-    // Split "/Game/Path/Name" into ("/Game/Path", "Name").
-    bool SplitAssetPath(const FString& InAssetPath, FString& OutPackagePath, FString& OutAssetName)
-    {
-        int32 LastSlash = INDEX_NONE;
-        if (!InAssetPath.FindLastChar(TCHAR('/'), LastSlash) || LastSlash <= 0)
-        {
-            return false;
-        }
-        OutPackagePath = InAssetPath.Left(LastSlash);
-        OutAssetName = InAssetPath.Mid(LastSlash + 1);
-        return !OutPackagePath.IsEmpty() && !OutAssetName.IsEmpty();
-    }
-
     // Generates a single FKBoxElem sized to the mesh bounds and adds it to the
     // BodySetup's aggregate geometry. Mirrors the core behavior of
     // GenerateBoxAsSimpleCollision (which lives in a Private engine header and
@@ -178,7 +165,7 @@ TSharedPtr<FJsonObject> FMeshCommands::HandleImportStaticMesh(const TSharedPtr<F
 
     // Split asset path.
     FString PackagePath, AssetName;
-    if (!SplitAssetPath(AssetPath, PackagePath, AssetName))
+    if (!FAssetCommonUtils::SplitAssetPath(AssetPath, PackagePath, AssetName))
     {
         TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
         Details->SetStringField(TEXT("assetPath"), AssetPath);

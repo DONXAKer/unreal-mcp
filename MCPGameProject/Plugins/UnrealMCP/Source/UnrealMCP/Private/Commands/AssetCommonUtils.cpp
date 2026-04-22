@@ -172,9 +172,19 @@ FAssetCommonUtils::FIdempotencyDecision FAssetCommonUtils::ResolveIdempotency(
 bool FAssetCommonUtils::IsValidAssetPath(const FString& AssetPath)
 {
     if (AssetPath.IsEmpty()) return false;
-    // Unreal convention: editable content paths start with "/Game/" (or other
-    // mount points like "/Engine/", but pipeline is scoped to /Game/).
     return AssetPath.StartsWith(TEXT("/Game/"));
+}
+
+bool FAssetCommonUtils::SplitAssetPath(const FString& InAssetPath, FString& OutPackagePath, FString& OutAssetName)
+{
+    int32 LastSlash = INDEX_NONE;
+    if (!InAssetPath.FindLastChar(TCHAR('/'), LastSlash) || LastSlash <= 0)
+    {
+        return false;
+    }
+    OutPackagePath = InAssetPath.Left(LastSlash);
+    OutAssetName = InAssetPath.Mid(LastSlash + 1);
+    return !OutPackagePath.IsEmpty() && !OutAssetName.IsEmpty();
 }
 
 bool FAssetCommonUtils::RequireAssetPath(
