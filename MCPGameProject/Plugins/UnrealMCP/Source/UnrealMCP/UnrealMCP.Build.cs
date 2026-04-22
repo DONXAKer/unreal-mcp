@@ -60,8 +60,8 @@ public class UnrealMCP : ModuleRules
 				"AssetRegistry",
 				"AssetTools",       // For UTextureFactory + UMaterialInstanceConstantFactoryNew (MCP-CONTENT-002)
 				"MaterialEditor",   // For UMaterialEditingLibrary (MCP-CONTENT-002)
-				"CSVImporter",      // For UCSVImportFactory (DataAssetCommands)
-				"AudioEditor",      // For USoundFactory (DataAssetCommands)
+				// UCSVImportFactory — in UnrealEd (already in PublicDependencyModuleNames)
+				"AudioEditor",      // For USoundFactory (Factories/SoundFactory.h)
 				"Niagara",          // For UNiagaraSystem (NiagaraCommands)
 				"NiagaraEditor"     // For Niagara editor utilities (NiagaraCommands)
 			}
