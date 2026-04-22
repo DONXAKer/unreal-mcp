@@ -178,3 +178,73 @@ def asset_exists(assetPath: str) -> Dict[str, Any]:
 
 def delete_asset(assetPath: str, ifMissing: str = "skip") -> Dict[str, Any]:
     return _call("delete_asset", {"assetPath": assetPath, "ifMissing": ifMissing})
+
+
+# ── DataTable / SoundWave primitives (MCP-CONTENT-005) ───────────────────────
+
+def import_datatable_from_csv(
+    csvPath: str,
+    destAssetPath: str,
+    rowStruct: Optional[str] = None,
+    ifExists: str = "skip",
+) -> Dict[str, Any]:
+    params: Dict[str, Any] = {
+        "csvPath": csvPath,
+        "assetPath": destAssetPath,
+        "ifExists": ifExists,
+    }
+    if rowStruct:
+        params["rowStruct"] = rowStruct
+    return _call("import_datatable_from_csv", params)
+
+
+def set_datatable_row(
+    assetPath: str,
+    rowName: str,
+    rowJson: Dict[str, Any],
+) -> Dict[str, Any]:
+    return _call("set_datatable_row", {
+        "assetPath": assetPath,
+        "rowName": rowName,
+        "rowJson": rowJson,
+    })
+
+
+def get_datatable_rows(assetPath: str) -> Dict[str, Any]:
+    return _call("get_datatable_rows", {"assetPath": assetPath})
+
+
+def import_sound_wave(
+    wavPath: str,
+    destAssetPath: str,
+    ifExists: str = "skip",
+) -> Dict[str, Any]:
+    return _call("import_sound_wave", {
+        "wavPath": wavPath,
+        "assetPath": destAssetPath,
+        "ifExists": ifExists,
+    })
+
+
+# ── Niagara primitives (MCP-CONTENT-005) ─────────────────────────────────────
+
+def copy_niagara_system(
+    sourcePath: str,
+    destPath: str,
+    ifExists: str = "skip",
+) -> Dict[str, Any]:
+    return _call("copy_niagara_system", {
+        "sourcePath": sourcePath,
+        "destPath": destPath,
+        "ifExists": ifExists,
+    })
+
+
+def set_niagara_parameters(
+    assetPath: str,
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    return _call("set_niagara_parameters", {
+        "assetPath": assetPath,
+        "params": params,
+    })
