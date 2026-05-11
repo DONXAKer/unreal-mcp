@@ -39,5 +39,9 @@ private:
     TSharedPtr<FJsonObject> HandleGetBlueprintVariableDetails(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleGetBlueprintFunctionDetails(const TSharedPtr<FJsonObject>& Params);
 
+    // CDO property setter
+    TSharedPtr<FJsonObject> HandleSetBlueprintProperty(const TSharedPtr<FJsonObject>& Params);
 
-}; 
+    // Helper: load blueprint by short name or full /Game/... path
+    static UBlueprint* LoadBlueprintByName(const FString& BlueprintName);
+};

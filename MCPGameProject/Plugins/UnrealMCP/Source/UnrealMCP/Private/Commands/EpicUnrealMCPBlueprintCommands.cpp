@@ -113,6 +113,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     {
         return HandleGetBlueprintFunctionDetails(Params);
     }
+    else if (CommandType == TEXT("set_blueprint_property"))
+    {
+        return HandleSetBlueprintProperty(Params);
+    }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint command: %s"), *CommandType));
 }
@@ -2084,4 +2088,440 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCreateBlueprintFr
 
     const FString Status = bUpdate ? TEXT("updated") : (bOverwrite ? TEXT("overwritten") : TEXT("created"));
     return FAssetCommonUtils::MakeSuccessResponse(Status, AssetPath, Meta);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LoadBlueprintByName — широкий поиск по короткому имени или полному пути
+// ─────────────────────────────────────────────────────────────────────────────
+
+UBlueprint* FEpicUnrealMCPBlueprintCommands::LoadBlueprintByName(const FString& BlueprintName)
+{
+    // Если передан полный /Game/... путь — пробуем напрямую
+    if (BlueprintName.StartsWith(TEXT("/")))
+    {
+        if (UBlueprint* BP = Cast<UBlueprint>(UEditorAssetLibrary::LoadAsset(BlueprintName)))
+        {
+            return BP;
+        }
+    }
+
+    // Поиск через стандартный хелпер (ищет в /Game/Blueprints/)
+    if (UBlueprint* BP = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName))
+    {
+        return BP;
+    }
+
+    // Расширенный поиск по популярным путям
+    const TArray<FString> SearchDirs = {
+        TEXT("/Game/"),
+        TEXT("/Game/Blueprints/"),
+        TEXT("/Game/UI/"),
+        TEXT("/Game/Widgets/"),
+        TEXT("/Game/Characters/"),
+        TEXT("/Game/Pawns/"),
+        TEXT("/Game/GameModes/"),
+        TEXT("/Game/Controllers/"),
+    };
+
+    for (const FString& Dir : SearchDirs)
+    {
+        const FString ObjectPath = Dir + BlueprintName + TEXT(".") + BlueprintName;
+        if (UObject* Asset = UEditorAssetLibrary::LoadAsset(ObjectPath))
+        {
+            if (UBlueprint* BP = Cast<UBlueprint>(Asset))
+            {
+                return BP;
+            }
+        }
+    }
+
+    // Последняя попытка через AssetRegistry (рекурсивный поиск)
+    FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+    IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+    FARFilter Filter;
+    Filter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
+    Filter.PackagePaths.Add(TEXT("/Game/"));
+    Filter.bRecursivePaths = true;
+
+    TArray<FAssetData> AssetDataArray;
+    AssetRegistry.GetAssets(Filter, AssetDataArray);
+
+    for (const FAssetData& AssetData : AssetDataArray)
+    {
+        if (AssetData.AssetName.ToString() == BlueprintName)
+        {
+            return Cast<UBlueprint>(AssetData.GetAsset());
+        }
+    }
+
+    return nullptr;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// set_blueprint_property
+//
+// Устанавливает свойство на CDO (Class Default Object) Blueprint'а.
+// Поддерживаемые типы property_value:
+//   - bool   → FBoolProperty
+//   - number → FNumericProperty (int / float)
+//   - string → FStrProperty, FNameProperty, FTextProperty
+//              FClassProperty  (TSubclassOf<X>) — ищет класс по имени
+//              FObjectProperty — загружает asset по пути
+// После установки Blueprint компилируется и сохраняется.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetBlueprintProperty(const TSharedPtr<FJsonObject>& Params)
+{
+    // ── 1. Обязательные параметры ────────────────────────────────────────────
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    FString PropertyName;
+    if (!Params->TryGetStringField(TEXT("property_name"), PropertyName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_name' parameter"));
+    }
+
+    const TSharedPtr<FJsonValue>* PropertyValueField = Params->Values.Find(TEXT("property_value"));
+    if (!PropertyValueField || !PropertyValueField->IsValid())
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_value' parameter"));
+    }
+    const TSharedPtr<FJsonValue>& PropertyValue = *PropertyValueField;
+
+    // ── 2. Находим Blueprint ─────────────────────────────────────────────────
+    UBlueprint* Blueprint = LoadBlueprintByName(BlueprintName);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+
+    // ── 3. Компилируем чтобы GeneratedClass и CDO были актуальными ──────────
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    UClass* GeneratedClass = Blueprint->GeneratedClass;
+    if (!GeneratedClass)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Blueprint '%s' has no GeneratedClass after compile"), *BlueprintName));
+    }
+
+    UObject* CDO = GeneratedClass->GetDefaultObject();
+    if (!CDO)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Could not get CDO for Blueprint '%s'"), *BlueprintName));
+    }
+
+    // ── 4. Ищем FProperty ───────────────────────────────────────────────────
+    FProperty* Prop = GeneratedClass->FindPropertyByName(FName(*PropertyName));
+    if (!Prop)
+    {
+        // Попробуем родительскую иерархию
+        Prop = FindFProperty<FProperty>(GeneratedClass, FName(*PropertyName));
+    }
+    if (!Prop)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Property '%s' not found on Blueprint '%s'"), *PropertyName, *BlueprintName));
+    }
+
+    void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(CDO);
+    const EJson JsonType = PropertyValue->Type;
+
+    // ── 5. Устанавливаем значение в зависимости от типа property ────────────
+
+    // Bool
+    if (FBoolProperty* BoolProp = CastField<FBoolProperty>(Prop))
+    {
+        bool bVal = false;
+        if (JsonType == EJson::Boolean)
+        {
+            bVal = PropertyValue->AsBool();
+        }
+        else if (JsonType == EJson::Number)
+        {
+            bVal = (PropertyValue->AsNumber() != 0.0);
+        }
+        else if (JsonType == EJson::String)
+        {
+            const FString StrVal = PropertyValue->AsString().ToLower();
+            bVal = (StrVal == TEXT("true") || StrVal == TEXT("1") || StrVal == TEXT("yes"));
+        }
+        else
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Cannot assign JSON type to bool property '%s'"), *PropertyName));
+        }
+        BoolProp->SetPropertyValue(ValuePtr, bVal);
+    }
+    // Numeric (int / float / double)
+    else if (FNumericProperty* NumProp = CastField<FNumericProperty>(Prop))
+    {
+        double NumVal = 0.0;
+        if (JsonType == EJson::Number)
+        {
+            NumVal = PropertyValue->AsNumber();
+        }
+        else if (JsonType == EJson::String)
+        {
+            NumVal = FCString::Atod(*PropertyValue->AsString());
+        }
+        else if (JsonType == EJson::Boolean)
+        {
+            NumVal = PropertyValue->AsBool() ? 1.0 : 0.0;
+        }
+        else
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Cannot assign JSON type to numeric property '%s'"), *PropertyName));
+        }
+
+        if (NumProp->IsFloatingPoint())
+        {
+            NumProp->SetFloatingPointPropertyValue(ValuePtr, NumVal);
+        }
+        else
+        {
+            NumProp->SetIntPropertyValue(ValuePtr, static_cast<int64>(NumVal));
+        }
+    }
+    // ClassProperty (TSubclassOf<X>) — ищем класс по строковому имени
+    else if (FClassProperty* ClassProp = CastField<FClassProperty>(Prop))
+    {
+        if (JsonType != EJson::String)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("ClassProperty '%s' requires a string value (class name or path)"), *PropertyName));
+        }
+
+        const FString ClassNameOrPath = PropertyValue->AsString();
+        UClass* FoundClass = nullptr;
+
+        // Попытки поиска класса: полный путь, через модули, через AssetRegistry (Blueprint)
+        const TArray<FString> ClassSearchPaths = {
+            ClassNameOrPath,
+            FString::Printf(TEXT("/Script/Engine.%s"), *ClassNameOrPath),
+            FString::Printf(TEXT("/Script/Client.%s"), *ClassNameOrPath),
+            FString::Printf(TEXT("/Script/UMG.%s"), *ClassNameOrPath),
+            FString::Printf(TEXT("/Script/GameplayAbilities.%s"), *ClassNameOrPath),
+        };
+
+        for (const FString& Path : ClassSearchPaths)
+        {
+            FoundClass = LoadClass<UObject>(nullptr, *Path);
+            if (FoundClass) break;
+        }
+
+        // Если не нашли через LoadClass — это Blueprint-класс; ищем через AssetRegistry
+        if (!FoundClass)
+        {
+            UBlueprint* ValueBP = LoadBlueprintByName(ClassNameOrPath);
+            if (ValueBP && ValueBP->GeneratedClass)
+            {
+                FoundClass = ValueBP->GeneratedClass;
+            }
+        }
+
+        if (!FoundClass)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Could not resolve class '%s' for ClassProperty '%s'"),
+                    *ClassNameOrPath, *PropertyName));
+        }
+
+        // Проверяем что найденный класс совместим с базовым типом свойства
+        if (ClassProp->MetaClass && !FoundClass->IsChildOf(ClassProp->MetaClass))
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Class '%s' is not a child of required meta class '%s' for property '%s'"),
+                    *FoundClass->GetName(),
+                    *ClassProp->MetaClass->GetName(),
+                    *PropertyName));
+        }
+
+        ClassProp->SetObjectPropertyValue(ValuePtr, FoundClass);
+    }
+    // ObjectProperty — загружаем asset по пути
+    else if (FObjectProperty* ObjProp = CastField<FObjectProperty>(Prop))
+    {
+        if (JsonType != EJson::String)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("ObjectProperty '%s' requires a string asset path"), *PropertyName));
+        }
+
+        const FString AssetPath = PropertyValue->AsString();
+        UObject* LoadedObj = UEditorAssetLibrary::LoadAsset(AssetPath);
+        if (!LoadedObj)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Asset not found at path '%s' for ObjectProperty '%s'"),
+                    *AssetPath, *PropertyName));
+        }
+        if (!LoadedObj->IsA(ObjProp->PropertyClass))
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Asset class '%s' is incompatible with ObjectProperty '%s' (expects '%s')"),
+                    *LoadedObj->GetClass()->GetName(),
+                    *PropertyName,
+                    *ObjProp->PropertyClass->GetName()));
+        }
+
+        ObjProp->SetObjectPropertyValue(ValuePtr, LoadedObj);
+    }
+    // String
+    else if (FStrProperty* StrProp = CastField<FStrProperty>(Prop))
+    {
+        if (JsonType == EJson::String)
+        {
+            StrProp->SetPropertyValue(ValuePtr, PropertyValue->AsString());
+        }
+        else
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("StrProperty '%s' requires a string value"), *PropertyName));
+        }
+    }
+    // Name
+    else if (FNameProperty* NameProp = CastField<FNameProperty>(Prop))
+    {
+        if (JsonType == EJson::String)
+        {
+            NameProp->SetPropertyValue(ValuePtr, FName(*PropertyValue->AsString()));
+        }
+        else
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("NameProperty '%s' requires a string value"), *PropertyName));
+        }
+    }
+    // Text
+    else if (FTextProperty* TextProp = CastField<FTextProperty>(Prop))
+    {
+        if (JsonType == EJson::String)
+        {
+            TextProp->SetPropertyValue(ValuePtr, FText::FromString(PropertyValue->AsString()));
+        }
+        else
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("TextProperty '%s' requires a string value"), *PropertyName));
+        }
+    }
+    // EnumProperty (byte-backed enums, e.g. EAutoReceiveInput::Type)
+    else if (FEnumProperty* EnumProp = CastField<FEnumProperty>(Prop))
+    {
+        UEnum* Enum = EnumProp->GetEnum();
+        if (!Enum)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("EnumProperty '%s' has no UEnum"), *PropertyName));
+        }
+
+        int64 EnumVal = -1;
+        if (JsonType == EJson::String)
+        {
+            // Принимаем "Player0", "EAutoReceiveInput::Player0" и просто "0"
+            FString EnumStr = PropertyValue->AsString();
+            // Пробуем найти по короткому имени (без префикса enum)
+            EnumVal = Enum->GetValueByNameString(EnumStr);
+            if (EnumVal == INDEX_NONE)
+            {
+                // Попробуем числовую строку
+                if (EnumStr.IsNumeric())
+                {
+                    EnumVal = FCString::Atoi64(*EnumStr);
+                }
+            }
+        }
+        else if (JsonType == EJson::Number)
+        {
+            EnumVal = static_cast<int64>(PropertyValue->AsNumber());
+        }
+
+        if (EnumVal == INDEX_NONE)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Could not resolve enum value for property '%s'"), *PropertyName));
+        }
+
+        FNumericProperty* UnderlyingProp = EnumProp->GetUnderlyingProperty();
+        UnderlyingProp->SetIntPropertyValue(ValuePtr, EnumVal);
+    }
+    // ByteProperty (byte-backed enum или просто uint8)
+    else if (FByteProperty* ByteProp = CastField<FByteProperty>(Prop))
+    {
+        int64 ByteVal = -1;
+        if (JsonType == EJson::Number)
+        {
+            ByteVal = static_cast<int64>(PropertyValue->AsNumber());
+        }
+        else if (JsonType == EJson::String)
+        {
+            const FString StrVal = PropertyValue->AsString();
+            if (ByteProp->Enum)
+            {
+                ByteVal = ByteProp->Enum->GetValueByNameString(StrVal);
+                if (ByteVal == INDEX_NONE && StrVal.IsNumeric())
+                {
+                    ByteVal = FCString::Atoi64(*StrVal);
+                }
+            }
+            else if (StrVal.IsNumeric())
+            {
+                ByteVal = FCString::Atoi64(*StrVal);
+            }
+        }
+
+        if (ByteVal < 0 || ByteVal > 255)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Invalid byte/enum value for property '%s'"), *PropertyName));
+        }
+
+        ByteProp->SetIntPropertyValue(ValuePtr, ByteVal);
+    }
+    else
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Property '%s' has unsupported type '%s'"),
+                *PropertyName, *Prop->GetClass()->GetName()));
+    }
+
+    // ── 6. Помечаем CDO изменённым ──────────────────────────────────────────
+    CDO->Modify();
+
+    // ── 7. Компилируем и сохраняем ───────────────────────────────────────────
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    if (UPackage* Pkg = Blueprint->GetPackage())
+    {
+        Pkg->MarkPackageDirty();
+    }
+
+    FString PackageName = Blueprint->GetPathName();
+    int32 DotIdx;
+    if (PackageName.FindChar('.', DotIdx))
+    {
+        PackageName = PackageName.Left(DotIdx);
+    }
+    UEditorAssetLibrary::SaveAsset(PackageName, /*bOnlyIfIsDirty=*/false);
+
+    // ── 8. Ответ ─────────────────────────────────────────────────────────────
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+    Result->SetStringField(TEXT("property_name"), PropertyName);
+    Result->SetStringField(TEXT("property_type"), Prop->GetClass()->GetName());
+    Result->SetStringField(TEXT("message"),
+        FString::Printf(TEXT("Property '%s' successfully set on Blueprint '%s'"),
+            *PropertyName, *BlueprintName));
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
 }
