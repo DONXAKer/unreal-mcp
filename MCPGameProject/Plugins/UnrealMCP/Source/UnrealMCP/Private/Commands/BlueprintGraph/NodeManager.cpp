@@ -6,6 +6,7 @@
 #include "Commands/BlueprintGraph/Nodes/AnimationNodes.h"
 #include "Commands/BlueprintGraph/Nodes/SpecializedNodes.h"
 #include "Commands/BlueprintGraph/Nodes/DelegateNodes.h"
+#include "Commands/BlueprintGraph/Nodes/FlowControlExtraNodes.h"
 #include "Engine/Blueprint.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraphSchema_K2.h"
@@ -143,6 +144,27 @@ TSharedPtr<FJsonObject> FBlueprintNodeManager::AddNode(const TSharedPtr<FJsonObj
 	else if (NodeType.Equals(TEXT("ForEachLoop"), ESearchCase::IgnoreCase))
 	{
 		NewNode = FControlFlowNodeCreator::CreateForEachLoopNode(Graph, NodeParams);
+	}
+	// Phase 2B — extra flow-control nodes (Delay/MultiGate/Gate/DoOnce/FlipFlop)
+	else if (NodeType.Equals(TEXT("Delay"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FFlowControlExtraNodeCreator::CreateDelayNode(Graph, NodeParams);
+	}
+	else if (NodeType.Equals(TEXT("MultiGate"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FFlowControlExtraNodeCreator::CreateMultiGateNode(Graph, NodeParams);
+	}
+	else if (NodeType.Equals(TEXT("Gate"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FFlowControlExtraNodeCreator::CreateGateMacroNode(Graph, NodeParams);
+	}
+	else if (NodeType.Equals(TEXT("DoOnce"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FFlowControlExtraNodeCreator::CreateDoOnceMacroNode(Graph, NodeParams);
+	}
+	else if (NodeType.Equals(TEXT("FlipFlop"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FFlowControlExtraNodeCreator::CreateFlipFlopMacroNode(Graph, NodeParams);
 	}
 	// Data Nodes
 	else if (NodeType.Equals(TEXT("VariableGet"), ESearchCase::IgnoreCase))
