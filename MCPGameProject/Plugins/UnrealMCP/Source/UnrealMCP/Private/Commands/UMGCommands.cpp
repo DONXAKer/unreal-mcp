@@ -40,6 +40,17 @@
 #include "EditorAssetLibrary.h"
 #include "Fonts/SlateFontInfo.h"
 
+// For create_umg_widget_blueprint / bind_widget_event / add_widget_to_viewport / set_text_block_binding
+#include "WidgetBlueprintFactory.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetToolsModule.h"
+#include "K2Node_ComponentBoundEvent.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
+#include "Editor.h"
+#include "Engine/World.h"
+#include "UObject/UnrealType.h"
+#include "UObject/Package.h"
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -242,6 +253,10 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleCommand(const FString& Comm
     if (CommandType == TEXT("add_panel_widget_to_widget"))   return HandleAddPanelWidgetToWidget(Params);
     if (CommandType == TEXT("set_widget_property"))          return HandleSetWidgetProperty(Params);
     if (CommandType == TEXT("get_umg_hierarchy"))            return HandleGetUMGHierarchy(Params);
+    if (CommandType == TEXT("create_umg_widget_blueprint"))  return HandleCreateUMGWidgetBlueprint(Params);
+    if (CommandType == TEXT("bind_widget_event"))            return HandleBindWidgetEvent(Params);
+    if (CommandType == TEXT("add_widget_to_viewport"))       return HandleAddWidgetToViewport(Params);
+    if (CommandType == TEXT("set_text_block_binding"))       return HandleSetTextBlockBinding(Params);
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown UMG command: %s"), *CommandType));
@@ -1242,4 +1257,368 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::BuildWidgetJson(UWidget* Widget)
     }
 
     return Obj;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// create_umg_widget_blueprint
+// Создаёт новый Widget Blueprint в указанной папке content browser'а.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleCreateUMGWidgetBlueprint(const TSharedPtr<FJsonObject>& Params)
+{
+    FString WidgetName;
+    if (!Params->TryGetStringField(TEXT("widget_name"), WidgetName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
+
+    // Optional path — default "/Game/UI". Normalize: must start with "/Game/" and end with "/".
+    FString PackagePath = TEXT("/Game/UI");
+    Params->TryGetStringField(TEXT("path"), PackagePath);
+    PackagePath.TrimStartAndEndInline();
+    if (PackagePath.StartsWith(TEXT("Game/")))
+        PackagePath = TEXT("/") + PackagePath;
+    if (!PackagePath.StartsWith(TEXT("/")))
+        PackagePath = TEXT("/") + PackagePath;
+    if (!PackagePath.StartsWith(TEXT("/Game/")) && PackagePath != TEXT("/Game"))
+        PackagePath = TEXT("/Game/") + PackagePath.RightChop(1);
+    if (PackagePath.EndsWith(TEXT("/")))
+        PackagePath.RemoveAt(PackagePath.Len() - 1);
+
+    // Optional parent class — default UUserWidget.
+    FString ParentClassName = TEXT("UserWidget");
+    Params->TryGetStringField(TEXT("parent_class"), ParentClassName);
+
+    UClass* ParentClass = UUserWidget::StaticClass();
+    if (!ParentClassName.IsEmpty() && ParentClassName != TEXT("UserWidget") && ParentClassName != TEXT("UUserWidget"))
+    {
+        UClass* FoundClass = LoadClass<UObject>(nullptr, *ParentClassName);
+        if (!FoundClass)
+        {
+            // Try common script-paths.
+            const TArray<FString> SearchPaths = {
+                FString::Printf(TEXT("/Script/UMG.%s"), *ParentClassName),
+                FString::Printf(TEXT("/Script/Client.%s"), *ParentClassName),
+                FString::Printf(TEXT("/Script/Engine.%s"), *ParentClassName),
+            };
+            for (const FString& P : SearchPaths)
+            {
+                FoundClass = LoadClass<UObject>(nullptr, *P);
+                if (FoundClass) break;
+            }
+        }
+        if (FoundClass && FoundClass->IsChildOf(UUserWidget::StaticClass()))
+        {
+            ParentClass = FoundClass;
+        }
+        // If parent class lookup failed or class is not UserWidget-compatible, fall back silently.
+    }
+
+    // Reject duplicate.
+    const FString FullAssetPath = FString::Printf(TEXT("%s/%s"), *PackagePath, *WidgetName);
+    if (UEditorAssetLibrary::DoesAssetExist(FullAssetPath))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget Blueprint already exists: %s"), *FullAssetPath));
+
+    // Create the WBP via the factory.
+    UWidgetBlueprintFactory* WidgetFactory = NewObject<UWidgetBlueprintFactory>();
+    WidgetFactory->ParentClass = ParentClass;
+
+    const FString PackageName = FString::Printf(TEXT("%s/%s"), *PackagePath, *WidgetName);
+    UPackage* Package = CreatePackage(*PackageName);
+    if (!Package)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Failed to create package: %s"), *PackageName));
+
+    UObject* NewAsset = WidgetFactory->FactoryCreateNew(
+        UWidgetBlueprint::StaticClass(),
+        Package,
+        *WidgetName,
+        RF_Standalone | RF_Public,
+        nullptr,
+        GWarn);
+
+    UWidgetBlueprint* NewWBP = Cast<UWidgetBlueprint>(NewAsset);
+    if (!NewWBP)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("WidgetBlueprintFactory failed to create asset"));
+
+    FAssetRegistryModule::AssetCreated(NewWBP);
+    Package->MarkPackageDirty();
+    UEditorAssetLibrary::SaveAsset(FullAssetPath, /*bOnlyIfIsDirty=*/ false);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("widget_name"), WidgetName);
+    Result->SetStringField(TEXT("path"), FullAssetPath);
+    Result->SetStringField(TEXT("parent_class"), ParentClass->GetPathName());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// bind_widget_event
+// Создаёт K2Node_ComponentBoundEvent в EventGraph WidgetBlueprint'а,
+// привязывая делегат (например, OnClicked у Button) к обработчику.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleBindWidgetEvent(const TSharedPtr<FJsonObject>& Params)
+{
+    using namespace UMGCommandsUtils;
+
+    FString WidgetName;
+    if (!Params->TryGetStringField(TEXT("widget_name"), WidgetName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
+
+    FString ComponentName;
+    if (!Params->TryGetStringField(TEXT("widget_component_name"), ComponentName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_component_name' parameter"));
+
+    FString EventName;
+    if (!Params->TryGetStringField(TEXT("event_name"), EventName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'event_name' parameter"));
+
+    FString FunctionName;
+    Params->TryGetStringField(TEXT("function_name"), FunctionName);
+    if (FunctionName.IsEmpty())
+        FunctionName = FString::Printf(TEXT("BndEvt__%s_%s"), *ComponentName, *EventName);
+
+    // ── Load Widget Blueprint ────────────────────────────────────────────────
+    UWidgetBlueprint* WB = LoadWidgetBlueprintByName(WidgetName);
+    if (!WB)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget Blueprint '%s' not found in /Game/UI, /Game/Blueprints, or /Game/Widgets"), *WidgetName));
+
+    if (!WB->WidgetTree)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Widget Blueprint has no WidgetTree"));
+
+    // ── Find child widget in WidgetTree ──────────────────────────────────────
+    UWidget* Child = WB->WidgetTree->FindWidget(FName(*ComponentName));
+    if (!Child)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget component '%s' not found in WBP '%s'"), *ComponentName, *WidgetName));
+
+    // Ensure it is exposed as a variable (BindWidget-style) so the generated class has a property for it.
+    if (!Child->bIsVariable)
+    {
+        Child->bIsVariable = true;
+        FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WB);
+    }
+
+    // ── Find FMulticastDelegateProperty on the child widget's class ──────────
+    UClass* ChildClass = Child->GetClass();
+    FMulticastDelegateProperty* DelegateProp = FindFProperty<FMulticastDelegateProperty>(ChildClass, FName(*EventName));
+    if (!DelegateProp)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Delegate '%s' not found on widget class '%s'"), *EventName, *ChildClass->GetName()));
+
+    // ── Find the component FObjectProperty on the generated WBP class ───────
+    // Must compile the blueprint at least once so the generated class has the BindWidget property.
+    UClass* GeneratedClass = WB->GeneratedClass;
+    if (!GeneratedClass)
+    {
+        FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WB);
+        GeneratedClass = WB->GeneratedClass;
+    }
+    FObjectProperty* ComponentProp = nullptr;
+    if (GeneratedClass)
+    {
+        for (TFieldIterator<FObjectProperty> PropIt(GeneratedClass, EFieldIteratorFlags::IncludeSuper); PropIt; ++PropIt)
+        {
+            if (PropIt->GetName() == ComponentName)
+            {
+                ComponentProp = *PropIt;
+                break;
+            }
+        }
+    }
+    if (!ComponentProp)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Component property '%s' not found on generated WBP class — compile the blueprint first"), *ComponentName));
+
+    // ── Get / create the event graph ─────────────────────────────────────────
+    if (WB->UbergraphPages.Num() == 0)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Widget Blueprint has no event graph"));
+
+    UEdGraph* Graph = WB->UbergraphPages[0];
+    if (!Graph)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to retrieve event graph"));
+
+    // Skip if a matching ComponentBoundEvent already exists.
+    for (UEdGraphNode* Node : Graph->Nodes)
+    {
+        if (UK2Node_ComponentBoundEvent* Existing = Cast<UK2Node_ComponentBoundEvent>(Node))
+        {
+            if (Existing->ComponentPropertyName == ComponentProp->GetFName() &&
+                Existing->DelegatePropertyName == DelegateProp->GetFName())
+            {
+                TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+                Result->SetBoolField(TEXT("success"), true);
+                Result->SetStringField(TEXT("node_id"), Existing->NodeGuid.ToString());
+                Result->SetStringField(TEXT("status"), TEXT("already_bound"));
+                Result->SetStringField(TEXT("function_name"), FunctionName);
+                return Result;
+            }
+        }
+    }
+
+    // ── Create the K2Node_ComponentBoundEvent ────────────────────────────────
+    UK2Node_ComponentBoundEvent* BoundEventNode = NewObject<UK2Node_ComponentBoundEvent>(Graph);
+    if (!BoundEventNode)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to allocate K2Node_ComponentBoundEvent"));
+
+    BoundEventNode->NodePosX = 0;
+    BoundEventNode->NodePosY = 0;
+    BoundEventNode->InitializeComponentBoundEventParams(ComponentProp, DelegateProp);
+
+    Graph->AddNode(BoundEventNode, true, false);
+    BoundEventNode->PostPlacedNewNode();
+    BoundEventNode->AllocateDefaultPins();
+
+    Graph->NotifyGraphChanged();
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WB);
+    MarkAndSaveWidgetBlueprint(WB);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("node_id"), BoundEventNode->NodeGuid.ToString());
+    Result->SetStringField(TEXT("widget_name"), WidgetName);
+    Result->SetStringField(TEXT("widget_component_name"), ComponentName);
+    Result->SetStringField(TEXT("event_name"), EventName);
+    Result->SetStringField(TEXT("function_name"), FunctionName);
+    return Result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// add_widget_to_viewport
+// Editor-side helper: создаёт инстанс WidgetBlueprint'а в активном мире
+// (PIE если запущен, иначе editor world) и добавляет в viewport.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddWidgetToViewport(const TSharedPtr<FJsonObject>& Params)
+{
+    using namespace UMGCommandsUtils;
+
+    FString WidgetName;
+    if (!Params->TryGetStringField(TEXT("widget_name"), WidgetName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
+
+    int32 ZOrder = 0;
+    Params->TryGetNumberField(TEXT("z_order"), ZOrder);
+
+    UWidgetBlueprint* WB = LoadWidgetBlueprintByName(WidgetName);
+    if (!WB)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget Blueprint '%s' not found"), *WidgetName));
+
+    UClass* WidgetClass = WB->GeneratedClass;
+    if (!WidgetClass)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("WidgetBlueprint '%s' has no generated class — compile it first"), *WidgetName));
+
+    if (!WidgetClass->IsChildOf(UUserWidget::StaticClass()))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Generated class for '%s' is not a UserWidget subclass"), *WidgetName));
+
+    // Pick the most useful world: PIE if running, otherwise the editor world.
+    UWorld* World = nullptr;
+    if (GEditor)
+    {
+        if (GEditor->PlayWorld)
+        {
+            World = GEditor->PlayWorld;
+        }
+        else
+        {
+            FWorldContext& EditorContext = GEditor->GetEditorWorldContext();
+            World = EditorContext.World();
+        }
+    }
+    if (!World)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No active world found — start PIE or open a level first"));
+
+    UUserWidget* WidgetInstance = UWidgetBlueprintLibrary::Create(World, WidgetClass, /*OwningPlayer=*/ nullptr);
+    if (!WidgetInstance)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Failed to create widget instance from '%s'"), *WidgetName));
+
+    WidgetInstance->AddToViewport(ZOrder);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("widget_name"), WidgetName);
+    Result->SetStringField(TEXT("widget_class"), WidgetClass->GetPathName());
+    Result->SetNumberField(TEXT("z_order"), ZOrder);
+    Result->SetStringField(TEXT("world"), World->GetName());
+    return Result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// set_text_block_binding
+// Регистрирует FDelegateEditorBinding на UWidgetBlueprint::Bindings,
+// привязывая UPROPERTY (по умолчанию "Text") к функции/свойству UserWidget'а.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleSetTextBlockBinding(const TSharedPtr<FJsonObject>& Params)
+{
+    using namespace UMGCommandsUtils;
+
+    FString WidgetName;
+    if (!Params->TryGetStringField(TEXT("widget_name"), WidgetName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
+
+    FString TextBlockName;
+    if (!Params->TryGetStringField(TEXT("text_block_name"), TextBlockName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'text_block_name' parameter"));
+
+    // Python sends `binding_property` (function/property on UserWidget).
+    // Older callers may send `binding_property_name` — accept both.
+    FString BindingProperty;
+    if (!Params->TryGetStringField(TEXT("binding_property"), BindingProperty))
+    {
+        Params->TryGetStringField(TEXT("binding_property_name"), BindingProperty);
+    }
+    if (BindingProperty.IsEmpty())
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'binding_property' parameter"));
+
+    // Which UPROPERTY on the TextBlock are we binding? Default = Text.
+    FString BindingType = TEXT("Text");
+    Params->TryGetStringField(TEXT("binding_type"), BindingType);
+
+    UWidgetBlueprint* WB = LoadWidgetBlueprintByName(WidgetName);
+    if (!WB)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget Blueprint '%s' not found"), *WidgetName));
+
+    if (!WB->WidgetTree)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Widget Blueprint has no WidgetTree"));
+
+    UWidget* Found = WB->WidgetTree->FindWidget(FName(*TextBlockName));
+    if (!Found)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget '%s' not found in '%s'"), *TextBlockName, *WidgetName));
+
+    if (!Cast<UTextBlock>(Found))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget '%s' is not a TextBlock (got '%s')"), *TextBlockName, *Found->GetClass()->GetName()));
+
+    Found->bIsVariable = true;
+
+    // Build the FDelegateEditorBinding entry.
+    FDelegateEditorBinding NewBinding;
+    NewBinding.ObjectName    = TextBlockName;
+    NewBinding.PropertyName  = FName(*BindingType);          // e.g. "Text"
+    NewBinding.FunctionName  = FName(*BindingProperty);      // function on the WBP that returns the value
+    NewBinding.Kind          = EBindingKind::Function;
+
+    // Replace any existing binding with the same (Object, Property) pair (operator== ignores Function).
+    WB->Bindings.Remove(NewBinding);
+    WB->Bindings.Add(NewBinding);
+
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WB);
+    MarkAndSaveWidgetBlueprint(WB);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("widget_name"), WidgetName);
+    Result->SetStringField(TEXT("text_block_name"), TextBlockName);
+    Result->SetStringField(TEXT("binding_property"), BindingProperty);
+    Result->SetStringField(TEXT("binding_type"), BindingType);
+    return Result;
 }

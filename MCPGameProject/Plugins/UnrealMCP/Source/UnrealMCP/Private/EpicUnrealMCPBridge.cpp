@@ -63,6 +63,7 @@
 #include "Commands/LevelCommands.h"
 #include "Commands/DataAssetCommands.h"
 #include "Commands/NiagaraCommands.h"
+#include "Commands/InputCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -81,6 +82,7 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     LevelCommands = MakeShared<FLevelCommands>();
     DataAssetCommands = MakeShared<FDataAssetCommands>();
     NiagaraCommands = MakeShared<FNiagaraCommands>();
+    InputCommands = MakeShared<FInputCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -96,6 +98,7 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     LevelCommands.Reset();
     DataAssetCommands.Reset();
     NiagaraCommands.Reset();
+    InputCommands.Reset();
 }
 
 // Initialize subsystem
@@ -283,9 +286,18 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("add_button_to_widget") ||
                      CommandType == TEXT("add_panel_widget_to_widget") ||
                      CommandType == TEXT("set_widget_property") ||
-                     CommandType == TEXT("get_umg_hierarchy"))
+                     CommandType == TEXT("get_umg_hierarchy") ||
+                     CommandType == TEXT("create_umg_widget_blueprint") ||
+                     CommandType == TEXT("bind_widget_event") ||
+                     CommandType == TEXT("add_widget_to_viewport") ||
+                     CommandType == TEXT("set_text_block_binding"))
             {
                 ResultJson = UMGCommands->HandleCommand(CommandType, Params);
+            }
+            // Input mapping commands (project-wide DefaultInput.ini)
+            else if (CommandType == TEXT("create_input_mapping"))
+            {
+                ResultJson = InputCommands->HandleCommand(CommandType, Params);
             }
             // Asset Pipeline Commands (MCP Content Pipeline foundation)
             else if (CommandType == TEXT("asset_exists") ||

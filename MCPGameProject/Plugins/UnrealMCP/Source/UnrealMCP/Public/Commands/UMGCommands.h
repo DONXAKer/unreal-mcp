@@ -73,6 +73,38 @@ private:
      */
     TSharedPtr<FJsonObject> HandleGetUMGHierarchy(const TSharedPtr<FJsonObject>& Params);
 
+    /**
+     * Create a new UMG WidgetBlueprint asset via UWidgetBlueprintFactory.
+     * Params: widget_name (required), path (opt, default "/Game/UI"),
+     *         parent_class (opt, default "UserWidget" — short name or /Script/... path).
+     */
+    TSharedPtr<FJsonObject> HandleCreateUMGWidgetBlueprint(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * Bind a delegate event on a child widget (e.g., Button.OnClicked) to a function
+     * stub in the WidgetBlueprint by placing a K2Node_ComponentBoundEvent in the event graph.
+     * Params: widget_name (WBP, required), widget_component_name (required),
+     *         event_name (e.g. "OnClicked", required), function_name (opt — currently used as cosmetic).
+     */
+    TSharedPtr<FJsonObject> HandleBindWidgetEvent(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * Spawn a Widget Blueprint instance and add it to the current viewport.
+     * Editor-side helper: requires an active game world (PIE) or editor preview world.
+     * Params: widget_name (required — name or full path of the WidgetBlueprint),
+     *         z_order (opt, default 0).
+     */
+    TSharedPtr<FJsonObject> HandleAddWidgetToViewport(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * Register a property binding for a TextBlock inside a Widget Blueprint —
+     * appends an FDelegateEditorBinding to UWidgetBlueprint::Bindings.
+     * Params: widget_name (WBP, required), text_block_name (required),
+     *         binding_property (function/property name on the UserWidget, required),
+     *         binding_type (opt, default "Text" — UPROPERTY name on the TextBlock to bind).
+     */
+    TSharedPtr<FJsonObject> HandleSetTextBlockBinding(const TSharedPtr<FJsonObject>& Params);
+
     /** Maps a widget type name string to the corresponding UClass. Returns nullptr if unknown. */
     static UClass* GetWidgetClassByType(const FString& WidgetType);
 
