@@ -8,6 +8,12 @@
 #include "Commands/BlueprintGraph/NodePropertyManager.h"
 #include "Commands/BlueprintGraph/Function/FunctionManager.h"
 #include "Commands/BlueprintGraph/Function/FunctionIO.h"
+#include "Engine/Blueprint.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphNode.h"
+#include "K2Node_Event.h"
+#include "K2Node_InputAction.h"
+#include "Kismet2/BlueprintEditorUtils.h"
 
 FEpicUnrealMCPBlueprintGraphCommands::FEpicUnrealMCPBlueprintGraphCommands()
 {
@@ -70,6 +76,14 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintGraphCommands::HandleCommand(cons
     else if (CommandType == TEXT("rename_function"))
     {
         return HandleRenameFunction(Params);
+    }
+    else if (CommandType == TEXT("add_input_action_node"))
+    {
+        return HandleAddInputActionNode(Params);
+    }
+    else if (CommandType == TEXT("find_blueprint_nodes"))
+    {
+        return HandleFindBlueprintNodes(Params);
     }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint graph command: %s"), *CommandType));
@@ -389,4 +403,161 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintGraphCommands::HandleRenameFuncti
         *OldFunctionName, *NewFunctionName, *BlueprintName);
 
     return FFunctionManager::RenameFunction(Params);
+}
+
+// ---------------------------------------------------------------------------
+// v1.9.0 — Add a K2Node_InputAction to the event graph
+// ---------------------------------------------------------------------------
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintGraphCommands::HandleAddInputActionNode(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    FString ActionName;
+    if (!Params->TryGetStringField(TEXT("action_name"), ActionName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'action_name' parameter"));
+    }
+
+    UE_LOG(LogTemp, Display,
+        TEXT("FEpicUnrealMCPBlueprintGraphCommands::HandleAddInputActionNode: Adding InputAction '%s' to blueprint '%s'"),
+        *ActionName, *BlueprintName);
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+
+    UEdGraph* Graph = FEpicUnrealMCPCommonUtils::FindOrCreateEventGraph(Blueprint);
+    if (!Graph)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to find or create event graph"));
+    }
+
+    // Optional position
+    FVector2D Position(0.0f, 0.0f);
+    if (Params->HasField(TEXT("node_position")))
+    {
+        const TArray<TSharedPtr<FJsonValue>>* PosArr = nullptr;
+        if (Params->TryGetArrayField(TEXT("node_position"), PosArr) && PosArr && PosArr->Num() >= 2)
+        {
+            Position.X = (float)(*PosArr)[0]->AsNumber();
+            Position.Y = (float)(*PosArr)[1]->AsNumber();
+        }
+    }
+
+    UK2Node_InputAction* InputActionNode = FEpicUnrealMCPCommonUtils::CreateInputActionNode(Graph, ActionName, Position);
+    if (!InputActionNode)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Failed to create InputAction node for '%s'"), *ActionName));
+    }
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("node_id"), InputActionNode->NodeGuid.ToString());
+    Result->SetStringField(TEXT("action_name"), ActionName);
+    Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+    Result->SetNumberField(TEXT("node_pos_x"), Position.X);
+    Result->SetNumberField(TEXT("node_pos_y"), Position.Y);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+// ---------------------------------------------------------------------------
+// v1.9.0 — Find nodes in a Blueprint's UbergraphPages by optional type filters
+// ---------------------------------------------------------------------------
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintGraphCommands::HandleFindBlueprintNodes(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    FString NodeTypeFilter;
+    Params->TryGetStringField(TEXT("node_type"), NodeTypeFilter); // optional, empty if missing
+
+    FString EventTypeFilter;
+    Params->TryGetStringField(TEXT("event_type"), EventTypeFilter); // optional, empty if missing
+
+    UE_LOG(LogTemp, Display,
+        TEXT("FEpicUnrealMCPBlueprintGraphCommands::HandleFindBlueprintNodes: BP='%s', node_type='%s', event_type='%s'"),
+        *BlueprintName, *NodeTypeFilter, *EventTypeFilter);
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+
+    TArray<TSharedPtr<FJsonValue>> NodesArray;
+
+    for (UEdGraph* Graph : Blueprint->UbergraphPages)
+    {
+        if (!Graph)
+        {
+            continue;
+        }
+
+        for (UEdGraphNode* Node : Graph->Nodes)
+        {
+            if (!Node)
+            {
+                continue;
+            }
+
+            const FString ClassName = Node->GetClass()->GetName();
+
+            // node_type filter: case-insensitive substring match against class name (with or without "K2Node_" prefix)
+            if (!NodeTypeFilter.IsEmpty())
+            {
+                const bool bClassMatch = ClassName.Contains(NodeTypeFilter, ESearchCase::IgnoreCase);
+                if (!bClassMatch)
+                {
+                    continue;
+                }
+            }
+
+            // event_type filter: only meaningful for K2Node_Event — compare MemberName
+            FString EventMemberName;
+            if (UK2Node_Event* EventNode = Cast<UK2Node_Event>(Node))
+            {
+                EventMemberName = EventNode->EventReference.GetMemberName().ToString();
+            }
+
+            if (!EventTypeFilter.IsEmpty())
+            {
+                if (EventMemberName.IsEmpty() || !EventMemberName.Equals(EventTypeFilter, ESearchCase::IgnoreCase))
+                {
+                    continue;
+                }
+            }
+
+            TSharedPtr<FJsonObject> NodeObj = MakeShared<FJsonObject>();
+            NodeObj->SetStringField(TEXT("node_id"), Node->NodeGuid.ToString());
+            NodeObj->SetStringField(TEXT("node_type"), ClassName);
+            NodeObj->SetStringField(TEXT("title"), Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString());
+            NodeObj->SetNumberField(TEXT("node_pos_x"), Node->NodePosX);
+            NodeObj->SetNumberField(TEXT("node_pos_y"), Node->NodePosY);
+            NodeObj->SetStringField(TEXT("graph"), Graph->GetName());
+            if (!EventMemberName.IsEmpty())
+            {
+                NodeObj->SetStringField(TEXT("event_name"), EventMemberName);
+            }
+
+            NodesArray.Add(MakeShared<FJsonValueObject>(NodeObj));
+        }
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+    Result->SetArrayField(TEXT("nodes"), NodesArray);
+    Result->SetNumberField(TEXT("count"), NodesArray.Num());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
 }

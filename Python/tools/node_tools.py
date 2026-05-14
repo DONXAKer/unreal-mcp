@@ -54,7 +54,7 @@ def register_blueprint_node_tools(mcp: FastMCP):
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
             
             logger.info(f"Adding event node '{event_name}' to blueprint '{blueprint_name}'")
-            response = unreal.send_command("add_blueprint_event_node", params)
+            response = unreal.send_command("add_event_node", params)
             
             if not response:
                 logger.error("No response from Unreal Engine")
@@ -105,7 +105,7 @@ def register_blueprint_node_tools(mcp: FastMCP):
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
             
             logger.info(f"Adding input action node for '{action_name}' to blueprint '{blueprint_name}'")
-            response = unreal.send_command("add_blueprint_input_action_node", params)
+            response = unreal.send_command("add_input_action_node", params)
             
             if not response:
                 logger.error("No response from Unreal Engine")
@@ -152,19 +152,20 @@ def register_blueprint_node_tools(mcp: FastMCP):
             
             command_params = {
                 "blueprint_name": blueprint_name,
-                "target": target,
-                "function_name": function_name,
+                "node_type": "CallFunction",
+                "target_class": target,
+                "target_function": function_name,
                 "params": params,
                 "node_position": node_position
             }
-            
+
             unreal = get_unreal_connection()
             if not unreal:
                 logger.error("Failed to connect to Unreal Engine")
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            
+
             logger.info(f"Adding function node '{function_name}' to blueprint '{blueprint_name}'")
-            response = unreal.send_command("add_blueprint_function_node", command_params)
+            response = unreal.send_command("add_blueprint_node", command_params)
             
             if not response:
                 logger.error("No response from Unreal Engine")
@@ -206,18 +207,18 @@ def register_blueprint_node_tools(mcp: FastMCP):
             params = {
                 "blueprint_name": blueprint_name,
                 "source_node_id": source_node_id,
-                "source_pin": source_pin,
+                "source_pin_name": source_pin,
                 "target_node_id": target_node_id,
-                "target_pin": target_pin
+                "target_pin_name": target_pin
             }
-            
+
             unreal = get_unreal_connection()
             if not unreal:
                 logger.error("Failed to connect to Unreal Engine")
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            
+
             logger.info(f"Connecting nodes in blueprint '{blueprint_name}'")
-            response = unreal.send_command("connect_blueprint_nodes", params)
+            response = unreal.send_command("connect_nodes", params)
             
             if not response:
                 logger.error("No response from Unreal Engine")
@@ -267,7 +268,7 @@ def register_blueprint_node_tools(mcp: FastMCP):
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
             
             logger.info(f"Adding variable '{variable_name}' to blueprint '{blueprint_name}'")
-            response = unreal.send_command("add_blueprint_variable", params)
+            response = unreal.send_command("create_variable", params)
             
             if not response:
                 logger.error("No response from Unreal Engine")
@@ -309,17 +310,18 @@ def register_blueprint_node_tools(mcp: FastMCP):
             
             params = {
                 "blueprint_name": blueprint_name,
-                "component_name": component_name,
+                "node_type": "VariableGet",
+                "variable_name": component_name,
                 "node_position": node_position
             }
-            
+
             unreal = get_unreal_connection()
             if not unreal:
                 logger.error("Failed to connect to Unreal Engine")
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            
+
             logger.info(f"Adding self component reference node for '{component_name}' to blueprint '{blueprint_name}'")
-            response = unreal.send_command("add_blueprint_get_self_component_reference", params)
+            response = unreal.send_command("add_blueprint_node", params)
             
             if not response:
                 logger.error("No response from Unreal Engine")
@@ -357,16 +359,17 @@ def register_blueprint_node_tools(mcp: FastMCP):
                 
             params = {
                 "blueprint_name": blueprint_name,
+                "node_type": "Self",
                 "node_position": node_position
             }
-            
+
             unreal = get_unreal_connection()
             if not unreal:
                 logger.error("Failed to connect to Unreal Engine")
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            
+
             logger.info(f"Adding self reference node to blueprint '{blueprint_name}'")
-            response = unreal.send_command("add_blueprint_self_reference", params)
+            response = unreal.send_command("add_blueprint_node", params)
             
             if not response:
                 logger.error("No response from Unreal Engine")

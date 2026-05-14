@@ -22,6 +22,8 @@
 #include "Engine/BlueprintGeneratedClass.h"
 #include "EditorAssetLibrary.h"
 #include "Commands/EpicUnrealMCPBlueprintCommands.h"
+#include "UObject/UnrealType.h"
+#include "UObject/EnumProperty.h"
 
 FEpicUnrealMCPEditorCommands::FEpicUnrealMCPEditorCommands()
 {
@@ -55,7 +57,20 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleCommand(const FStrin
     {
         return HandleSpawnBlueprintActor(Params);
     }
-    
+    // Reflection-based actor introspection / viewport control (v1.9.0)
+    else if (CommandType == TEXT("get_actor_properties"))
+    {
+        return HandleGetActorProperties(Params);
+    }
+    else if (CommandType == TEXT("set_actor_property"))
+    {
+        return HandleSetActorProperty(Params);
+    }
+    else if (CommandType == TEXT("focus_viewport"))
+    {
+        return HandleFocusViewport(Params);
+    }
+
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown editor command: %s"), *CommandType));
 }
 
@@ -305,4 +320,202 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleSpawnBlueprintActor(
     // This function will now correctly call the implementation in BlueprintCommands
     FEpicUnrealMCPBlueprintCommands BlueprintCommands;
     return BlueprintCommands.HandleCommand(TEXT("spawn_blueprint_actor"), Params);
+}
+
+// ---------------------------------------------------------------------------
+// v1.9.0 — Reflection-based actor introspection / viewport control
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // Helper: locate an actor in the editor world by its FName::ToString() (or label).
+    static AActor* FindActorByNameLocal(const FString& ActorName)
+    {
+        UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : GWorld;
+        if (!World)
+        {
+            return nullptr;
+        }
+
+        TArray<AActor*> AllActors;
+        UGameplayStatics::GetAllActorsOfClass(World, AActor::StaticClass(), AllActors);
+        for (AActor* Actor : AllActors)
+        {
+            if (!Actor)
+            {
+                continue;
+            }
+            if (Actor->GetName() == ActorName || Actor->GetActorLabel() == ActorName)
+            {
+                return Actor;
+            }
+        }
+        return nullptr;
+    }
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleGetActorProperties(const TSharedPtr<FJsonObject>& Params)
+{
+    FString ActorName;
+    if (!Params->TryGetStringField(TEXT("name"), ActorName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
+    }
+
+    AActor* TargetActor = FindActorByNameLocal(ActorName);
+    if (!TargetActor)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Actor not found: %s"), *ActorName));
+    }
+
+    UE_LOG(LogTemp, Display, TEXT("FEpicUnrealMCPEditorCommands::HandleGetActorProperties: Reading reflection properties from '%s'"), *ActorName);
+
+    TSharedPtr<FJsonObject> PropertiesObj = MakeShared<FJsonObject>();
+
+    // Walk all reflected properties on the actor's class and emit name -> exported value
+    for (TFieldIterator<FProperty> PropIt(TargetActor->GetClass()); PropIt; ++PropIt)
+    {
+        FProperty* Property = *PropIt;
+        if (!Property)
+        {
+            continue;
+        }
+
+        const FString PropertyName = Property->GetName();
+        const void* ValuePtr = Property->ContainerPtrToValuePtr<void>(TargetActor);
+
+        FString ExportedValue;
+        Property->ExportTextItem_Direct(ExportedValue, ValuePtr, nullptr, TargetActor, PPF_None);
+
+        PropertiesObj->SetStringField(PropertyName, ExportedValue);
+    }
+
+    TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+    ResultObj->SetStringField(TEXT("name"), ActorName);
+    ResultObj->SetStringField(TEXT("class"), TargetActor->GetClass()->GetName());
+    ResultObj->SetObjectField(TEXT("properties"), PropertiesObj);
+    return ResultObj;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleSetActorProperty(const TSharedPtr<FJsonObject>& Params)
+{
+    FString ActorName;
+    if (!Params->TryGetStringField(TEXT("name"), ActorName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'name' parameter"));
+    }
+
+    FString PropertyName;
+    if (!Params->TryGetStringField(TEXT("property_name"), PropertyName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_name' parameter"));
+    }
+
+    if (!Params->HasField(TEXT("property_value")))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_value' parameter"));
+    }
+
+    AActor* TargetActor = FindActorByNameLocal(ActorName);
+    if (!TargetActor)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Actor not found: %s"), *ActorName));
+    }
+
+    UE_LOG(LogTemp, Display, TEXT("FEpicUnrealMCPEditorCommands::HandleSetActorProperty: '%s'.'%s'"), *ActorName, *PropertyName);
+
+    TSharedPtr<FJsonValue> ValueJson = Params->Values.FindRef(TEXT("property_value"));
+    FString ErrorMessage;
+    const bool bOk = FEpicUnrealMCPCommonUtils::SetObjectProperty(TargetActor, PropertyName, ValueJson, ErrorMessage);
+    if (!bOk)
+    {
+        // Fallback: handle string types and unknown structs via ImportText_Direct
+        FProperty* Property = TargetActor->GetClass()->FindPropertyByName(*PropertyName);
+        if (Property)
+        {
+            FString StringValue = ValueJson.IsValid() ? ValueJson->AsString() : FString();
+            void* PropertyAddr = Property->ContainerPtrToValuePtr<void>(TargetActor);
+            const TCHAR* ImportResult = Property->ImportText_Direct(*StringValue, PropertyAddr, TargetActor, PPF_None);
+            if (ImportResult)
+            {
+                TargetActor->MarkPackageDirty();
+                TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+                ResultObj->SetStringField(TEXT("name"), ActorName);
+                ResultObj->SetStringField(TEXT("property"), PropertyName);
+                ResultObj->SetStringField(TEXT("value"), StringValue);
+                return ResultObj;
+            }
+        }
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(ErrorMessage.IsEmpty()
+            ? FString::Printf(TEXT("Failed to set property '%s' on actor '%s'"), *PropertyName, *ActorName)
+            : ErrorMessage);
+    }
+
+    TargetActor->MarkPackageDirty();
+
+    TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+    ResultObj->SetStringField(TEXT("name"), ActorName);
+    ResultObj->SetStringField(TEXT("property"), PropertyName);
+    ResultObj->SetBoolField(TEXT("updated"), true);
+    return ResultObj;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleFocusViewport(const TSharedPtr<FJsonObject>& Params)
+{
+    if (!GEditor)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("GEditor not available"));
+    }
+
+    FString TargetName;
+    const bool bHasTarget = Params->TryGetStringField(TEXT("target"), TargetName) && !TargetName.IsEmpty();
+
+    if (bHasTarget)
+    {
+        AActor* TargetActor = FindActorByNameLocal(TargetName);
+        if (!TargetActor)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Actor not found: %s"), *TargetName));
+        }
+
+        UE_LOG(LogTemp, Display, TEXT("FEpicUnrealMCPEditorCommands::HandleFocusViewport: Focusing on actor '%s'"), *TargetName);
+
+        TArray<AActor*> ActorsToFocus;
+        ActorsToFocus.Add(TargetActor);
+        GEditor->MoveViewportCamerasToActor(ActorsToFocus, /*bActiveViewportOnly=*/false);
+
+        TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+        ResultObj->SetStringField(TEXT("focused_actor"), TargetName);
+        return ResultObj;
+    }
+
+    // No target actor — focus on supplied world-space location box
+    if (!Params->HasField(TEXT("location")))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Either 'target' or 'location' must be provided"));
+    }
+
+    FVector Center = FEpicUnrealMCPCommonUtils::GetVectorFromJson(Params, TEXT("location"));
+    double Distance = 1000.0;
+    if (Params->HasField(TEXT("distance")))
+    {
+        Distance = Params->GetNumberField(TEXT("distance"));
+    }
+
+    const FVector Extent(Distance, Distance, Distance);
+    const FBox FocusBox(Center - Extent, Center + Extent);
+
+    UE_LOG(LogTemp, Display, TEXT("FEpicUnrealMCPEditorCommands::HandleFocusViewport: Focusing on box around (%f, %f, %f)"),
+        Center.X, Center.Y, Center.Z);
+
+    GEditor->MoveViewportCamerasToBox(FocusBox, /*bActiveViewportOnly=*/false);
+
+    TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+    TArray<TSharedPtr<FJsonValue>> LocationArr;
+    LocationArr.Add(MakeShared<FJsonValueNumber>(Center.X));
+    LocationArr.Add(MakeShared<FJsonValueNumber>(Center.Y));
+    LocationArr.Add(MakeShared<FJsonValueNumber>(Center.Z));
+    ResultObj->SetArrayField(TEXT("focused_location"), LocationArr);
+    ResultObj->SetNumberField(TEXT("distance"), Distance);
+    return ResultObj;
 }

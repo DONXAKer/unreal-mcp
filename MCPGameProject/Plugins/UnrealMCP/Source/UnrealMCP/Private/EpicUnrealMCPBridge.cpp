@@ -242,12 +242,15 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 ResultJson->SetStringField(TEXT("message"), TEXT("pong"));
             }
             // Editor Commands (including actor manipulation)
-            else if (CommandType == TEXT("get_actors_in_level") || 
+            else if (CommandType == TEXT("get_actors_in_level") ||
                      CommandType == TEXT("find_actors_by_name") ||
                      CommandType == TEXT("spawn_actor") ||
-                     CommandType == TEXT("delete_actor") || 
+                     CommandType == TEXT("delete_actor") ||
                      CommandType == TEXT("set_actor_transform") ||
-                     CommandType == TEXT("spawn_blueprint_actor"))
+                     CommandType == TEXT("spawn_blueprint_actor") ||
+                     CommandType == TEXT("get_actor_properties") ||
+                     CommandType == TEXT("set_actor_property") ||
+                     CommandType == TEXT("focus_viewport"))
             {
                 ResultJson = EditorCommands->HandleCommand(CommandType, Params);
             }
@@ -269,7 +272,8 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("analyze_blueprint_graph") ||
                      CommandType == TEXT("get_blueprint_variable_details") ||
                      CommandType == TEXT("get_blueprint_function_details") ||
-                     CommandType == TEXT("set_blueprint_property"))
+                     CommandType == TEXT("set_blueprint_property") ||
+                     CommandType == TEXT("set_component_property"))
             {
                 ResultJson = BlueprintCommands->HandleCommand(CommandType, Params);
             }
@@ -337,13 +341,16 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("create_variable") ||
                      CommandType == TEXT("set_blueprint_variable_properties") ||
                      CommandType == TEXT("add_event_node") ||
+                     CommandType == TEXT("add_component_bound_event") ||
                      CommandType == TEXT("delete_node") ||
                      CommandType == TEXT("set_node_property") ||
                      CommandType == TEXT("create_function") ||
                      CommandType == TEXT("add_function_input") ||
                      CommandType == TEXT("add_function_output") ||
                      CommandType == TEXT("delete_function") ||
-                     CommandType == TEXT("rename_function"))
+                     CommandType == TEXT("rename_function") ||
+                     CommandType == TEXT("add_input_action_node") ||
+                     CommandType == TEXT("find_blueprint_nodes"))
             {
                 ResultJson = BlueprintGraphCommands->HandleCommand(CommandType, Params);
             }

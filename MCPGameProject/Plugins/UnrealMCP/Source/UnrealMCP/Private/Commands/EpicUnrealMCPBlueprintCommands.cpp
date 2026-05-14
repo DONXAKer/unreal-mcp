@@ -117,6 +117,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     {
         return HandleSetBlueprintProperty(Params);
     }
+    else if (CommandType == TEXT("set_component_property"))
+    {
+        return HandleSetComponentProperty(Params);
+    }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint command: %s"), *CommandType));
 }
@@ -2522,6 +2526,150 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetBlueprintPrope
     Result->SetStringField(TEXT("message"),
         FString::Printf(TEXT("Property '%s' successfully set on Blueprint '%s'"),
             *PropertyName, *BlueprintName));
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+// ---------------------------------------------------------------------------
+// v1.9.0 — Set a property on a SCS component template via reflection
+// ---------------------------------------------------------------------------
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetComponentProperty(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    FString ComponentName;
+    if (!Params->TryGetStringField(TEXT("component_name"), ComponentName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'component_name' parameter"));
+    }
+
+    FString PropertyName;
+    if (!Params->TryGetStringField(TEXT("property_name"), PropertyName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_name' parameter"));
+    }
+
+    if (!Params->HasField(TEXT("property_value")))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'property_value' parameter"));
+    }
+
+    UE_LOG(LogTemp, Display,
+        TEXT("FEpicUnrealMCPBlueprintCommands::HandleSetComponentProperty: BP '%s', component '%s', property '%s'"),
+        *BlueprintName, *ComponentName, *PropertyName);
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+
+    if (!Blueprint->SimpleConstructionScript)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint '%s' has no SimpleConstructionScript"), *BlueprintName));
+    }
+
+    USCS_Node* ComponentNode = nullptr;
+    for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
+    {
+        if (Node && Node->GetVariableName().ToString() == ComponentName)
+        {
+            ComponentNode = Node;
+            break;
+        }
+    }
+
+    if (!ComponentNode || !ComponentNode->ComponentTemplate)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Component not found in blueprint: %s"), *ComponentName));
+    }
+
+    UActorComponent* ComponentTemplate = ComponentNode->ComponentTemplate;
+
+    FProperty* Property = ComponentTemplate->GetClass()->FindPropertyByName(*PropertyName);
+    if (!Property)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Property '%s' not found on component '%s' (class %s)"),
+            *PropertyName, *ComponentName, *ComponentTemplate->GetClass()->GetName()));
+    }
+
+    // Convert JSON value to a textual form acceptable by ImportText_Direct.
+    TSharedPtr<FJsonValue> ValueJson = Params->Values.FindRef(TEXT("property_value"));
+    FString StringValue;
+    if (!ValueJson.IsValid())
+    {
+        StringValue.Empty();
+    }
+    else
+    {
+        switch (ValueJson->Type)
+        {
+            case EJson::Boolean:
+                StringValue = ValueJson->AsBool() ? TEXT("true") : TEXT("false");
+                break;
+            case EJson::Number:
+                StringValue = FString::SanitizeFloat(ValueJson->AsNumber());
+                break;
+            case EJson::String:
+                StringValue = ValueJson->AsString();
+                break;
+            case EJson::Array:
+            {
+                // Serialise array as a sequence of comma-separated tokens for vector/rotator imports
+                TArray<FString> Tokens;
+                for (const TSharedPtr<FJsonValue>& Element : ValueJson->AsArray())
+                {
+                    if (!Element.IsValid()) continue;
+                    if (Element->Type == EJson::Number)
+                    {
+                        Tokens.Add(FString::SanitizeFloat(Element->AsNumber()));
+                    }
+                    else if (Element->Type == EJson::String)
+                    {
+                        Tokens.Add(Element->AsString());
+                    }
+                    else if (Element->Type == EJson::Boolean)
+                    {
+                        Tokens.Add(Element->AsBool() ? TEXT("true") : TEXT("false"));
+                    }
+                }
+                StringValue = FString::Printf(TEXT("(%s)"), *FString::Join(Tokens, TEXT(",")));
+                break;
+            }
+            case EJson::Object:
+            {
+                // Best-effort: serialise to compact JSON; ImportText may not accept this for arbitrary structs.
+                TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&StringValue);
+                FJsonSerializer::Serialize(ValueJson->AsObject().ToSharedRef(), Writer);
+                break;
+            }
+            default:
+                StringValue.Empty();
+                break;
+        }
+    }
+
+    void* PropertyAddr = Property->ContainerPtrToValuePtr<void>(ComponentTemplate);
+    const TCHAR* ImportResult = Property->ImportText_Direct(*StringValue, PropertyAddr, ComponentTemplate, PPF_None);
+    if (!ImportResult)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(
+            TEXT("Failed to import value '%s' for property '%s' (type %s)"),
+            *StringValue, *PropertyName, *Property->GetClass()->GetName()));
+    }
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+    Result->SetStringField(TEXT("component_name"), ComponentName);
+    Result->SetStringField(TEXT("property_name"), PropertyName);
+    Result->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
+    Result->SetStringField(TEXT("value"), StringValue);
     Result->SetBoolField(TEXT("success"), true);
     return Result;
 }

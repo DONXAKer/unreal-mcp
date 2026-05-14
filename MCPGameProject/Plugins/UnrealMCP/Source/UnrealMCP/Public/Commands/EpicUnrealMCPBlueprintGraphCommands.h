@@ -55,4 +55,10 @@ private:
 
     // Rename function in Blueprint
     TSharedPtr<FJsonObject> HandleRenameFunction(const TSharedPtr<FJsonObject>& Params);
+
+    // Add an InputAction event node to the event graph (v1.9.0)
+    TSharedPtr<FJsonObject> HandleAddInputActionNode(const TSharedPtr<FJsonObject>& Params);
+
+    // Read-only: list nodes in a Blueprint's UbergraphPages (v1.9.0)
+    TSharedPtr<FJsonObject> HandleFindBlueprintNodes(const TSharedPtr<FJsonObject>& Params);
 };

@@ -42,6 +42,9 @@ private:
     // CDO property setter
     TSharedPtr<FJsonObject> HandleSetBlueprintProperty(const TSharedPtr<FJsonObject>& Params);
 
+    // Component property setter (v1.9.0)
+    TSharedPtr<FJsonObject> HandleSetComponentProperty(const TSharedPtr<FJsonObject>& Params);
+
     // Helper: load blueprint by short name or full /Game/... path
     static UBlueprint* LoadBlueprintByName(const FString& BlueprintName);
 };
