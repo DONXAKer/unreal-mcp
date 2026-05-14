@@ -619,4 +619,216 @@ def register_blueprint_node_tools(mcp: FastMCP):
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Phase 1C (v1.12.0) — Function lifecycle
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def list_blueprint_functions(
+        ctx: Context,
+        blueprint_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Read-only: list all user-defined functions of a Blueprint with their I/O counts
+        and flags.
+
+        Returns:
+            Dict with 'functions' (list of {name, num_inputs, num_outputs, is_pure,
+            is_const, access_specifier, category}) and 'count'.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {"blueprint_name": blueprint_name}
+            logger.info(f"Listing functions for blueprint: {blueprint_name}")
+            response = unreal.send_command("list_blueprint_functions", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error listing blueprint functions: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def add_function_local_variable(
+        ctx: Context,
+        blueprint_name: str,
+        function_name: str,
+        variable_name: str,
+        variable_type: str,
+        default_value: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Add a local variable to a Blueprint function. The variable is stored on the
+        K2Node_FunctionEntry's LocalVariables array (function-scoped, NOT on
+        Blueprint->NewVariables).
+
+        Args:
+            blueprint_name: Target Blueprint.
+            function_name: Name of the function to extend.
+            variable_name: New local variable name (must be a valid identifier).
+            variable_type: Type string. Same vocabulary as create_variable:
+                bool, int, float, string, text, name, vector, rotator,
+                struct:<Name>, object:<Class>, array:<inner>.
+            default_value: Optional string-form default value.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {
+                "blueprint_name": blueprint_name,
+                "function_name": function_name,
+                "variable_name": variable_name,
+                "variable_type": variable_type,
+            }
+            if default_value is not None:
+                params["default_value"] = str(default_value)
+            logger.info(f"Adding function local variable: {params}")
+            response = unreal.send_command("add_function_local_variable", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error adding function local variable: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def set_function_flags(
+        ctx: Context,
+        blueprint_name: str,
+        function_name: str,
+        is_pure: bool = None,
+        is_const: bool = None,
+        access: str = None,
+        category: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Update flags of a Blueprint function. Recompiles the Blueprint so changes
+        propagate to the generated UFunction.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            function_name: Function to modify.
+            is_pure: If set, toggles FUNC_BlueprintPure (pure functions have no exec pins).
+            is_const: If set, toggles FUNC_Const.
+            access: One of "Public" / "Protected" / "Private".
+            category: If set, updates the Category text shown in the editor.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {
+                "blueprint_name": blueprint_name,
+                "function_name": function_name,
+            }
+            if is_pure is not None:
+                params["is_pure"] = bool(is_pure)
+            if is_const is not None:
+                params["is_const"] = bool(is_const)
+            if access is not None:
+                params["access"] = str(access)
+            if category is not None:
+                params["category"] = str(category)
+            logger.info(f"Setting function flags: {params}")
+            response = unreal.send_command("set_function_flags", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting function flags: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Phase 1D (v1.12.0) — Custom events
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def create_custom_event(
+        ctx: Context,
+        blueprint_name: str,
+        event_name: str,
+        node_position = None,
+    ) -> Dict[str, Any]:
+        """
+        Create a brand-new K2Node_CustomEvent in the Blueprint's Ubergraph. Unlike
+        add_blueprint_event_node (which overrides ReceiveBeginPlay / ReceiveTick etc.),
+        this creates a Blueprint-only event that can be called via Call Function or
+        bound to a delegate.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            event_name: New event name (must be a valid identifier; must not collide
+                with an existing custom event on the same Blueprint).
+            node_position: Optional [X, Y] graph coordinates.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            if node_position is None:
+                node_position = [0, 0]
+            params = {
+                "blueprint_name": blueprint_name,
+                "event_name": event_name,
+                "node_position": node_position,
+            }
+            logger.info(f"Creating custom event '{event_name}' in blueprint '{blueprint_name}'")
+            response = unreal.send_command("create_custom_event", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error creating custom event: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def add_custom_event_input(
+        ctx: Context,
+        blueprint_name: str,
+        event_name: str,
+        parameter_name: str,
+        parameter_type: str,
+    ) -> Dict[str, Any]:
+        """
+        Add an input parameter pin to an existing custom event.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            event_name: Existing custom event (matched by CustomFunctionName).
+            parameter_name: New pin name.
+            parameter_type: Type string (bool, int, float, string, vector, rotator,
+                struct:..., object:..., array:<inner>).
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "event_name": event_name,
+                "parameter_name": parameter_name,
+                "parameter_type": parameter_type,
+            }
+            logger.info(f"Adding custom event input: {params}")
+            response = unreal.send_command("add_custom_event_input", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error adding custom event input: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Blueprint node tools registered successfully")

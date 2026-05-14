@@ -363,6 +363,213 @@ UEdGraph* FFunctionManager::FindFunctionGraph(UBlueprint* Blueprint, const FStri
 	return nullptr;
 }
 
+// ── Phase 1C (v1.12.0) — Function lifecycle ──────────────────────────────────
+
+namespace
+{
+	// Map a function entry's ExtraFlags + name into one of "Public"/"Protected"/"Private"
+	static FString AccessSpecifierFromFlags(int32 ExtraFlags)
+	{
+		if ((ExtraFlags & FUNC_Private) != 0)   return TEXT("Private");
+		if ((ExtraFlags & FUNC_Protected) != 0) return TEXT("Protected");
+		// Default: Public (most Blueprint functions are public).
+		return TEXT("Public");
+	}
+}
+
+TSharedPtr<FJsonObject> FFunctionManager::ListFunctions(const TSharedPtr<FJsonObject>& Params)
+{
+	if (!Params.IsValid())
+	{
+		return CreateErrorResponse(TEXT("Invalid parameters"));
+	}
+
+	FString BlueprintName;
+	if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+	{
+		return CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+	}
+
+	UBlueprint* Blueprint = LoadBlueprint(BlueprintName);
+	if (!Blueprint)
+	{
+		return CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+	}
+
+	TArray<TSharedPtr<FJsonValue>> FuncArr;
+
+	for (UEdGraph* FuncGraph : Blueprint->FunctionGraphs)
+	{
+		if (!FuncGraph)
+		{
+			continue;
+		}
+
+		// Locate the FunctionEntry node — the source of truth for I/O pins, flags, category.
+		UK2Node_FunctionEntry* EntryNode = nullptr;
+		for (UEdGraphNode* Node : FuncGraph->Nodes)
+		{
+			if (Node && Node->IsA<UK2Node_FunctionEntry>())
+			{
+				EntryNode = Cast<UK2Node_FunctionEntry>(Node);
+				break;
+			}
+		}
+
+		// Locate the FunctionResult node (may be absent for void/no-return functions).
+		UK2Node_FunctionResult* ResultNode = nullptr;
+		for (UEdGraphNode* Node : FuncGraph->Nodes)
+		{
+			if (Node && Node->IsA<UK2Node_FunctionResult>())
+			{
+				ResultNode = Cast<UK2Node_FunctionResult>(Node);
+				break;
+			}
+		}
+
+		const int32 NumInputs  = EntryNode  ? EntryNode->UserDefinedPins.Num()  : 0;
+		const int32 NumOutputs = ResultNode ? ResultNode->UserDefinedPins.Num() : 0;
+
+		int32 ExtraFlags = 0;
+		FString Category;
+		if (EntryNode)
+		{
+			ExtraFlags = EntryNode->GetExtraFlags();
+			Category = EntryNode->MetaData.Category.ToString();
+		}
+
+		const bool bIsPure  = (ExtraFlags & FUNC_BlueprintPure) != 0;
+		const bool bIsConst = (ExtraFlags & FUNC_Const) != 0;
+
+		TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+		Obj->SetStringField(TEXT("name"), FuncGraph->GetFName().ToString());
+		Obj->SetNumberField(TEXT("num_inputs"), NumInputs);
+		Obj->SetNumberField(TEXT("num_outputs"), NumOutputs);
+		Obj->SetBoolField(TEXT("is_pure"), bIsPure);
+		Obj->SetBoolField(TEXT("is_const"), bIsConst);
+		Obj->SetStringField(TEXT("access_specifier"), AccessSpecifierFromFlags(ExtraFlags));
+		Obj->SetStringField(TEXT("category"), Category);
+
+		FuncArr.Add(MakeShared<FJsonValueObject>(Obj));
+	}
+
+	TSharedPtr<FJsonObject> Response = MakeShareable(new FJsonObject);
+	Response->SetBoolField(TEXT("success"), true);
+	Response->SetStringField(TEXT("blueprint_name"), BlueprintName);
+	Response->SetArrayField(TEXT("functions"), FuncArr);
+	Response->SetNumberField(TEXT("count"), FuncArr.Num());
+	return Response;
+}
+
+TSharedPtr<FJsonObject> FFunctionManager::SetFunctionFlags(const TSharedPtr<FJsonObject>& Params)
+{
+	if (!Params.IsValid())
+	{
+		return CreateErrorResponse(TEXT("Invalid parameters"));
+	}
+
+	FString BlueprintName;
+	if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+	{
+		return CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+	}
+
+	FString FunctionName;
+	if (!Params->TryGetStringField(TEXT("function_name"), FunctionName))
+	{
+		return CreateErrorResponse(TEXT("Missing 'function_name' parameter"));
+	}
+
+	UBlueprint* Blueprint = LoadBlueprint(BlueprintName);
+	if (!Blueprint)
+	{
+		return CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+	}
+
+	UEdGraph* FuncGraph = FindFunctionGraph(Blueprint, FunctionName);
+	if (!FuncGraph)
+	{
+		return CreateErrorResponse(FString::Printf(TEXT("Function not found: %s"), *FunctionName));
+	}
+
+	UK2Node_FunctionEntry* EntryNode = nullptr;
+	for (UEdGraphNode* Node : FuncGraph->Nodes)
+	{
+		if (Node && Node->IsA<UK2Node_FunctionEntry>())
+		{
+			EntryNode = Cast<UK2Node_FunctionEntry>(Node);
+			break;
+		}
+	}
+
+	if (!EntryNode)
+	{
+		return CreateErrorResponse(FString::Printf(TEXT("FunctionEntry node not found in '%s'"), *FunctionName));
+	}
+
+	int32 ExtraFlags = EntryNode->GetExtraFlags();
+
+	bool bIsPure = false;
+	if (Params->TryGetBoolField(TEXT("is_pure"), bIsPure))
+	{
+		if (bIsPure)
+		{
+			ExtraFlags |= FUNC_BlueprintPure;
+			// Pure functions are inherently const in BP terms.
+			ExtraFlags |= FUNC_Const;
+		}
+		else
+		{
+			ExtraFlags &= ~FUNC_BlueprintPure;
+		}
+	}
+
+	bool bIsConst = false;
+	if (Params->TryGetBoolField(TEXT("is_const"), bIsConst))
+	{
+		if (bIsConst) ExtraFlags |= FUNC_Const;
+		else          ExtraFlags &= ~FUNC_Const;
+	}
+
+	FString Access;
+	if (Params->TryGetStringField(TEXT("access"), Access))
+	{
+		// Clear all access bits first, then set requested one.
+		ExtraFlags &= ~(FUNC_Public | FUNC_Protected | FUNC_Private);
+		if (Access == TEXT("Public"))         ExtraFlags |= FUNC_Public;
+		else if (Access == TEXT("Protected")) ExtraFlags |= FUNC_Protected;
+		else if (Access == TEXT("Private"))   ExtraFlags |= FUNC_Private;
+		else
+		{
+			return CreateErrorResponse(FString::Printf(
+				TEXT("Invalid access specifier '%s': expected Public/Protected/Private"), *Access));
+		}
+	}
+
+	EntryNode->SetExtraFlags(ExtraFlags);
+
+	FString CategoryStr;
+	if (Params->TryGetStringField(TEXT("category"), CategoryStr))
+	{
+		EntryNode->MetaData.Category = FText::FromString(CategoryStr);
+	}
+
+	// Persist + propagate
+	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+	FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+	TSharedPtr<FJsonObject> Response = MakeShareable(new FJsonObject);
+	Response->SetBoolField(TEXT("success"), true);
+	Response->SetStringField(TEXT("blueprint_name"), BlueprintName);
+	Response->SetStringField(TEXT("function_name"), FunctionName);
+	Response->SetNumberField(TEXT("extra_flags"), static_cast<double>(EntryNode->GetExtraFlags()));
+	Response->SetBoolField(TEXT("is_pure"),  (EntryNode->GetExtraFlags() & FUNC_BlueprintPure) != 0);
+	Response->SetBoolField(TEXT("is_const"), (EntryNode->GetExtraFlags() & FUNC_Const) != 0);
+	Response->SetStringField(TEXT("access_specifier"), AccessSpecifierFromFlags(EntryNode->GetExtraFlags()));
+	Response->SetStringField(TEXT("category"), EntryNode->MetaData.Category.ToString());
+	return Response;
+}
+
 TSharedPtr<FJsonObject> FFunctionManager::CreateSuccessResponse(const FString& FunctionName, const FString& GraphID)
 {
 	TSharedPtr<FJsonObject> Response = MakeShareable(new FJsonObject);

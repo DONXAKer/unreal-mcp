@@ -1,7 +1,10 @@
 #include "Commands/BlueprintGraph/EventManager.h"
+#include "Commands/BlueprintGraph/BPVariables.h"
 #include "Engine/Blueprint.h"
 #include "EdGraph/EdGraph.h"
+#include "EdGraphSchema_K2.h"
 #include "K2Node_Event.h"
+#include "K2Node_CustomEvent.h"
 #include "K2Node_ComponentBoundEvent.h"
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "EditorAssetLibrary.h"
@@ -335,5 +338,202 @@ TSharedPtr<FJsonObject> FEventManager::CreateErrorResponse(const FString& ErrorM
 	TSharedPtr<FJsonObject> Response = MakeShareable(new FJsonObject);
 	Response->SetBoolField(TEXT("success"), false);
 	Response->SetStringField(TEXT("error"), ErrorMessage);
+	return Response;
+}
+
+// ── Phase 1D (v1.12.0) — Custom events ───────────────────────────────────────
+
+namespace
+{
+	// Locate a K2Node_CustomEvent across all Ubergraph pages by CustomFunctionName.
+	static UK2Node_CustomEvent* FindCustomEventByName(UBlueprint* Blueprint, const FString& EventName)
+	{
+		if (!Blueprint) return nullptr;
+		const FName TargetName(*EventName);
+		for (UEdGraph* Graph : Blueprint->UbergraphPages)
+		{
+			if (!Graph) continue;
+			for (UEdGraphNode* Node : Graph->Nodes)
+			{
+				if (UK2Node_CustomEvent* CE = Cast<UK2Node_CustomEvent>(Node))
+				{
+					if (CE->CustomFunctionName == TargetName)
+					{
+						return CE;
+					}
+				}
+			}
+		}
+		return nullptr;
+	}
+}
+
+TSharedPtr<FJsonObject> FEventManager::AddCustomEventNode(const TSharedPtr<FJsonObject>& Params)
+{
+	if (!Params.IsValid())
+	{
+		return CreateErrorResponse(TEXT("Invalid parameters"));
+	}
+
+	FString BlueprintName;
+	if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+	{
+		return CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+	}
+
+	FString EventName;
+	if (!Params->TryGetStringField(TEXT("event_name"), EventName))
+	{
+		return CreateErrorResponse(TEXT("Missing 'event_name' parameter"));
+	}
+
+	if (EventName.IsEmpty())
+	{
+		return CreateErrorResponse(TEXT("Event name must not be empty"));
+	}
+
+	FVector2D Position(0.0f, 0.0f);
+	if (Params->HasField(TEXT("node_position")))
+	{
+		const TArray<TSharedPtr<FJsonValue>>* PosArr = nullptr;
+		if (Params->TryGetArrayField(TEXT("node_position"), PosArr) && PosArr && PosArr->Num() >= 2)
+		{
+			Position.X = (float)(*PosArr)[0]->AsNumber();
+			Position.Y = (float)(*PosArr)[1]->AsNumber();
+		}
+	}
+
+	UBlueprint* Blueprint = LoadBlueprint(BlueprintName);
+	if (!Blueprint)
+	{
+		return CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+	}
+
+	if (Blueprint->UbergraphPages.Num() == 0)
+	{
+		return CreateErrorResponse(TEXT("Blueprint has no event graph"));
+	}
+
+	if (UK2Node_CustomEvent* Existing = FindCustomEventByName(Blueprint, EventName))
+	{
+		return CreateErrorResponse(FString::Printf(TEXT("Custom event '%s' already exists"), *EventName));
+	}
+
+	UEdGraph* Graph = Blueprint->UbergraphPages[0];
+	if (!Graph)
+	{
+		return CreateErrorResponse(TEXT("Failed to get Blueprint event graph"));
+	}
+
+	UK2Node_CustomEvent* CustomEvent = NewObject<UK2Node_CustomEvent>(Graph);
+	if (!CustomEvent)
+	{
+		return CreateErrorResponse(TEXT("Failed to allocate K2Node_CustomEvent"));
+	}
+
+	// Mirror UK2Node_CustomEvent::CreateFromFunction exactly — the canonical engine flow.
+	CustomEvent->CustomFunctionName = FName(*EventName);
+	CustomEvent->bIsEditable = true;
+	CustomEvent->NodePosX = static_cast<int32>(Position.X);
+	CustomEvent->NodePosY = static_cast<int32>(Position.Y);
+	CustomEvent->SetFlags(RF_Transactional);
+
+	Graph->Modify();
+	Graph->AddNode(CustomEvent, /*bFromUI*/ true, /*bSelectNewNode*/ false);
+	CustomEvent->CreateNewGuid();
+	CustomEvent->PostPlacedNewNode();
+	CustomEvent->AllocateDefaultPins();
+
+	Graph->NotifyGraphChanged();
+	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+	TSharedPtr<FJsonObject> Response = MakeShareable(new FJsonObject);
+	Response->SetBoolField(TEXT("success"), true);
+	Response->SetStringField(TEXT("node_id"), CustomEvent->NodeGuid.ToString());
+	Response->SetStringField(TEXT("event_name"), CustomEvent->CustomFunctionName.ToString());
+	Response->SetStringField(TEXT("blueprint_name"), BlueprintName);
+	Response->SetNumberField(TEXT("node_pos_x"), CustomEvent->NodePosX);
+	Response->SetNumberField(TEXT("node_pos_y"), CustomEvent->NodePosY);
+	return Response;
+}
+
+TSharedPtr<FJsonObject> FEventManager::AddCustomEventInput(const TSharedPtr<FJsonObject>& Params)
+{
+	if (!Params.IsValid())
+	{
+		return CreateErrorResponse(TEXT("Invalid parameters"));
+	}
+
+	FString BlueprintName;
+	if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+	{
+		return CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+	}
+
+	FString EventName;
+	if (!Params->TryGetStringField(TEXT("event_name"), EventName))
+	{
+		return CreateErrorResponse(TEXT("Missing 'event_name' parameter"));
+	}
+
+	FString ParameterName;
+	if (!Params->TryGetStringField(TEXT("parameter_name"), ParameterName))
+	{
+		return CreateErrorResponse(TEXT("Missing 'parameter_name' parameter"));
+	}
+
+	FString ParameterType;
+	if (!Params->TryGetStringField(TEXT("parameter_type"), ParameterType))
+	{
+		return CreateErrorResponse(TEXT("Missing 'parameter_type' parameter"));
+	}
+
+	UBlueprint* Blueprint = LoadBlueprint(BlueprintName);
+	if (!Blueprint)
+	{
+		return CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+	}
+
+	UK2Node_CustomEvent* CustomEvent = FindCustomEventByName(Blueprint, EventName);
+	if (!CustomEvent)
+	{
+		return CreateErrorResponse(FString::Printf(TEXT("Custom event '%s' not found"), *EventName));
+	}
+
+	// Duplicate-pin guard: K2Node_CustomEvent stores its params in UserDefinedPins (same as FunctionEntry).
+	const FName NewPinName(*ParameterName);
+	for (const TSharedPtr<FUserPinInfo>& Existing : CustomEvent->UserDefinedPins)
+	{
+		if (Existing.IsValid() && Existing->PinName == NewPinName)
+		{
+			return CreateErrorResponse(FString::Printf(
+				TEXT("Parameter '%s' already exists on custom event '%s'"), *ParameterName, *EventName));
+		}
+	}
+
+	const FEdGraphPinType PinType = FBPVariables::GetPinTypeFromString(ParameterType);
+
+	// Inputs on a CustomEvent flow OUT of the node (downstream consumers read them),
+	// so the user-defined pin direction is EGPD_Output — matches FunctionEntry behaviour.
+	UEdGraphPin* NewPin = CustomEvent->CreateUserDefinedPin(NewPinName, PinType, EGPD_Output);
+	if (!NewPin)
+	{
+		return CreateErrorResponse(FString::Printf(
+			TEXT("Failed to create pin '%s' on custom event '%s'"), *ParameterName, *EventName));
+	}
+
+	if (UEdGraph* OwningGraph = CustomEvent->GetGraph())
+	{
+		OwningGraph->NotifyGraphChanged();
+	}
+	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+	TSharedPtr<FJsonObject> Response = MakeShareable(new FJsonObject);
+	Response->SetBoolField(TEXT("success"), true);
+	Response->SetStringField(TEXT("blueprint_name"), BlueprintName);
+	Response->SetStringField(TEXT("event_name"), EventName);
+	Response->SetStringField(TEXT("parameter_name"), ParameterName);
+	Response->SetStringField(TEXT("parameter_type"), ParameterType);
+	Response->SetStringField(TEXT("node_id"), CustomEvent->NodeGuid.ToString());
 	return Response;
 }

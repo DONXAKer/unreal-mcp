@@ -41,6 +41,20 @@ public:
 	 */
 	static TSharedPtr<FJsonObject> AddFunctionOutput(const TSharedPtr<FJsonObject>& Params);
 
+	// ── Phase 1C (v1.12.0) — Function lifecycle ──────────────────────────────
+
+	/**
+	 * Add a local variable to a function (stored on K2Node_FunctionEntry::LocalVariables,
+	 * NOT on Blueprint->NewVariables — local scope only).
+	 * @param Params JSON parameters:
+	 *   - blueprint_name (string)
+	 *   - function_name (string)
+	 *   - variable_name (string)
+	 *   - variable_type (string): bool, int, float, string, vector, rotator, struct:..., object:..., array:...
+	 *   - default_value (string, optional)
+	 */
+	static TSharedPtr<FJsonObject> AddFunctionLocalVariable(const TSharedPtr<FJsonObject>& Params);
+
 private:
 	/**
 	 * Add a parameter to a function (internal)

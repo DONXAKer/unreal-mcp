@@ -70,10 +70,14 @@ public:
      */
     static void SetDefaultValue(FBPVariableDescription& Variable, const TSharedPtr<FJsonValue>& Value);
 
-private:
     /**
-     * Converts a type string to FEdGraphPinType
-     * Supported types: bool, int, float, string, vector, rotator
+     * Converts a type string to FEdGraphPinType.
+     * Supported: bool, int, float, string, text, name, vector, rotator,
+     * struct:..., object:..., and array:<inner> container form.
+     * Exposed publicly so other command files (EventManager, FunctionIO) can reuse
+     * the same vocabulary without duplicating the parser.
      */
     static FEdGraphPinType GetPinTypeFromString(const FString& TypeString);
+
+private:
 };

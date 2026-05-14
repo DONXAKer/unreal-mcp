@@ -631,4 +631,80 @@ def register_blueprint_tools(mcp: FastMCP):
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
-    logger.info("Blueprint tools registered successfully") 
+    # ─────────────────────────────────────────────────────────────────────
+    # Phase 1E (v1.12.0) — Discovery
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def list_blueprints(
+        ctx: Context,
+        path: str = "/Game",
+        filter_class: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Walk the AssetRegistry and return all Blueprint assets under `path`. Optionally
+        filter by parent class.
+
+        Args:
+            path: /Game-relative package path (default /Game). Recursive.
+            filter_class: Optional class name to gate by parent inheritance — accepts
+                short names ("Actor"), C++ names ("AActor"), or full paths
+                ("/Script/Engine.Actor"). When unresolved, falls back to substring match
+                against the parent class path.
+
+        Returns:
+            Dict with 'blueprints' (list of {name, path, parent_class, is_actor_class})
+            and 'count'.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {"path": path}
+            if filter_class is not None:
+                params["filter_class"] = str(filter_class)
+            logger.info(f"Listing blueprints: {params}")
+            response = unreal.send_command("list_blueprints", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error listing blueprints: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def get_blueprint_class_info(
+        ctx: Context,
+        blueprint_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Read-only summary of a Blueprint's class metadata.
+
+        Returns a dict with:
+            - name, path
+            - parent_class (full path), parent_class_name
+            - is_abstract, is_const (from GeneratedClass flags)
+            - blueprint_type: one of Normal / Const / MacroLibrary / Interface /
+              LevelScript / FunctionLibrary
+            - implemented_interfaces: list of interface paths
+            - num_variables, num_functions, num_components
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {"blueprint_name": blueprint_name}
+            logger.info(f"Getting class info for blueprint: {blueprint_name}")
+            response = unreal.send_command("get_blueprint_class_info", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error getting blueprint class info: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    logger.info("Blueprint tools registered successfully")

@@ -44,6 +44,29 @@ public:
 	 */
 	static TSharedPtr<FJsonObject> AddComponentBoundEvent(const TSharedPtr<FJsonObject>& Params);
 
+	// ── Phase 1D (v1.12.0) — Custom events ───────────────────────────────────
+
+	/**
+	 * Create a K2Node_CustomEvent in the Blueprint's Ubergraph.
+	 * Unlike AddEventNode (which overrides BlueprintImplementableEvent/builtin events from C++),
+	 * this creates an entirely new BP-only event that can later be CallFunction'd or bound.
+	 * @param Params JSON parameters:
+	 *   - blueprint_name (string)
+	 *   - event_name (string): Must be a valid identifier; must not collide with an existing custom event.
+	 *   - node_position ([X, Y], optional): Graph coordinates (default [0,0]).
+	 */
+	static TSharedPtr<FJsonObject> AddCustomEventNode(const TSharedPtr<FJsonObject>& Params);
+
+	/**
+	 * Add an input parameter pin to an existing K2Node_CustomEvent.
+	 * @param Params JSON parameters:
+	 *   - blueprint_name (string)
+	 *   - event_name (string): Custom event to mutate (matched by CustomFunctionName).
+	 *   - parameter_name (string): New pin name.
+	 *   - parameter_type (string): Type string (same vocabulary as FBPVariables::GetPinTypeFromString).
+	 */
+	static TSharedPtr<FJsonObject> AddCustomEventInput(const TSharedPtr<FJsonObject>& Params);
+
 private:
 	/**
 	 * Create an event node in the specified graph

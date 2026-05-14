@@ -138,6 +138,15 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     {
         return HandleSetComponentTransform(Params);
     }
+    // Discovery (Phase 1E — v1.12.0)
+    else if (CommandType == TEXT("list_blueprints"))
+    {
+        return HandleListBlueprints(Params);
+    }
+    else if (CommandType == TEXT("get_blueprint_class_info"))
+    {
+        return HandleGetBlueprintClassInfo(Params);
+    }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint command: %s"), *CommandType));
 }
@@ -3024,6 +3033,235 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetComponentTrans
     Result->SetArrayField(TEXT("relative_scale"), ScaleArr);
 
     Result->SetBoolField(TEXT("changed"), bChanged);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 1E (v1.12.0) — Discovery
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleListBlueprints(const TSharedPtr<FJsonObject>& Params)
+{
+    // Read optional path (default /Game) and optional filter_class (short name like "Actor").
+    FString SearchPath = TEXT("/Game");
+    Params->TryGetStringField(TEXT("path"), SearchPath);
+
+    if (!SearchPath.StartsWith(TEXT("/")))
+    {
+        SearchPath = TEXT("/") + SearchPath;
+    }
+    // AssetRegistry PackagePaths must NOT end with a trailing slash.
+    if (SearchPath.Len() > 1 && SearchPath.EndsWith(TEXT("/")))
+    {
+        SearchPath.RemoveFromEnd(TEXT("/"));
+    }
+
+    FString FilterClass;
+    Params->TryGetStringField(TEXT("filter_class"), FilterClass);
+
+    // Resolve filter_class -> UClass*. Accept short name ("Actor"), C++ name ("AActor"),
+    // or full /Script/Module.Class path.
+    UClass* FilterUClass = nullptr;
+    if (!FilterClass.IsEmpty())
+    {
+        const TArray<FString> SearchClassPaths = {
+            FilterClass,
+            FString::Printf(TEXT("/Script/Engine.%s"), *FilterClass),
+            FString::Printf(TEXT("/Script/UMG.%s"), *FilterClass),
+            FString::Printf(TEXT("/Script/Client.%s"), *FilterClass),
+        };
+        for (const FString& Path : SearchClassPaths)
+        {
+            FilterUClass = LoadClass<UObject>(nullptr, *Path);
+            if (FilterUClass)
+            {
+                break;
+            }
+        }
+        // Try common UE-naming variants (A-prefix actor, U-prefix object)
+        if (!FilterUClass && !FilterClass.StartsWith(TEXT("/")))
+        {
+            const FString WithA = TEXT("A") + FilterClass;
+            const FString WithU = TEXT("U") + FilterClass;
+            const TArray<FString> Variants = {
+                FString::Printf(TEXT("/Script/Engine.%s"), *WithA),
+                FString::Printf(TEXT("/Script/Engine.%s"), *WithU),
+                FString::Printf(TEXT("/Script/UMG.%s"), *WithU),
+            };
+            for (const FString& Path : Variants)
+            {
+                FilterUClass = LoadClass<UObject>(nullptr, *Path);
+                if (FilterUClass)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+    IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+    FARFilter Filter;
+    Filter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
+    // WidgetBlueprint is a separate registered class; include so /Game UI BPs show up too.
+    Filter.ClassPaths.Add(FTopLevelAssetPath(TEXT("/Script/UMGEditor"), TEXT("WidgetBlueprint")));
+    Filter.bRecursiveClasses = true;
+    Filter.PackagePaths.Add(*SearchPath);
+    Filter.bRecursivePaths = true;
+
+    TArray<FAssetData> Assets;
+    AssetRegistry.GetAssets(Filter, Assets);
+
+    TArray<TSharedPtr<FJsonValue>> Out;
+    Out.Reserve(Assets.Num());
+
+    for (const FAssetData& Data : Assets)
+    {
+        // Parent class via tag (cheap, no asset load).
+        FString ParentClassPath;
+        Data.GetTagValue(FBlueprintTags::ParentClassPath, ParentClassPath);
+
+        // If a filter_class was supplied, gate by parent inheritance. Falls back to substring match
+        // when the class can't be resolved (e.g. plugin classes not loaded).
+        bool bMatchesFilter = true;
+        if (FilterUClass)
+        {
+            UClass* AssetParentClass = nullptr;
+            if (!ParentClassPath.IsEmpty())
+            {
+                AssetParentClass = LoadObject<UClass>(nullptr, *ParentClassPath);
+            }
+            bMatchesFilter = AssetParentClass && AssetParentClass->IsChildOf(FilterUClass);
+        }
+        else if (!FilterClass.IsEmpty())
+        {
+            bMatchesFilter = ParentClassPath.Contains(FilterClass);
+        }
+
+        if (!bMatchesFilter)
+        {
+            continue;
+        }
+
+        // Detect is_actor_class via parent class lookup.
+        bool bIsActor = false;
+        if (!ParentClassPath.IsEmpty())
+        {
+            if (UClass* ParentClass = LoadObject<UClass>(nullptr, *ParentClassPath))
+            {
+                bIsActor = ParentClass->IsChildOf(AActor::StaticClass());
+            }
+        }
+
+        TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+        Obj->SetStringField(TEXT("name"), Data.AssetName.ToString());
+        Obj->SetStringField(TEXT("path"), Data.GetObjectPathString());
+        Obj->SetStringField(TEXT("parent_class"), ParentClassPath);
+        Obj->SetBoolField(TEXT("is_actor_class"), bIsActor);
+        Out.Add(MakeShared<FJsonValueObject>(Obj));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("path"), SearchPath);
+    if (!FilterClass.IsEmpty())
+    {
+        Result->SetStringField(TEXT("filter_class"), FilterClass);
+    }
+    Result->SetArrayField(TEXT("blueprints"), Out);
+    Result->SetNumberField(TEXT("count"), Out.Num());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleGetBlueprintClassInfo(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("name"), Blueprint->GetName());
+    Result->SetStringField(TEXT("path"), Blueprint->GetPathName());
+
+    // Parent class: full /Script/... path, plus display name.
+    if (Blueprint->ParentClass)
+    {
+        Result->SetStringField(TEXT("parent_class"), Blueprint->ParentClass->GetPathName());
+        Result->SetStringField(TEXT("parent_class_name"), Blueprint->ParentClass->GetName());
+    }
+    else
+    {
+        Result->SetStringField(TEXT("parent_class"), TEXT(""));
+    }
+
+    // Class flags from GeneratedClass (the runtime UClass) — Blueprint itself doesn't carry these.
+    bool bIsAbstract = false;
+    bool bIsConst = false;
+    if (Blueprint->GeneratedClass)
+    {
+        bIsAbstract = Blueprint->GeneratedClass->HasAnyClassFlags(CLASS_Abstract);
+        bIsConst    = Blueprint->GeneratedClass->HasAnyClassFlags(CLASS_Const);
+    }
+    Result->SetBoolField(TEXT("is_abstract"), bIsAbstract);
+    Result->SetBoolField(TEXT("is_const"), bIsConst);
+
+    // Blueprint type enum → human-readable string (single source of truth, see EBlueprintType in Blueprint.h).
+    FString BPTypeStr;
+    switch (Blueprint->BlueprintType)
+    {
+        case BPTYPE_Normal:          BPTypeStr = TEXT("Normal");           break;
+        case BPTYPE_Const:           BPTypeStr = TEXT("Const");            break;
+        case BPTYPE_MacroLibrary:    BPTypeStr = TEXT("MacroLibrary");     break;
+        case BPTYPE_Interface:       BPTypeStr = TEXT("Interface");        break;
+        case BPTYPE_LevelScript:     BPTypeStr = TEXT("LevelScript");      break;
+        case BPTYPE_FunctionLibrary: BPTypeStr = TEXT("FunctionLibrary");  break;
+        default:                     BPTypeStr = TEXT("Unknown");          break;
+    }
+    Result->SetStringField(TEXT("blueprint_type"), BPTypeStr);
+
+    // Implemented interfaces — list full paths.
+    TArray<TSharedPtr<FJsonValue>> InterfaceArr;
+    for (const FBPInterfaceDescription& Interface : Blueprint->ImplementedInterfaces)
+    {
+        if (Interface.Interface)
+        {
+            InterfaceArr.Add(MakeShared<FJsonValueString>(Interface.Interface->GetPathName()));
+        }
+    }
+    Result->SetArrayField(TEXT("implemented_interfaces"), InterfaceArr);
+
+    // Counts.
+    const int32 NumVariables = Blueprint->NewVariables.Num();
+    int32 NumFunctions = 0;
+    for (UEdGraph* G : Blueprint->FunctionGraphs)
+    {
+        if (G) NumFunctions++;
+    }
+    int32 NumComponents = 0;
+    if (Blueprint->SimpleConstructionScript)
+    {
+        for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
+        {
+            if (Node && Node->ComponentTemplate)
+            {
+                NumComponents++;
+            }
+        }
+    }
+    Result->SetNumberField(TEXT("num_variables"), NumVariables);
+    Result->SetNumberField(TEXT("num_functions"), NumFunctions);
+    Result->SetNumberField(TEXT("num_components"), NumComponents);
+
     Result->SetBoolField(TEXT("success"), true);
     return Result;
 }

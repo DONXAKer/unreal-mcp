@@ -280,7 +280,10 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("delete_component_from_blueprint") ||
                      CommandType == TEXT("rename_component") ||
                      CommandType == TEXT("list_components") ||
-                     CommandType == TEXT("set_component_transform"))
+                     CommandType == TEXT("set_component_transform") ||
+                     // Phase 1E (v1.12.0) — Discovery
+                     CommandType == TEXT("list_blueprints") ||
+                     CommandType == TEXT("get_blueprint_class_info"))
             {
                 ResultJson = BlueprintCommands->HandleCommand(CommandType, Params);
             }
@@ -371,7 +374,14 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("delete_blueprint_variable") ||
                      CommandType == TEXT("set_variable_default_value") ||
                      CommandType == TEXT("list_blueprint_variables") ||
-                     CommandType == TEXT("set_blueprint_variable_flags"))
+                     CommandType == TEXT("set_blueprint_variable_flags") ||
+                     // Phase 1C (v1.12.0) — Function lifecycle
+                     CommandType == TEXT("list_blueprint_functions") ||
+                     CommandType == TEXT("add_function_local_variable") ||
+                     CommandType == TEXT("set_function_flags") ||
+                     // Phase 1D (v1.12.0) — Custom events
+                     CommandType == TEXT("create_custom_event") ||
+                     CommandType == TEXT("add_custom_event_input"))
             {
                 ResultJson = BlueprintGraphCommands->HandleCommand(CommandType, Params);
             }

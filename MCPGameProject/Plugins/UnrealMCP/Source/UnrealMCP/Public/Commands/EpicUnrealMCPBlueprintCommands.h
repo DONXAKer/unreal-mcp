@@ -51,6 +51,10 @@ private:
     TSharedPtr<FJsonObject> HandleListComponents(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleSetComponentTransform(const TSharedPtr<FJsonObject>& Params);
 
+    // Discovery (Phase 1E — v1.12.0)
+    TSharedPtr<FJsonObject> HandleListBlueprints(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleGetBlueprintClassInfo(const TSharedPtr<FJsonObject>& Params);
+
     // Helper: load blueprint by short name or full /Game/... path
     static UBlueprint* LoadBlueprintByName(const FString& BlueprintName);
 };

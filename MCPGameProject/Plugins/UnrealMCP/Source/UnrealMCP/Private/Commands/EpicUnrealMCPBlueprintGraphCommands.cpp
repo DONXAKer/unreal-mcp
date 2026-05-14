@@ -106,6 +106,28 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintGraphCommands::HandleCommand(cons
     {
         return FBPVariables::SetVariableFlags(Params);
     }
+    // Phase 1C (v1.12.0) — Function lifecycle
+    else if (CommandType == TEXT("list_blueprint_functions"))
+    {
+        return FFunctionManager::ListFunctions(Params);
+    }
+    else if (CommandType == TEXT("add_function_local_variable"))
+    {
+        return FFunctionIO::AddFunctionLocalVariable(Params);
+    }
+    else if (CommandType == TEXT("set_function_flags"))
+    {
+        return FFunctionManager::SetFunctionFlags(Params);
+    }
+    // Phase 1D (v1.12.0) — Custom events
+    else if (CommandType == TEXT("create_custom_event"))
+    {
+        return FEventManager::AddCustomEventNode(Params);
+    }
+    else if (CommandType == TEXT("add_custom_event_input"))
+    {
+        return FEventManager::AddCustomEventInput(Params);
+    }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint graph command: %s"), *CommandType));
 }

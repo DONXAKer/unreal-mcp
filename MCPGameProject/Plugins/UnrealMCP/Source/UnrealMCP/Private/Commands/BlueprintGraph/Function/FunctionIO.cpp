@@ -468,3 +468,113 @@ TSharedPtr<FJsonObject> FFunctionIO::CreateErrorResponse(const FString& ErrorMes
 	Response->SetStringField(TEXT("error"), ErrorMessage);
 	return Response;
 }
+
+// ── Phase 1C (v1.12.0) — Function local variables ────────────────────────────
+
+TSharedPtr<FJsonObject> FFunctionIO::AddFunctionLocalVariable(const TSharedPtr<FJsonObject>& Params)
+{
+	if (!Params.IsValid())
+	{
+		return CreateErrorResponse(TEXT("Invalid parameters"));
+	}
+
+	FString BlueprintName;
+	if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+	{
+		return CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+	}
+
+	FString FunctionName;
+	if (!Params->TryGetStringField(TEXT("function_name"), FunctionName))
+	{
+		return CreateErrorResponse(TEXT("Missing 'function_name' parameter"));
+	}
+
+	FString VariableName;
+	if (!Params->TryGetStringField(TEXT("variable_name"), VariableName))
+	{
+		return CreateErrorResponse(TEXT("Missing 'variable_name' parameter"));
+	}
+
+	FString VariableType;
+	if (!Params->TryGetStringField(TEXT("variable_type"), VariableType))
+	{
+		return CreateErrorResponse(TEXT("Missing 'variable_type' parameter"));
+	}
+
+	if (!ValidateParameterName(VariableName))
+	{
+		return CreateErrorResponse(TEXT("Invalid variable name: contains spaces or special characters"));
+	}
+
+	UBlueprint* Blueprint = LoadBlueprint(BlueprintName);
+	if (!Blueprint)
+	{
+		return CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+	}
+
+	UEdGraph* FunctionGraph = FindFunctionGraph(Blueprint, FunctionName);
+	if (!FunctionGraph)
+	{
+		return CreateErrorResponse(FString::Printf(TEXT("Function not found: %s"), *FunctionName));
+	}
+
+	// Locate the FunctionEntry node — local variables live on it.
+	UK2Node_FunctionEntry* EntryNode = nullptr;
+	for (UEdGraphNode* Node : FunctionGraph->Nodes)
+	{
+		if (Node && Node->IsA<UK2Node_FunctionEntry>())
+		{
+			EntryNode = Cast<UK2Node_FunctionEntry>(Node);
+			break;
+		}
+	}
+
+	if (!EntryNode)
+	{
+		return CreateErrorResponse(FString::Printf(TEXT("FunctionEntry node not found in '%s'"), *FunctionName));
+	}
+
+	// Check for duplicates against existing local variables.
+	const FName NewVarName(*VariableName);
+	for (const FBPVariableDescription& Existing : EntryNode->LocalVariables)
+	{
+		if (Existing.VarName == NewVarName)
+		{
+			return CreateErrorResponse(FString::Printf(
+				TEXT("Local variable '%s' already exists in function '%s'"), *VariableName, *FunctionName));
+		}
+	}
+
+	// Build FBPVariableDescription mirroring how the editor adds locals.
+	FBPVariableDescription NewLocal;
+	NewLocal.VarName = NewVarName;
+	NewLocal.VarGuid = FGuid::NewGuid();
+	NewLocal.VarType = GetPropertyTypeFromString(VariableType);
+	NewLocal.FriendlyName = VariableName;
+	NewLocal.Category = UEdGraphSchema_K2::VR_DefaultCategory;
+	NewLocal.PropertyFlags = CPF_BlueprintVisible | CPF_BlueprintReadOnly;
+
+	FString DefaultValue;
+	if (Params->TryGetStringField(TEXT("default_value"), DefaultValue))
+	{
+		NewLocal.DefaultValue = DefaultValue;
+	}
+
+	EntryNode->LocalVariables.Add(NewLocal);
+
+	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+	FunctionGraph->NotifyGraphChanged();
+
+	TSharedPtr<FJsonObject> Response = MakeShareable(new FJsonObject);
+	Response->SetBoolField(TEXT("success"), true);
+	Response->SetStringField(TEXT("blueprint_name"), BlueprintName);
+	Response->SetStringField(TEXT("function_name"), FunctionName);
+	Response->SetStringField(TEXT("variable_name"), VariableName);
+	Response->SetStringField(TEXT("variable_type"), VariableType);
+	if (!DefaultValue.IsEmpty())
+	{
+		Response->SetStringField(TEXT("default_value"), DefaultValue);
+	}
+	return Response;
+}
