@@ -1,6 +1,7 @@
 #include "Commands/BlueprintGraph/Nodes/SpecializedNodes.h"
 #include "Commands/BlueprintGraph/Nodes/NodeCreatorUtils.h"
 #include "K2Node_BreakStruct.h"
+#include "K2Node_MakeStruct.h"
 #include "K2Node_GetDataTableRow.h"
 #include "K2Node_AddComponentByClass.h"
 #include "K2Node_Self.h"
@@ -13,6 +14,64 @@
 #include "EdGraphSchema_K2.h"
 #include "Subsystems/SubsystemBlueprintLibrary.h"
 #include "Json.h"
+
+namespace
+{
+	/**
+	 * Резолвит UScriptStruct по строковому пути.
+	 * Поддерживает: полный путь /Script/Module.StructName, /Game/Path.StructName,
+	 * fallback на FindFirstObject по короткому имени, удаление F-префикса.
+	 * Возвращает nullptr если структура не найдена.
+	 */
+	UScriptStruct* ResolveScriptStruct(const FString& StructTypePath, const TCHAR* CallerTag)
+	{
+		// 1. Прямой поиск по точному пути (включая /Script/Module.Name)
+		UScriptStruct* StructType = FindObject<UScriptStruct>(nullptr, *StructTypePath);
+
+		// 2. UE5 регистрирует структуры без F-префикса: FUnitTemplate → UnitTemplate
+		if (!StructType && StructTypePath.Contains(TEXT(".")))
+		{
+			int32 DotIdx;
+			StructTypePath.FindLastChar(TEXT('.'), DotIdx);
+			FString Package = StructTypePath.Left(DotIdx + 1);
+			FString StructName = StructTypePath.Mid(DotIdx + 1);
+			if (StructName.StartsWith(TEXT("F")) && StructName.Len() > 1 && FChar::IsUpper(StructName[1]))
+			{
+				FString WithoutF = Package + StructName.Mid(1);
+				StructType = FindObject<UScriptStruct>(nullptr, *WithoutF);
+				UE_LOG(LogTemp, Display, TEXT("%s: trying without F-prefix: %s"), CallerTag, *WithoutF);
+			}
+		}
+
+		// 3. LoadObject — для случаев когда asset ещё не загружен
+		if (!StructType)
+		{
+			StructType = LoadObject<UScriptStruct>(nullptr, *StructTypePath);
+		}
+
+		// 4. Fallback: FindFirstObject по короткому имени (с F и без)
+		if (!StructType)
+		{
+			int32 DotIdx;
+			if (StructTypePath.FindLastChar(TEXT('.'), DotIdx))
+			{
+				FString ShortName = StructTypePath.Mid(DotIdx + 1);
+				StructType = FindFirstObject<UScriptStruct>(*ShortName, EFindFirstObjectOptions::None, ELogVerbosity::Warning, CallerTag);
+				if (!StructType && ShortName.StartsWith(TEXT("F")))
+				{
+					StructType = FindFirstObject<UScriptStruct>(*ShortName.Mid(1), EFindFirstObjectOptions::None, ELogVerbosity::Warning, CallerTag);
+				}
+			}
+			else
+			{
+				// Путь без точки — обращаемся напрямую как с коротким именем
+				StructType = FindFirstObject<UScriptStruct>(*StructTypePath, EFindFirstObjectOptions::None, ELogVerbosity::Warning, CallerTag);
+			}
+		}
+
+		return StructType;
+	}
+}
 
 UK2Node* FSpecializedNodeCreator::CreateGetDataTableRowNode(UEdGraph* Graph, const TSharedPtr<FJsonObject>& Params)
 {
@@ -147,56 +206,20 @@ UK2Node* FSpecializedNodeCreator::CreateBreakStructNode(UEdGraph* Graph, const T
 		return nullptr;
 	}
 
-	// Получаем тип структуры — принимаем struct_type или target_class как альтернативу
+	// Получаем тип структуры — принимаем struct_type, struct_path или target_class
 	FString StructTypePath;
 	if (!Params->TryGetStringField(TEXT("struct_type"), StructTypePath))
 	{
-		if (!Params->TryGetStringField(TEXT("target_class"), StructTypePath))
+		if (!Params->TryGetStringField(TEXT("struct_path"), StructTypePath))
 		{
-			return nullptr;
-		}
-	}
-
-	// Ищем UScriptStruct по пути — пробуем несколько вариантов написания
-	UScriptStruct* StructType = FindObject<UScriptStruct>(nullptr, *StructTypePath);
-
-	// UE5 регистрирует структуры без F-префикса: FUnitTemplate → UnitTemplate
-	if (!StructType && StructTypePath.Contains(TEXT(".")))
-	{
-		int32 DotIdx;
-		StructTypePath.FindLastChar(TEXT('.'), DotIdx);
-		FString Package = StructTypePath.Left(DotIdx + 1);
-		FString StructName = StructTypePath.Mid(DotIdx + 1);
-		// Убираем F-префикс если есть
-		if (StructName.StartsWith(TEXT("F")) && StructName.Len() > 1 && FChar::IsUpper(StructName[1]))
-		{
-			FString WithoutF = Package + StructName.Mid(1);
-			StructType = FindObject<UScriptStruct>(nullptr, *WithoutF);
-			UE_LOG(LogTemp, Display, TEXT("BreakStruct: trying without F-prefix: %s"), *WithoutF);
-		}
-	}
-
-	if (!StructType)
-	{
-		StructType = LoadObject<UScriptStruct>(nullptr, *StructTypePath);
-	}
-
-	// Fallback: поиск по короткому имени через FindFirstObject
-	if (!StructType)
-	{
-		int32 DotIdx;
-		if (StructTypePath.FindLastChar(TEXT('.'), DotIdx))
-		{
-			FString ShortName = StructTypePath.Mid(DotIdx + 1);
-			// Пробуем с F-префиксом и без
-			StructType = FindFirstObject<UScriptStruct>(*ShortName, EFindFirstObjectOptions::None, ELogVerbosity::Warning, TEXT("MCP BreakStruct"));
-			if (!StructType && ShortName.StartsWith(TEXT("F")))
+			if (!Params->TryGetStringField(TEXT("target_class"), StructTypePath))
 			{
-				StructType = FindFirstObject<UScriptStruct>(*ShortName.Mid(1), EFindFirstObjectOptions::None, ELogVerbosity::Warning, TEXT("MCP BreakStruct"));
+				return nullptr;
 			}
 		}
 	}
 
+	UScriptStruct* StructType = ResolveScriptStruct(StructTypePath, TEXT("MCP BreakStruct"));
 	if (!StructType)
 	{
 		UE_LOG(LogTemp, Error, TEXT("BreakStruct: struct type not found: %s"), *StructTypePath);
@@ -221,6 +244,62 @@ UK2Node* FSpecializedNodeCreator::CreateBreakStructNode(UEdGraph* Graph, const T
 	FNodeCreatorUtils::InitializeK2Node(BreakNode, Graph);
 
 	return BreakNode;
+}
+
+UK2Node* FSpecializedNodeCreator::CreateMakeStructNode(UEdGraph* Graph, const TSharedPtr<FJsonObject>& Params)
+{
+	if (!Graph || !Params.IsValid())
+	{
+		return nullptr;
+	}
+
+	// Принимаем struct_path (предпочтительно), struct_type или target_class
+	FString StructTypePath;
+	if (!Params->TryGetStringField(TEXT("struct_path"), StructTypePath))
+	{
+		if (!Params->TryGetStringField(TEXT("struct_type"), StructTypePath))
+		{
+			if (!Params->TryGetStringField(TEXT("target_class"), StructTypePath))
+			{
+				UE_LOG(LogTemp, Error, TEXT("MakeStruct: missing 'struct_path'/'struct_type'/'target_class' parameter"));
+				return nullptr;
+			}
+		}
+	}
+
+	UScriptStruct* StructType = ResolveScriptStruct(StructTypePath, TEXT("MCP MakeStruct"));
+	if (!StructType)
+	{
+		UE_LOG(LogTemp, Error, TEXT("MakeStruct: struct type not found: %s"), *StructTypePath);
+		return nullptr;
+	}
+
+	// UE5 запрещает MakeStruct для структур с native make (UCS_HasOnlyBlueprintAccessibleProperties)
+	if (!UK2Node_MakeStruct::CanBeMade(StructType))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("MakeStruct: struct '%s' не поддерживает Make-ноду (native make или нет BlueprintVisible полей) — нода будет создана, но может оказаться невалидной"), *StructType->GetName());
+	}
+
+	UE_LOG(LogTemp, Display, TEXT("MakeStruct: found struct '%s'"), *StructType->GetName());
+
+	UK2Node_MakeStruct* MakeNode = NewObject<UK2Node_MakeStruct>(Graph);
+	if (!MakeNode)
+	{
+		return nullptr;
+	}
+
+	// StructType наследуется из UK2Node_StructOperation — публичное поле UPROPERTY()
+	MakeNode->StructType = StructType;
+
+	double PosX, PosY;
+	FNodeCreatorUtils::ExtractNodePosition(Params, PosX, PosY);
+	MakeNode->NodePosX = static_cast<int32>(PosX);
+	MakeNode->NodePosY = static_cast<int32>(PosY);
+
+	Graph->AddNode(MakeNode, true, false);
+	FNodeCreatorUtils::InitializeK2Node(MakeNode, Graph);
+
+	return MakeNode;
 }
 
 UK2Node* FSpecializedNodeCreator::CreateWidgetNode(UEdGraph* Graph, const TSharedPtr<FJsonObject>& Params)

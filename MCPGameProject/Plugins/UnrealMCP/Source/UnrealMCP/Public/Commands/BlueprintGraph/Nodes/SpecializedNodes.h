@@ -72,6 +72,15 @@ public:
 	static UK2Node* CreateBreakStructNode(UEdGraph* Graph, const TSharedPtr<class FJsonObject>& Params);
 
 	/**
+	 * Создаёт ноду Make Struct (K2Node_MakeStruct) — собирает структуру из отдельных значений.
+	 * Комплемент к BreakStruct, использует тот же resolve-паттерн UScriptStruct.
+	 * @param Graph - граф для добавления ноды
+	 * @param Params - JSON параметры: pos_x, pos_y, struct_path | struct_type | target_class
+	 * @return Созданная нода или nullptr при ошибке
+	 */
+	static UK2Node* CreateMakeStructNode(UEdGraph* Graph, const TSharedPtr<class FJsonObject>& Params);
+
+	/**
 	 * Создаёт ноду Get World Subsystem (CallFunction на USubsystemBlueprintLibrary::GetWorldSubsystem)
 	 * с правильно типизированным ReturnValue для конкретного UWorldSubsystem-класса.
 	 * @param Graph - граф для добавления ноды

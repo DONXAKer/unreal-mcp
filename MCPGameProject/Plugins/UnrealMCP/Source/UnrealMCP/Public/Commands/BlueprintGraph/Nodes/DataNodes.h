@@ -36,4 +36,23 @@ public:
 	 * @return The created node or nullptr on error
 	 */
 	static UK2Node* CreateMakeArrayNode(UEdGraph* Graph, const TSharedPtr<class FJsonObject>& Params);
+
+	/**
+	 * Создаёт ноду Make Map (K2Node_MakeMap) — builds TMap<Key, Value>.
+	 * После создания ноды задаёт типы ключа/значения через PinType output-пина
+	 * (UE5 распространяет тип через PropagatePinType).
+	 * @param Graph - граф для добавления ноды
+	 * @param Params - JSON параметры: pos_x, pos_y, key_type, value_type
+	 *                 (например "int", "string", "/Game/Foo.Foo" для структур)
+	 * @return Созданная нода или nullptr при ошибке
+	 */
+	static UK2Node* CreateMakeMapNode(UEdGraph* Graph, const TSharedPtr<class FJsonObject>& Params);
+
+	/**
+	 * Создаёт ноду Make Set (K2Node_MakeSet) — builds TSet<Element>.
+	 * @param Graph - граф для добавления ноды
+	 * @param Params - JSON параметры: pos_x, pos_y, element_type
+	 * @return Созданная нода или nullptr при ошибке
+	 */
+	static UK2Node* CreateMakeSetNode(UEdGraph* Graph, const TSharedPtr<class FJsonObject>& Params);
 };

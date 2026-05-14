@@ -5,6 +5,7 @@
 #include "Commands/BlueprintGraph/Nodes/CastingNodes.h"
 #include "Commands/BlueprintGraph/Nodes/AnimationNodes.h"
 #include "Commands/BlueprintGraph/Nodes/SpecializedNodes.h"
+#include "Commands/BlueprintGraph/Nodes/DelegateNodes.h"
 #include "Engine/Blueprint.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraphSchema_K2.h"
@@ -220,9 +221,39 @@ TSharedPtr<FJsonObject> FBlueprintNodeManager::AddNode(const TSharedPtr<FJsonObj
 	{
 		NewNode = FSpecializedNodeCreator::CreateBreakStructNode(Graph, NodeParams);
 	}
+	else if (NodeType.Equals(TEXT("MakeStruct"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FSpecializedNodeCreator::CreateMakeStructNode(Graph, NodeParams);
+	}
 	else if (NodeType.Equals(TEXT("GetWorldSubsystem"), ESearchCase::IgnoreCase))
 	{
 		NewNode = FSpecializedNodeCreator::CreateGetWorldSubsystemNode(Graph, NodeParams);
+	}
+	// Container nodes (Phase 2A) — MakeMap/MakeSet комплементарны существующему MakeArray
+	else if (NodeType.Equals(TEXT("MakeMap"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FDataNodeCreator::CreateMakeMapNode(Graph, NodeParams);
+	}
+	else if (NodeType.Equals(TEXT("MakeSet"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FDataNodeCreator::CreateMakeSetNode(Graph, NodeParams);
+	}
+	// Delegate nodes (Phase 2A) — bind/unbind/broadcast/clear для multicast delegate properties
+	else if (NodeType.Equals(TEXT("AddDelegate"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FDelegateNodeCreator::CreateAddDelegateNode(Graph, NodeParams);
+	}
+	else if (NodeType.Equals(TEXT("RemoveDelegate"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FDelegateNodeCreator::CreateRemoveDelegateNode(Graph, NodeParams);
+	}
+	else if (NodeType.Equals(TEXT("CallDelegate"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FDelegateNodeCreator::CreateCallDelegateNode(Graph, NodeParams);
+	}
+	else if (NodeType.Equals(TEXT("ClearDelegate"), ESearchCase::IgnoreCase))
+	{
+		NewNode = FDelegateNodeCreator::CreateClearDelegateNode(Graph, NodeParams);
 	}
 	// Event nodes (kept for backward compatibility - should use add_event_node)
 	else if (NodeType.Equals(TEXT("Event"), ESearchCase::IgnoreCase))
