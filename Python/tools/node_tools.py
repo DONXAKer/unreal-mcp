@@ -429,5 +429,194 @@ def register_blueprint_node_tools(mcp: FastMCP):
             error_msg = f"Error finding nodes: {e}"
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
-    
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Phase 1B (v1.11.0) — Variable lifecycle
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def rename_blueprint_variable(
+        ctx: Context,
+        blueprint_name: str,
+        old_name: str,
+        new_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Rename a member variable of a Blueprint. Updates all Get/Set references in the graph.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            old_name: Current variable name.
+            new_name: New name (must not collide with an existing variable).
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "old_name": old_name,
+                "new_name": new_name,
+            }
+            logger.info(f"Renaming blueprint variable: {params}")
+            response = unreal.send_command("rename_blueprint_variable", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error renaming blueprint variable: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def delete_blueprint_variable(
+        ctx: Context,
+        blueprint_name: str,
+        variable_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Delete a member variable from a Blueprint. Removes all Get/Set references too.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "variable_name": variable_name,
+            }
+            logger.info(f"Deleting blueprint variable: {params}")
+            response = unreal.send_command("delete_blueprint_variable", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error deleting blueprint variable: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def set_variable_default_value(
+        ctx: Context,
+        blueprint_name: str,
+        variable_name: str,
+        default_value: str,
+    ) -> Dict[str, Any]:
+        """
+        Set the default value of a Blueprint variable.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            variable_name: Variable to modify.
+            default_value: String form of the value (e.g. "42", "true", "(X=1,Y=2,Z=3)").
+                The textual form is parsed via PropertyValueFromString into the generated
+                class's CDO and is also stored on FBPVariableDescription::DefaultValue.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "variable_name": variable_name,
+                "default_value": default_value,
+            }
+            logger.info(f"Setting variable default value: {params}")
+            response = unreal.send_command("set_variable_default_value", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting variable default value: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def list_blueprint_variables(
+        ctx: Context,
+        blueprint_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Read-only: list all NewVariables of a Blueprint.
+
+        Returns:
+            Dict with 'variables' (list of {name, type, is_instance_editable, expose_on_spawn,
+            blueprint_read_only, category, default_value, replication}) and 'count'.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {"blueprint_name": blueprint_name}
+            logger.info(f"Listing variables for blueprint: {blueprint_name}")
+            response = unreal.send_command("list_blueprint_variables", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error listing blueprint variables: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def set_blueprint_variable_flags(
+        ctx: Context,
+        blueprint_name: str,
+        variable_name: str,
+        instance_editable: bool = None,
+        expose_on_spawn: bool = None,
+        blueprint_read_only: bool = None,
+        category: str = None,
+        replication: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Update a focused subset of variable flags. Use this for clean instance_editable /
+        expose_on_spawn / blueprint_read_only / category / replication changes; for the
+        full legacy API (tooltips, slider range, bitmask, etc.) keep using
+        set_blueprint_variable_properties.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            variable_name: Variable to modify.
+            instance_editable: If set, toggles CPF_Edit (visible & editable in instances).
+            expose_on_spawn: If set, toggles ExposeOnSpawn metadata (+ forces instance_editable=True).
+            blueprint_read_only: If set, toggles CPF_BlueprintReadOnly.
+            category: If set, updates the Category text.
+            replication: One of "None" / "Replicated" / "RepNotify".
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
+            params: Dict[str, Any] = {
+                "blueprint_name": blueprint_name,
+                "variable_name": variable_name,
+            }
+            if instance_editable is not None:
+                params["instance_editable"] = bool(instance_editable)
+            if expose_on_spawn is not None:
+                params["expose_on_spawn"] = bool(expose_on_spawn)
+            if blueprint_read_only is not None:
+                params["blueprint_read_only"] = bool(blueprint_read_only)
+            if category is not None:
+                params["category"] = str(category)
+            if replication is not None:
+                params["replication"] = str(replication)
+
+            logger.info(f"Setting variable flags: {params}")
+            response = unreal.send_command("set_blueprint_variable_flags", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting blueprint variable flags: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Blueprint node tools registered successfully")

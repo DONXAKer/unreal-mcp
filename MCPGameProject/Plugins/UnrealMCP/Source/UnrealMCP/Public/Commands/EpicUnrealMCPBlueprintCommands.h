@@ -45,6 +45,12 @@ private:
     // Component property setter (v1.9.0)
     TSharedPtr<FJsonObject> HandleSetComponentProperty(const TSharedPtr<FJsonObject>& Params);
 
+    // Component lifecycle (Phase 1A — v1.11.0)
+    TSharedPtr<FJsonObject> HandleDeleteComponentFromBlueprint(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleRenameComponent(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleListComponents(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSetComponentTransform(const TSharedPtr<FJsonObject>& Params);
+
     // Helper: load blueprint by short name or full /Game/... path
     static UBlueprint* LoadBlueprintByName(const FString& BlueprintName);
 };

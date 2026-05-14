@@ -276,7 +276,11 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("get_blueprint_variable_details") ||
                      CommandType == TEXT("get_blueprint_function_details") ||
                      CommandType == TEXT("set_blueprint_property") ||
-                     CommandType == TEXT("set_component_property"))
+                     CommandType == TEXT("set_component_property") ||
+                     CommandType == TEXT("delete_component_from_blueprint") ||
+                     CommandType == TEXT("rename_component") ||
+                     CommandType == TEXT("list_components") ||
+                     CommandType == TEXT("set_component_transform"))
             {
                 ResultJson = BlueprintCommands->HandleCommand(CommandType, Params);
             }
@@ -362,7 +366,12 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("delete_function") ||
                      CommandType == TEXT("rename_function") ||
                      CommandType == TEXT("add_input_action_node") ||
-                     CommandType == TEXT("find_blueprint_nodes"))
+                     CommandType == TEXT("find_blueprint_nodes") ||
+                     CommandType == TEXT("rename_blueprint_variable") ||
+                     CommandType == TEXT("delete_blueprint_variable") ||
+                     CommandType == TEXT("set_variable_default_value") ||
+                     CommandType == TEXT("list_blueprint_variables") ||
+                     CommandType == TEXT("set_blueprint_variable_flags"))
             {
                 ResultJson = BlueprintGraphCommands->HandleCommand(CommandType, Params);
             }

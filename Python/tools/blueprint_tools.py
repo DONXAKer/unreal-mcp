@@ -478,5 +478,157 @@ def register_blueprint_tools(mcp: FastMCP):
             error_msg = f"Error setting pawn properties: {e}"
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
-    
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Phase 1A (v1.11.0) — Component lifecycle
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def delete_component_from_blueprint(
+        ctx: Context,
+        blueprint_name: str,
+        component_name: str
+    ) -> Dict[str, Any]:
+        """
+        Remove a component (SCS_Node) from a Blueprint.
+
+        Args:
+            blueprint_name: Short name or full /Game/... path of the target Blueprint.
+            component_name: Variable name of the component to remove. Child components
+                attached underneath are also removed.
+
+        Returns:
+            Dict with success status and the number of child components that were removed.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "component_name": component_name,
+            }
+            logger.info(f"Deleting component from blueprint: {params}")
+            response = unreal.send_command("delete_component_from_blueprint", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            logger.info(f"Delete component response: {response}")
+            return response
+        except Exception as e:
+            error_msg = f"Error deleting component: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def rename_component(
+        ctx: Context,
+        blueprint_name: str,
+        old_name: str,
+        new_name: str
+    ) -> Dict[str, Any]:
+        """
+        Rename a component in a Blueprint. Updates the variable name on the SCS node and
+        all Get/Set node references in event graph + functions.
+
+        Args:
+            blueprint_name: Target Blueprint (short name or full /Game/... path).
+            old_name: Current component name.
+            new_name: Desired new component name (must be unique within the Blueprint).
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "old_name": old_name,
+                "new_name": new_name,
+            }
+            logger.info(f"Renaming component: {params}")
+            response = unreal.send_command("rename_component", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            logger.info(f"Rename component response: {response}")
+            return response
+        except Exception as e:
+            error_msg = f"Error renaming component: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def list_components(
+        ctx: Context,
+        blueprint_name: str
+    ) -> Dict[str, Any]:
+        """
+        Read-only: list all SCS components of a Blueprint with class, parent, root flag and
+        relative transform (location/rotation/scale).
+
+        Returns:
+            Dict with 'components' (list of {name, class, parent_name, is_root,
+            relative_location[3], relative_rotation[3], relative_scale[3]}) and 'count'.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {"blueprint_name": blueprint_name}
+            logger.info(f"Listing components for blueprint: {blueprint_name}")
+            response = unreal.send_command("list_components", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error listing components: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def set_component_transform(
+        ctx: Context,
+        blueprint_name: str,
+        component_name: str,
+        location: List[float] = None,
+        rotation: List[float] = None,
+        scale: List[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Set the relative transform of a USceneComponent on a Blueprint's SCS template.
+        Any omitted field is left unchanged.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            component_name: Variable name of the component (must be a USceneComponent).
+            location: [X, Y, Z] relative location, optional.
+            rotation: [Pitch, Yaw, Roll] relative rotation, optional.
+            scale:    [X, Y, Z] relative scale, optional.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {
+                "blueprint_name": blueprint_name,
+                "component_name": component_name,
+            }
+            if location is not None:
+                params["location"] = [float(v) for v in location]
+            if rotation is not None:
+                params["rotation"] = [float(v) for v in rotation]
+            if scale is not None:
+                params["scale"] = [float(v) for v in scale]
+            logger.info(f"Setting component transform: {params}")
+            response = unreal.send_command("set_component_transform", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting component transform: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Blueprint tools registered successfully") 

@@ -121,6 +121,23 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     {
         return HandleSetComponentProperty(Params);
     }
+    // Component lifecycle (Phase 1A — v1.11.0)
+    else if (CommandType == TEXT("delete_component_from_blueprint"))
+    {
+        return HandleDeleteComponentFromBlueprint(Params);
+    }
+    else if (CommandType == TEXT("rename_component"))
+    {
+        return HandleRenameComponent(Params);
+    }
+    else if (CommandType == TEXT("list_components"))
+    {
+        return HandleListComponents(Params);
+    }
+    else if (CommandType == TEXT("set_component_transform"))
+    {
+        return HandleSetComponentTransform(Params);
+    }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint command: %s"), *CommandType));
 }
@@ -2670,6 +2687,343 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetComponentPrope
     Result->SetStringField(TEXT("property_name"), PropertyName);
     Result->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
     Result->SetStringField(TEXT("value"), StringValue);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1A (v1.11.0) — Component lifecycle commands
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // Helper: locate SCS_Node by name (variable name match).
+    static USCS_Node* FindSCSNodeByName(UBlueprint* Blueprint, const FString& ComponentName)
+    {
+        if (!Blueprint || !Blueprint->SimpleConstructionScript)
+        {
+            return nullptr;
+        }
+        for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
+        {
+            if (Node && Node->GetVariableName().ToString() == ComponentName)
+            {
+                return Node;
+            }
+        }
+        return nullptr;
+    }
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleDeleteComponentFromBlueprint(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+    FString ComponentName;
+    if (!Params->TryGetStringField(TEXT("component_name"), ComponentName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'component_name' parameter"));
+    }
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+    if (!Blueprint->SimpleConstructionScript)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint '%s' has no SimpleConstructionScript"), *BlueprintName));
+    }
+
+    USCS_Node* TargetNode = FindSCSNodeByName(Blueprint, ComponentName);
+    if (!TargetNode)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Component not found in blueprint: %s"), *ComponentName));
+    }
+
+    // Recursively count child nodes before removal (for response info).
+    int32 ChildCount = TargetNode->GetChildNodes().Num();
+
+    // RemoveNode handles cleanup of the child tree; pass true to also clear references.
+    Blueprint->SimpleConstructionScript->RemoveNode(TargetNode);
+
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    if (UPackage* Pkg = Blueprint->GetPackage())
+    {
+        Pkg->MarkPackageDirty();
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+    Result->SetStringField(TEXT("component_name"), ComponentName);
+    Result->SetNumberField(TEXT("child_components_removed"), ChildCount);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleRenameComponent(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+    FString OldName;
+    if (!Params->TryGetStringField(TEXT("old_name"), OldName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'old_name' parameter"));
+    }
+    FString NewName;
+    if (!Params->TryGetStringField(TEXT("new_name"), NewName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'new_name' parameter"));
+    }
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+    if (!Blueprint->SimpleConstructionScript)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint '%s' has no SimpleConstructionScript"), *BlueprintName));
+    }
+
+    USCS_Node* TargetNode = FindSCSNodeByName(Blueprint, OldName);
+    if (!TargetNode)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Component not found in blueprint: %s"), *OldName));
+    }
+
+    // Ensure new name is unique within the SCS hierarchy.
+    if (FindSCSNodeByName(Blueprint, NewName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Component name already in use: %s"), *NewName));
+    }
+
+    // FBlueprintEditorUtils handles all SCS, variable-binding and graph-reference updates.
+    FBlueprintEditorUtils::RenameComponentMemberVariable(Blueprint, TargetNode, FName(*NewName));
+
+    FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    if (UPackage* Pkg = Blueprint->GetPackage())
+    {
+        Pkg->MarkPackageDirty();
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+    Result->SetStringField(TEXT("old_name"), OldName);
+    Result->SetStringField(TEXT("new_name"), NewName);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleListComponents(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+    if (!Blueprint->SimpleConstructionScript)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint '%s' has no SimpleConstructionScript"), *BlueprintName));
+    }
+
+    // Build a set of root nodes for the is_root flag lookup.
+    TSet<USCS_Node*> RootSet;
+    for (USCS_Node* RootNode : Blueprint->SimpleConstructionScript->GetRootNodes())
+    {
+        if (RootNode)
+        {
+            RootSet.Add(RootNode);
+        }
+    }
+
+    // Build a child->parent map for parent_name lookup.
+    TMap<USCS_Node*, USCS_Node*> ParentMap;
+    for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
+    {
+        if (!Node) continue;
+        for (USCS_Node* Child : Node->GetChildNodes())
+        {
+            if (Child)
+            {
+                ParentMap.Add(Child, Node);
+            }
+        }
+    }
+
+    TArray<TSharedPtr<FJsonValue>> ComponentsArr;
+    for (USCS_Node* Node : Blueprint->SimpleConstructionScript->GetAllNodes())
+    {
+        if (!Node) continue;
+
+        TSharedPtr<FJsonObject> NodeObj = MakeShared<FJsonObject>();
+        NodeObj->SetStringField(TEXT("name"), Node->GetVariableName().ToString());
+
+        FString ClassName = TEXT("(unknown)");
+        if (Node->ComponentClass)
+        {
+            ClassName = Node->ComponentClass->GetName();
+        }
+        else if (Node->ComponentTemplate)
+        {
+            ClassName = Node->ComponentTemplate->GetClass()->GetName();
+        }
+        NodeObj->SetStringField(TEXT("class"), ClassName);
+
+        USCS_Node* const* ParentPtr = ParentMap.Find(Node);
+        if (ParentPtr && *ParentPtr)
+        {
+            NodeObj->SetStringField(TEXT("parent_name"), (*ParentPtr)->GetVariableName().ToString());
+        }
+        else
+        {
+            NodeObj->SetStringField(TEXT("parent_name"), TEXT(""));
+        }
+
+        NodeObj->SetBoolField(TEXT("is_root"), RootSet.Contains(Node));
+
+        // Relative transform (only meaningful for USceneComponent templates)
+        USceneComponent* SceneTpl = Cast<USceneComponent>(Node->ComponentTemplate);
+        if (SceneTpl)
+        {
+            const FVector Loc = SceneTpl->GetRelativeLocation();
+            const FRotator Rot = SceneTpl->GetRelativeRotation();
+            const FVector Scale = SceneTpl->GetRelativeScale3D();
+
+            TArray<TSharedPtr<FJsonValue>> LocArr;
+            LocArr.Add(MakeShared<FJsonValueNumber>(Loc.X));
+            LocArr.Add(MakeShared<FJsonValueNumber>(Loc.Y));
+            LocArr.Add(MakeShared<FJsonValueNumber>(Loc.Z));
+            NodeObj->SetArrayField(TEXT("relative_location"), LocArr);
+
+            TArray<TSharedPtr<FJsonValue>> RotArr;
+            RotArr.Add(MakeShared<FJsonValueNumber>(Rot.Pitch));
+            RotArr.Add(MakeShared<FJsonValueNumber>(Rot.Yaw));
+            RotArr.Add(MakeShared<FJsonValueNumber>(Rot.Roll));
+            NodeObj->SetArrayField(TEXT("relative_rotation"), RotArr);
+
+            TArray<TSharedPtr<FJsonValue>> ScaleArr;
+            ScaleArr.Add(MakeShared<FJsonValueNumber>(Scale.X));
+            ScaleArr.Add(MakeShared<FJsonValueNumber>(Scale.Y));
+            ScaleArr.Add(MakeShared<FJsonValueNumber>(Scale.Z));
+            NodeObj->SetArrayField(TEXT("relative_scale"), ScaleArr);
+        }
+
+        ComponentsArr.Add(MakeShared<FJsonValueObject>(NodeObj));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+    Result->SetArrayField(TEXT("components"), ComponentsArr);
+    Result->SetNumberField(TEXT("count"), ComponentsArr.Num());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetComponentTransform(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+    FString ComponentName;
+    if (!Params->TryGetStringField(TEXT("component_name"), ComponentName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'component_name' parameter"));
+    }
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+    if (!Blueprint->SimpleConstructionScript)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint '%s' has no SimpleConstructionScript"), *BlueprintName));
+    }
+
+    USCS_Node* TargetNode = FindSCSNodeByName(Blueprint, ComponentName);
+    if (!TargetNode || !TargetNode->ComponentTemplate)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Component not found in blueprint: %s"), *ComponentName));
+    }
+
+    USceneComponent* SceneTpl = Cast<USceneComponent>(TargetNode->ComponentTemplate);
+    if (!SceneTpl)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Component '%s' is not a USceneComponent (no transform)"), *ComponentName));
+    }
+
+    bool bChanged = false;
+    if (Params->HasField(TEXT("location")))
+    {
+        SceneTpl->SetRelativeLocation(FEpicUnrealMCPCommonUtils::GetVectorFromJson(Params, TEXT("location")));
+        bChanged = true;
+    }
+    if (Params->HasField(TEXT("rotation")))
+    {
+        SceneTpl->SetRelativeRotation(FEpicUnrealMCPCommonUtils::GetRotatorFromJson(Params, TEXT("rotation")));
+        bChanged = true;
+    }
+    if (Params->HasField(TEXT("scale")))
+    {
+        SceneTpl->SetRelativeScale3D(FEpicUnrealMCPCommonUtils::GetVectorFromJson(Params, TEXT("scale")));
+        bChanged = true;
+    }
+
+    if (bChanged)
+    {
+        FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+        if (UPackage* Pkg = Blueprint->GetPackage())
+        {
+            Pkg->MarkPackageDirty();
+        }
+    }
+
+    const FVector Loc = SceneTpl->GetRelativeLocation();
+    const FRotator Rot = SceneTpl->GetRelativeRotation();
+    const FVector Scale = SceneTpl->GetRelativeScale3D();
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+    Result->SetStringField(TEXT("component_name"), ComponentName);
+
+    TArray<TSharedPtr<FJsonValue>> LocArr;
+    LocArr.Add(MakeShared<FJsonValueNumber>(Loc.X));
+    LocArr.Add(MakeShared<FJsonValueNumber>(Loc.Y));
+    LocArr.Add(MakeShared<FJsonValueNumber>(Loc.Z));
+    Result->SetArrayField(TEXT("relative_location"), LocArr);
+
+    TArray<TSharedPtr<FJsonValue>> RotArr;
+    RotArr.Add(MakeShared<FJsonValueNumber>(Rot.Pitch));
+    RotArr.Add(MakeShared<FJsonValueNumber>(Rot.Yaw));
+    RotArr.Add(MakeShared<FJsonValueNumber>(Rot.Roll));
+    Result->SetArrayField(TEXT("relative_rotation"), RotArr);
+
+    TArray<TSharedPtr<FJsonValue>> ScaleArr;
+    ScaleArr.Add(MakeShared<FJsonValueNumber>(Scale.X));
+    ScaleArr.Add(MakeShared<FJsonValueNumber>(Scale.Y));
+    ScaleArr.Add(MakeShared<FJsonValueNumber>(Scale.Z));
+    Result->SetArrayField(TEXT("relative_scale"), ScaleArr);
+
+    Result->SetBoolField(TEXT("changed"), bChanged);
     Result->SetBoolField(TEXT("success"), true);
     return Result;
 }

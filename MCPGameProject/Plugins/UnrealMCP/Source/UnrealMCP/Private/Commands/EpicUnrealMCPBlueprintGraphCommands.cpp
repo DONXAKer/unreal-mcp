@@ -85,6 +85,27 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintGraphCommands::HandleCommand(cons
     {
         return HandleFindBlueprintNodes(Params);
     }
+    // Phase 1B (v1.11.0) — Variable lifecycle
+    else if (CommandType == TEXT("rename_blueprint_variable"))
+    {
+        return FBPVariables::RenameVariable(Params);
+    }
+    else if (CommandType == TEXT("delete_blueprint_variable"))
+    {
+        return FBPVariables::DeleteVariable(Params);
+    }
+    else if (CommandType == TEXT("set_variable_default_value"))
+    {
+        return FBPVariables::SetVariableDefaultValue(Params);
+    }
+    else if (CommandType == TEXT("list_blueprint_variables"))
+    {
+        return FBPVariables::ListVariables(Params);
+    }
+    else if (CommandType == TEXT("set_blueprint_variable_flags"))
+    {
+        return FBPVariables::SetVariableFlags(Params);
+    }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint graph command: %s"), *CommandType));
 }
