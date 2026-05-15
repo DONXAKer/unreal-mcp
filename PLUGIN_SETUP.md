@@ -112,7 +112,27 @@ uv run unreal_mcp_server_advanced.py
 }
 ```
 
-## Plugin structure (v1.16.0+)
+## Naming convention (adopted v1.17.0)
+
+**New commands MUST use `subject_first` style**: `<domain>_<verb>` where
+domain is the noun the operation acts on (`blueprint`, `variable`, `function`,
+`component`, `node`, `pin`, `anim`, `widget`, etc.) and verb is the action
+(`create`, `add`, `delete`, `rename`, `list`, `compile`, `set_<x>`, `get_<x>`).
+
+Rationale: grouping by subject keeps related operations alphabetically
+adjacent (`variable_create` / `variable_delete` / `variable_list` cluster
+together rather than scattering across `c-`, `d-`, `l-` prefixes), which
+makes the surface easier to scan in `EpicUnrealMCPBridge.cpp` allow-list and
+in the Python `@mcp.tool()` autocomplete.
+
+**Legacy verb_first names remain supported** — existing callers
+(`tasks/active/*.md`, recipes, smoke tests, downstream agent prompts) keep
+working unchanged. There is no deprecation timeline; both styles coexist.
+
+The `unreal-mcp-plugin-dev` agent enforces this rule when implementing new
+commands (see `.claude/agents/unreal-mcp-plugin-dev.md`).
+
+## Plugin structure (v1.17.0+)
 
 ### Command dispatchers (`Private/Commands/`)
 
@@ -123,6 +143,14 @@ uv run unreal_mcp_server_advanced.py
 - `AnimationBPCommands` (1.16.0+) — Animation Blueprints (skeleton, state machine, transitions, play anim, blend space)
 - `InputCommands` (1.10.0+) — Input action / axis mappings
 - `AssetCommands`, `TextureCommands`, `MaterialCommands`, `MeshCommands`, `LevelCommands`, `DataAssetCommands`, `NiagaraCommands` — content primitives
+
+### Python `@mcp.tool()` modules (`Python/tools/`)
+
+Full surface as of v1.17.0 — every outer-bridge command has a typed FastMCP wrapper:
+
+- `blueprint_tools.py`, `node_tools.py`, `editor_tools.py`, `umg_tools.py`, `project_tools.py` — core (pre-1.16.0)
+- `animation_tools.py` (1.16.0+) — Animation Blueprint operations
+- `level_tools.py`, `material_tools.py`, `asset_tools.py`, `texture_tools.py`, `mesh_tools.py`, `data_asset_tools.py`, `niagara_tools.py` (1.17.0+) — content primitives
 
 ### Blueprint Graph managers (`Private/Commands/BlueprintGraph/`)
 

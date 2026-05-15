@@ -219,12 +219,37 @@ After editing `primitives.py` or other Python tools — restart the server.
 
 After editing C++ commands — rebuild the UE plugin, restart the Editor.
 
-## Available Commands (v1.16.0)
+## Available Commands (v1.17.0)
 
-The plugin's outer bridge (`EpicUnrealMCPBridge.cpp`) routes ~95 command types
+The plugin's outer bridge (`EpicUnrealMCPBridge.cpp`) routes 109 command types
 to category-specific dispatchers. The Python MCP server (`Python/tools/*.py`)
-exposes 68 of these as `@mcp.tool()` entries; recipes wrap the remainder via
-`primitives.py`.
+exposes **all 109** of these as `@mcp.tool()` entries (as of v1.17.0); recipes
+wrap higher-level workflows via `primitives.py`.
+
+### Naming convention (adopted v1.17.0)
+
+**Going forward, new commands MUST use `subject_first` style** to keep
+related operations grouped alphabetically and discoverable by tab-completion:
+
+| Domain | Preferred style | Examples |
+|---|---|---|
+| Blueprint class lifecycle | `blueprint_<verb>` | `blueprint_create`, `blueprint_compile`, `blueprint_list` |
+| Variables | `variable_<verb>` | `variable_create`, `variable_rename`, `variable_list` |
+| Functions | `function_<verb>` | `function_create`, `function_set_flags` |
+| Components | `component_<verb>` | `component_add`, `component_delete`, `component_list` |
+| Nodes | `node_<verb>` | `node_add`, `node_connect`, `node_delete` |
+| Pins | `pin_<verb>` | `pin_split`, `pin_set_default`, `pin_disconnect` |
+| Animation BP | `anim_<verb>` | `anim_create`, `anim_set_skeleton` |
+
+**Legacy names are retained** for backward compatibility. Existing pipelines
+and tasks (`tasks/active/*.md`) continue to work with `create_blueprint`,
+`compile_blueprint`, `rename_component`, etc. There is no plan to remove
+legacy names — both styles will be supported indefinitely.
+
+When implementing a new command, the `unreal-mcp-plugin-dev` agent enforces
+`subject_first` for the new identifier and adds the canonical name to the
+outer bridge allow-list. Old verb_first names are added ONLY when the agent
+explicitly notes they are needed for an existing caller in `tasks/active/`.
 
 ### Outer Commands (routed by EpicUnrealMCPBridge)
 
