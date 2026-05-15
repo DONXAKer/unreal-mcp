@@ -63,7 +63,10 @@ public class UnrealMCP : ModuleRules
 				// UCSVImportFactory — in UnrealEd (already in PublicDependencyModuleNames)
 				"AudioEditor",      // For USoundFactory (Factories/SoundFactory.h)
 				"Niagara",          // For UNiagaraSystem (NiagaraCommands)
-				"NiagaraEditor"     // For Niagara editor utilities (NiagaraCommands)
+				"NiagaraEditor",    // For Niagara editor utilities (NiagaraCommands)
+				// Phase 3B (v1.16.0) — Animation Blueprint support (AnimationBPCommands)
+				"AnimGraph",        // UAnimGraphNode_StateMachine / SequencePlayer / BlendSpacePlayer, UAnimStateNode, UAnimStateTransitionNode, UAnimationStateMachineGraph, UAnimationGraph, schemas
+				"AnimGraphRuntime"  // FAnimNode_BlendSpacePlayer setters (ANIMGRAPHRUNTIME_API)
 			}
 		);
 		

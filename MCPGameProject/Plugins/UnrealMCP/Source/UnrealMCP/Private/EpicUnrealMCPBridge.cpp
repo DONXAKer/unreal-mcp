@@ -64,6 +64,7 @@
 #include "Commands/DataAssetCommands.h"
 #include "Commands/NiagaraCommands.h"
 #include "Commands/InputCommands.h"
+#include "Commands/AnimationBPCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -83,6 +84,7 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     DataAssetCommands = MakeShared<FDataAssetCommands>();
     NiagaraCommands = MakeShared<FNiagaraCommands>();
     InputCommands = MakeShared<FInputCommands>();
+    AnimationBPCommands = MakeShared<FAnimationBPCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -99,6 +101,7 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     DataAssetCommands.Reset();
     NiagaraCommands.Reset();
     InputCommands.Reset();
+    AnimationBPCommands.Reset();
 }
 
 // Initialize subsystem
@@ -361,6 +364,17 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("set_niagara_parameters"))
             {
                 ResultJson = NiagaraCommands->HandleCommand(CommandType, Params);
+            }
+            // Phase 3B (v1.16.0) — Animation Blueprint Commands
+            else if (CommandType == TEXT("create_animation_blueprint") ||
+                     CommandType == TEXT("set_anim_skeleton") ||
+                     CommandType == TEXT("add_state_machine") ||
+                     CommandType == TEXT("add_anim_state") ||
+                     CommandType == TEXT("add_anim_transition") ||
+                     CommandType == TEXT("add_play_anim_node") ||
+                     CommandType == TEXT("add_blend_space_player_node"))
+            {
+                ResultJson = AnimationBPCommands->HandleCommand(CommandType, Params);
             }
             // Blueprint Graph Commands
             else if (CommandType == TEXT("add_blueprint_node") ||

@@ -20,6 +20,7 @@
 #include "Commands/DataAssetCommands.h"
 #include "Commands/NiagaraCommands.h"
 #include "Commands/InputCommands.h"
+#include "Commands/AnimationBPCommands.h"
 #include "EpicUnrealMCPBridge.generated.h"
 
 class FMCPServerRunnable;
@@ -75,4 +76,5 @@ private:
 	TSharedPtr<FDataAssetCommands> DataAssetCommands;
 	TSharedPtr<FNiagaraCommands> NiagaraCommands;
 	TSharedPtr<FInputCommands> InputCommands;
+	TSharedPtr<FAnimationBPCommands> AnimationBPCommands;
 };

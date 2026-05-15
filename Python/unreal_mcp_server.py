@@ -271,6 +271,7 @@ from tools.blueprint_tools import register_blueprint_tools
 from tools.node_tools import register_blueprint_node_tools
 from tools.project_tools import register_project_tools
 from tools.umg_tools import register_umg_tools
+from tools.animation_tools import register_animation_tools
 
 # Register tools
 register_editor_tools(mcp)
@@ -278,6 +279,7 @@ register_blueprint_tools(mcp)
 register_blueprint_node_tools(mcp)
 register_project_tools(mcp)
 register_umg_tools(mcp)
+register_animation_tools(mcp)
 
 # --- MCP Content Pipeline (MCP-CONTENT-001): config + recipe framework ---
 from tools import project_config as _project_config
