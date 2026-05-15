@@ -120,12 +120,15 @@ UK2Node* FFlowControlExtraNodeCreator::CreateMultiGateNode(UEdGraph* Graph, cons
 		CurrentCount++;
 	}
 
-	// IsRandom / Loop — это пины (см. K2Node_MultiGate API: GetIsRandomPin/GetLoopPin),
-	// их состояние задаётся через DefaultValue.
+	// IsRandom / Loop — это пины. UK2Node_MultiGate's GetIsRandomPin/GetLoopPin
+	// declared in header but NOT exported from BlueprintGraph module (no BLUEPRINTGRAPH_API).
+	// Look up by pin name directly — the typical UE 5.x naming is "bRandom"/"bLoop".
 	bool bIsRandom = false;
 	if (Params->TryGetBoolField(TEXT("is_random"), bIsRandom))
 	{
-		if (UEdGraphPin* RandomPin = MultiGateNode->GetIsRandomPin())
+		UEdGraphPin* RandomPin = MultiGateNode->FindPin(TEXT("bRandom"), EGPD_Input);
+		if (!RandomPin) { RandomPin = MultiGateNode->FindPin(TEXT("IsRandom"), EGPD_Input); }
+		if (RandomPin)
 		{
 			RandomPin->DefaultValue = bIsRandom ? TEXT("true") : TEXT("false");
 		}
@@ -134,7 +137,9 @@ UK2Node* FFlowControlExtraNodeCreator::CreateMultiGateNode(UEdGraph* Graph, cons
 	bool bLoop = false;
 	if (Params->TryGetBoolField(TEXT("loop"), bLoop))
 	{
-		if (UEdGraphPin* LoopPin = MultiGateNode->GetLoopPin())
+		UEdGraphPin* LoopPin = MultiGateNode->FindPin(TEXT("bLoop"), EGPD_Input);
+		if (!LoopPin) { LoopPin = MultiGateNode->FindPin(TEXT("Loop"), EGPD_Input); }
+		if (LoopPin)
 		{
 			LoopPin->DefaultValue = bLoop ? TEXT("true") : TEXT("false");
 		}
