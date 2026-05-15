@@ -707,4 +707,214 @@ def register_blueprint_tools(mcp: FastMCP):
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Phase 3A (v1.15.0) — Blueprint Interfaces
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def create_blueprint_interface(
+        ctx: Context,
+        interface_name: str,
+        package_path: str = "/Game/Interfaces",
+    ) -> Dict[str, Any]:
+        """
+        Create a new Blueprint Interface asset.
+
+        Args:
+            interface_name: Asset name for the new interface (e.g. "BPI_Damageable").
+            package_path: /Game-relative folder. Default: /Game/Interfaces.
+
+        Returns:
+            Dict with interface_name, path, success.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "interface_name": interface_name,
+                "package_path": package_path,
+            }
+            logger.info(f"Creating blueprint interface: {params}")
+            response = unreal.send_command("create_blueprint_interface", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error creating blueprint interface: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def implement_blueprint_interface(
+        ctx: Context,
+        blueprint_name: str,
+        interface_path: str,
+    ) -> Dict[str, Any]:
+        """
+        Add a Blueprint Interface to a Blueprint's implemented interfaces list.
+
+        Args:
+            blueprint_name: Target Blueprint short name or full /Game/... path.
+            interface_path: Full /Game/... path to the Blueprint Interface asset
+                (e.g. "/Game/Interfaces/BPI_Damageable").
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "interface_path": interface_path,
+            }
+            logger.info(f"Implementing interface: {params}")
+            response = unreal.send_command("implement_blueprint_interface", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error implementing blueprint interface: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def remove_blueprint_interface(
+        ctx: Context,
+        blueprint_name: str,
+        interface_path: str,
+    ) -> Dict[str, Any]:
+        """
+        Remove an interface from a Blueprint. Overridden functions are kept.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            interface_path: Full /Game/... path to the interface asset.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "interface_path": interface_path,
+            }
+            logger.info(f"Removing interface: {params}")
+            response = unreal.send_command("remove_blueprint_interface", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error removing blueprint interface: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def add_interface_function(
+        ctx: Context,
+        interface_name: str,
+        function_name: str,
+        inputs: List[Dict[str, str]] = None,
+        outputs: List[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Add a function signature to a Blueprint Interface. The function will show up
+        as an overridable event/function in any Blueprint that implements the interface.
+
+        Args:
+            interface_name: Name (or /Game/... path) of the interface Blueprint.
+            function_name: New function name (must be a valid identifier).
+            inputs: Optional list of {name, type}. Types: bool, int, float, string,
+                text, name, vector, rotator, object.
+            outputs: Optional list of {name, type}. Same supported types.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {
+                "interface_name": interface_name,
+                "function_name": function_name,
+            }
+            if inputs is not None:
+                params["inputs"] = inputs
+            if outputs is not None:
+                params["outputs"] = outputs
+            logger.info(f"Adding interface function: {params}")
+            response = unreal.send_command("add_interface_function", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error adding interface function: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    # ─────────────────────────────────────────────────────────────────────
+    # Phase 3D (v1.15.0) — Compile diagnostics
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def compile_blueprint_verbose(
+        ctx: Context,
+        blueprint_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Compile a Blueprint and return structured diagnostics.
+
+        Returns:
+            Dict with:
+                - compiled (bool): true if num_errors == 0
+                - num_errors, num_warnings (int)
+                - errors, warnings, notes: lists of {text, node_id?, node_title?}
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {"blueprint_name": blueprint_name}
+            logger.info(f"Compiling blueprint (verbose): {blueprint_name}")
+            response = unreal.send_command("compile_blueprint_verbose", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error compiling blueprint (verbose): {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def validate_blueprint(
+        ctx: Context,
+        blueprint_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Run structural validation across all graphs of a Blueprint without doing a
+        full compile. Picks up orphaned pins + per-node ValidateNodeDuringCompilation
+        warnings/errors.
+
+        Returns:
+            Dict with num_errors, num_warnings, errors[], warnings[] (same shape as
+            compile_blueprint_verbose).
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {"blueprint_name": blueprint_name}
+            logger.info(f"Validating blueprint: {blueprint_name}")
+            response = unreal.send_command("validate_blueprint", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error validating blueprint: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Blueprint tools registered successfully")

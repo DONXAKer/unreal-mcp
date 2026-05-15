@@ -831,4 +831,196 @@ def register_blueprint_node_tools(mcp: FastMCP):
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Phase 3C (v1.15.0) — Pin-level operations
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def split_struct_pin(
+        ctx: Context,
+        blueprint_name: str,
+        node_id: str,
+        pin_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Split a struct pin into per-field sub-pins (e.g. FVector → X/Y/Z).
+
+        Args:
+            blueprint_name: Target Blueprint.
+            node_id: NodeGuid string of the node owning the pin.
+            pin_name: Name of the struct pin to split.
+
+        Returns:
+            Dict with sub_pin_names[] and num_sub_pins.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "node_id": node_id,
+                "pin_name": pin_name,
+            }
+            logger.info(f"Splitting struct pin: {params}")
+            response = unreal.send_command("split_struct_pin", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error splitting struct pin: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def recombine_struct_pin(
+        ctx: Context,
+        blueprint_name: str,
+        node_id: str,
+        pin_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Inverse of split_struct_pin — collapse sub-pins back into one struct pin.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            node_id: NodeGuid string of the node.
+            pin_name: The parent split pin OR any of its sub-pins.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "node_id": node_id,
+                "pin_name": pin_name,
+            }
+            logger.info(f"Recombining struct pin: {params}")
+            response = unreal.send_command("recombine_struct_pin", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error recombining struct pin: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def set_pin_default_value(
+        ctx: Context,
+        blueprint_name: str,
+        node_id: str,
+        pin_name: str,
+        default_value: str,
+    ) -> Dict[str, Any]:
+        """
+        Set the literal default value of a pin (unconnected pins use this value at runtime).
+
+        For primitive pins (bool/int/float/string): UEdGraphSchema_K2::TrySetDefaultValue
+        validates the string. For Object/Class/SoftObject/SoftClass pins: the value is
+        treated as a full /Game/... path and loaded into Pin->DefaultObject.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            node_id: NodeGuid string.
+            pin_name: Pin to mutate.
+            default_value: String form ("true"/"false", "42", "1.5", "Hello", "(X=0,Y=0,Z=0)",
+                "/Game/Path/Asset" for object refs, "None" to clear an object ref).
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "node_id": node_id,
+                "pin_name": pin_name,
+                "default_value": str(default_value),
+            }
+            logger.info(f"Setting pin default value: {params}")
+            response = unreal.send_command("set_pin_default_value", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting pin default value: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def get_pin_info(
+        ctx: Context,
+        blueprint_name: str,
+        node_id: str,
+        pin_name: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Read-only pin inspection. If pin_name is provided, returns info for a single
+        pin under 'pin'. Otherwise returns info for all pins on the node under 'pins[]'.
+
+        Per-pin fields:
+            name, direction (input/output), pin_category, pin_sub_category,
+            pin_sub_category_object?, default_value, default_object?, default_text?,
+            is_split, is_orphaned, is_hidden, num_connections,
+            connection_targets[{pin_name, node_id, node_title}].
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {
+                "blueprint_name": blueprint_name,
+                "node_id": node_id,
+            }
+            if pin_name is not None:
+                params["pin_name"] = pin_name
+            logger.info(f"Getting pin info: {params}")
+            response = unreal.send_command("get_pin_info", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error getting pin info: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def disconnect_pin(
+        ctx: Context,
+        blueprint_name: str,
+        node_id: str,
+        pin_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Break all links on a pin (UEdGraphSchema_K2::BreakPinLinks).
+
+        Returns:
+            Dict with num_links_broken (int) — how many connections existed before
+            the call.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "node_id": node_id,
+                "pin_name": pin_name,
+            }
+            logger.info(f"Disconnecting pin: {params}")
+            response = unreal.send_command("disconnect_pin", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error disconnecting pin: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Blueprint node tools registered successfully")

@@ -29,9 +29,24 @@
 #include "UObject/FieldPath.h"
 #include "EditorAssetLibrary.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/Pawn.h"
 #include "Kismet/GameplayStatics.h"
+// Phase 3A (v1.15.0) — Blueprint Interfaces
+#include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphNode.h"
+#include "EdGraphSchema_K2.h"
+#include "K2Node_FunctionEntry.h"
+#include "K2Node_FunctionResult.h"
+#include "UObject/Interface.h"
+#include "UObject/TopLevelAssetPath.h"
+// Phase 3D (v1.15.0) — Compile diagnostics
+#include "KismetCompilerModule.h"
+#include "Kismet2/CompilerResultsLog.h"
+#include "Logging/TokenizedMessage.h"
+#include "Misc/UObjectToken.h"
 
 FEpicUnrealMCPBlueprintCommands::FEpicUnrealMCPBlueprintCommands()
 {
@@ -146,6 +161,32 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     else if (CommandType == TEXT("get_blueprint_class_info"))
     {
         return HandleGetBlueprintClassInfo(Params);
+    }
+    // Phase 3A (v1.15.0) — Blueprint Interfaces
+    else if (CommandType == TEXT("create_blueprint_interface"))
+    {
+        return HandleCreateBlueprintInterface(Params);
+    }
+    else if (CommandType == TEXT("implement_blueprint_interface"))
+    {
+        return HandleImplementBlueprintInterface(Params);
+    }
+    else if (CommandType == TEXT("remove_blueprint_interface"))
+    {
+        return HandleRemoveBlueprintInterface(Params);
+    }
+    else if (CommandType == TEXT("add_interface_function"))
+    {
+        return HandleAddInterfaceFunction(Params);
+    }
+    // Phase 3D (v1.15.0) — Compile diagnostics
+    else if (CommandType == TEXT("compile_blueprint_verbose"))
+    {
+        return HandleCompileBlueprintVerbose(Params);
+    }
+    else if (CommandType == TEXT("validate_blueprint"))
+    {
+        return HandleValidateBlueprint(Params);
     }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint command: %s"), *CommandType));
@@ -3262,6 +3303,677 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleGetBlueprintClass
     Result->SetNumberField(TEXT("num_functions"), NumFunctions);
     Result->SetNumberField(TEXT("num_components"), NumComponents);
 
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3A (v1.15.0) — Blueprint Interfaces
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Helper: normalize folder_path to "/Game/.../"-form with trailing slash.
+static FString NormalizePackagePath(const FString& InRaw, const FString& Fallback)
+{
+    if (InRaw.IsEmpty())
+    {
+        return Fallback;
+    }
+    FString P = InRaw;
+    P.TrimStartAndEndInline();
+
+    if (!P.StartsWith(TEXT("/Game/")) && !P.StartsWith(TEXT("Game/")))
+    {
+        P = TEXT("/Game/") + P;
+    }
+    if (P.StartsWith(TEXT("Game/")))
+    {
+        P = TEXT("/") + P;
+    }
+    if (!P.StartsWith(TEXT("/")))
+    {
+        P = TEXT("/") + P;
+    }
+    if (P.EndsWith(TEXT("/")))
+    {
+        // Strip trailing slash for AssetTools::CreateAsset (expects "/Game/Foo", not "/Game/Foo/")
+        P.RemoveAt(P.Len() - 1);
+    }
+    return P;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCreateBlueprintInterface(const TSharedPtr<FJsonObject>& Params)
+{
+    FString InterfaceName;
+    if (!Params->TryGetStringField(TEXT("interface_name"), InterfaceName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'interface_name' parameter"));
+    }
+
+    FString PackagePathRaw;
+    Params->TryGetStringField(TEXT("package_path"), PackagePathRaw);
+    const FString PackagePath = NormalizePackagePath(PackagePathRaw, TEXT("/Game/Interfaces"));
+
+    const FString FullAssetPath = PackagePath + TEXT("/") + InterfaceName;
+    if (UEditorAssetLibrary::DoesAssetExist(FullAssetPath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Blueprint interface already exists: %s"), *FullAssetPath));
+    }
+
+    // Configure factory for an Interface-type Blueprint.
+    UBlueprintFactory* Factory = NewObject<UBlueprintFactory>();
+    Factory->ParentClass = UInterface::StaticClass();
+    Factory->BlueprintType = BPTYPE_Interface;
+
+    IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+    UObject* NewAsset = AssetTools.CreateAsset(InterfaceName, PackagePath, UBlueprint::StaticClass(), Factory);
+    if (!NewAsset)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("AssetTools::CreateAsset returned null for '%s'"), *FullAssetPath));
+    }
+
+    UBlueprint* NewBP = Cast<UBlueprint>(NewAsset);
+    if (!NewBP)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Created asset is not a UBlueprint: %s"), *FullAssetPath));
+    }
+
+    if (UPackage* Pkg = NewBP->GetPackage())
+    {
+        Pkg->MarkPackageDirty();
+    }
+    UEditorAssetLibrary::SaveAsset(FullAssetPath, /*bOnlyIfIsDirty=*/false);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("interface_name"), InterfaceName);
+    Result->SetStringField(TEXT("path"), FullAssetPath);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+// Helper: load an interface UClass from a /Game/... path. Tries object class first
+// (_C suffix) then falls back to UBlueprint::GeneratedClass.
+static UClass* ResolveInterfaceClass(const FString& InterfacePath)
+{
+    if (InterfacePath.IsEmpty())
+    {
+        return nullptr;
+    }
+    // Strip any trailing ".Name" so we can decide what to load.
+    FString PkgOnly = InterfacePath;
+    int32 DotIdx;
+    if (PkgOnly.FindChar('.', DotIdx))
+    {
+        PkgOnly = PkgOnly.Left(DotIdx);
+    }
+
+    // /Game/Path/Foo -> /Game/Path/Foo.Foo_C is the generated UClass.
+    const FString AssetName = FPaths::GetBaseFilename(PkgOnly);
+    const FString GeneratedClassPath = FString::Printf(TEXT("%s.%s_C"), *PkgOnly, *AssetName);
+
+    UClass* IfaceClass = LoadObject<UClass>(nullptr, *GeneratedClassPath);
+    if (IfaceClass)
+    {
+        return IfaceClass;
+    }
+
+    // Fallback: load the Blueprint asset and grab GeneratedClass.
+    const FString ObjectPath = FString::Printf(TEXT("%s.%s"), *PkgOnly, *AssetName);
+    if (UBlueprint* BP = LoadObject<UBlueprint>(nullptr, *ObjectPath))
+    {
+        return BP->GeneratedClass;
+    }
+    return nullptr;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleImplementBlueprintInterface(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    FString InterfacePath;
+    if (!Params->TryGetStringField(TEXT("interface_path"), InterfacePath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'interface_path' parameter"));
+    }
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint && BlueprintName.StartsWith(TEXT("/")))
+    {
+        Blueprint = Cast<UBlueprint>(UEditorAssetLibrary::LoadAsset(BlueprintName));
+    }
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+
+    UClass* InterfaceClass = ResolveInterfaceClass(InterfacePath);
+    if (!InterfaceClass)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Could not resolve interface class: %s"), *InterfacePath));
+    }
+
+    // FBlueprintEditorUtils::ImplementNewInterface takes FTopLevelAssetPath of the interface class.
+    const FTopLevelAssetPath InterfaceAssetPath(InterfaceClass->GetPathName());
+    const bool bImplemented = FBlueprintEditorUtils::ImplementNewInterface(Blueprint, InterfaceAssetPath);
+    if (!bImplemented)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("ImplementNewInterface failed for '%s' on Blueprint '%s' (already implemented or invalid class?)"),
+                *InterfaceClass->GetPathName(), *BlueprintName));
+    }
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    // Save the BP so the implementation persists.
+    FString PackageName = Blueprint->GetPathName();
+    int32 DotIdx;
+    if (PackageName.FindChar('.', DotIdx))
+    {
+        PackageName = PackageName.Left(DotIdx);
+    }
+    UEditorAssetLibrary::SaveAsset(PackageName, /*bOnlyIfIsDirty=*/false);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+    Result->SetStringField(TEXT("interface_path"), InterfaceClass->GetPathName());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleRemoveBlueprintInterface(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    FString InterfacePath;
+    if (!Params->TryGetStringField(TEXT("interface_path"), InterfacePath))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'interface_path' parameter"));
+    }
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint && BlueprintName.StartsWith(TEXT("/")))
+    {
+        Blueprint = Cast<UBlueprint>(UEditorAssetLibrary::LoadAsset(BlueprintName));
+    }
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+
+    UClass* InterfaceClass = ResolveInterfaceClass(InterfacePath);
+    if (!InterfaceClass)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Could not resolve interface class: %s"), *InterfacePath));
+    }
+
+    const FTopLevelAssetPath InterfaceAssetPath(InterfaceClass->GetPathName());
+    // bPreserveFunctions=true keeps any overridden functions in the Blueprint after the
+    // interface is detached. This matches Editor's "Remove Interface" behaviour.
+    FBlueprintEditorUtils::RemoveInterface(Blueprint, InterfaceAssetPath, /*bPreserveFunctions=*/true);
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    FString PackageName = Blueprint->GetPathName();
+    int32 DotIdx;
+    if (PackageName.FindChar('.', DotIdx))
+    {
+        PackageName = PackageName.Left(DotIdx);
+    }
+    UEditorAssetLibrary::SaveAsset(PackageName, /*bOnlyIfIsDirty=*/false);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+    Result->SetStringField(TEXT("interface_path"), InterfaceClass->GetPathName());
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+// Small helper for HandleAddInterfaceFunction: translates "bool"/"int"/"vector"/...
+// the same way FFunctionIO::GetPropertyTypeFromString does. Kept local to avoid
+// exporting that helper.
+static FEdGraphPinType MakeInterfacePinType(const FString& TypeName)
+{
+    FEdGraphPinType PinType;
+    if (TypeName == TEXT("bool"))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Boolean;
+    }
+    else if (TypeName == TEXT("int") || TypeName == TEXT("int32"))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Int;
+    }
+    else if (TypeName == TEXT("float"))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Real;
+        PinType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
+    }
+    else if (TypeName == TEXT("string"))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_String;
+    }
+    else if (TypeName == TEXT("text"))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Text;
+    }
+    else if (TypeName == TEXT("name"))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Name;
+    }
+    else if (TypeName == TEXT("vector") || TypeName == TEXT("FVector"))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
+        PinType.PinSubCategoryObject = TBaseStructure<FVector>::Get();
+    }
+    else if (TypeName == TEXT("rotator") || TypeName == TEXT("FRotator"))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
+        PinType.PinSubCategoryObject = TBaseStructure<FRotator>::Get();
+    }
+    else if (TypeName == TEXT("object"))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Object;
+    }
+    else
+    {
+        // Fallback: object — interface signatures can be tightened in the implementer.
+        UE_LOG(LogTemp, Warning, TEXT("AddInterfaceFunction: Unknown type '%s', defaulting to object"), *TypeName);
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Object;
+    }
+    return PinType;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleAddInterfaceFunction(const TSharedPtr<FJsonObject>& Params)
+{
+    FString InterfaceName;
+    if (!Params->TryGetStringField(TEXT("interface_name"), InterfaceName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'interface_name' parameter"));
+    }
+
+    FString FunctionName;
+    if (!Params->TryGetStringField(TEXT("function_name"), FunctionName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'function_name' parameter"));
+    }
+
+    // Locate the interface Blueprint. Search /Game/Blueprints/, /Game/Interfaces/, or use
+    // a full /Game/... path if given.
+    UBlueprint* Blueprint = nullptr;
+    if (InterfaceName.StartsWith(TEXT("/")))
+    {
+        Blueprint = Cast<UBlueprint>(UEditorAssetLibrary::LoadAsset(InterfaceName));
+    }
+    if (!Blueprint)
+    {
+        Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(InterfaceName);
+    }
+    if (!Blueprint)
+    {
+        const TArray<FString> SearchDirs = {
+            TEXT("/Game/Interfaces/"),
+            TEXT("/Game/Blueprints/Interfaces/"),
+            TEXT("/Game/UI/Interfaces/"),
+        };
+        for (const FString& Dir : SearchDirs)
+        {
+            const FString ObjectPath = Dir + InterfaceName + TEXT(".") + InterfaceName;
+            if (UObject* Asset = UEditorAssetLibrary::LoadAsset(ObjectPath))
+            {
+                Blueprint = Cast<UBlueprint>(Asset);
+                if (Blueprint) break;
+            }
+        }
+    }
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Interface Blueprint not found: %s"), *InterfaceName));
+    }
+
+    if (Blueprint->BlueprintType != BPTYPE_Interface)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Blueprint '%s' is not an Interface (BlueprintType=%d)"),
+                *InterfaceName, (int32)Blueprint->BlueprintType));
+    }
+
+    // Reject duplicates.
+    for (UEdGraph* G : Blueprint->FunctionGraphs)
+    {
+        if (G && G->GetFName().ToString().Equals(FunctionName, ESearchCase::IgnoreCase))
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Interface function already exists: %s"), *FunctionName));
+        }
+    }
+
+    // Create the function graph and register it with the Blueprint. AddFunctionGraph
+    // takes care of creating FunctionEntry (and FunctionResult, if outputs are added).
+    UEdGraph* NewGraph = FBlueprintEditorUtils::CreateNewGraph(
+        Blueprint,
+        FName(*FunctionName),
+        UEdGraph::StaticClass(),
+        UEdGraphSchema_K2::StaticClass());
+    if (!NewGraph)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Failed to create interface function graph"));
+    }
+    FBlueprintEditorUtils::AddFunctionGraph<UClass>(Blueprint, NewGraph, /*bIsUserCreated=*/true, nullptr);
+
+    // Find the FunctionEntry node to attach inputs as user-defined pins.
+    UK2Node_FunctionEntry* EntryNode = nullptr;
+    for (UEdGraphNode* N : NewGraph->Nodes)
+    {
+        if (N && N->IsA<UK2Node_FunctionEntry>())
+        {
+            EntryNode = Cast<UK2Node_FunctionEntry>(N);
+            break;
+        }
+    }
+    if (!EntryNode)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("FunctionEntry node not found after graph creation"));
+    }
+
+    // Inputs: array of {name, type}.
+    int32 NumInputs = 0;
+    const TArray<TSharedPtr<FJsonValue>>* InputsArr = nullptr;
+    if (Params->TryGetArrayField(TEXT("inputs"), InputsArr) && InputsArr)
+    {
+        for (const TSharedPtr<FJsonValue>& Val : *InputsArr)
+        {
+            const TSharedPtr<FJsonObject>* Obj = nullptr;
+            if (!Val.IsValid() || !Val->TryGetObject(Obj) || !Obj || !Obj->IsValid()) continue;
+
+            FString PName, PType;
+            if (!(*Obj)->TryGetStringField(TEXT("name"), PName)) continue;
+            if (!(*Obj)->TryGetStringField(TEXT("type"), PType)) continue;
+
+            // Input on interface function = output of FunctionEntry (matches FunctionIO).
+            const FEdGraphPinType PinType = MakeInterfacePinType(PType);
+            UEdGraphPin* NewPin = EntryNode->CreateUserDefinedPin(*PName, PinType, EGPD_Output);
+            if (NewPin) ++NumInputs;
+        }
+    }
+
+    // Outputs: array of {name, type}. For interface Blueprints, signature changes on
+    // FunctionEntry are enough; AddFunctionGraph will instantiate FunctionResult lazily
+    // when an implementer creates an override. We still emit warning if outputs requested.
+    int32 NumOutputs = 0;
+    const TArray<TSharedPtr<FJsonValue>>* OutputsArr = nullptr;
+    if (Params->TryGetArrayField(TEXT("outputs"), OutputsArr) && OutputsArr)
+    {
+        // Find or auto-create FunctionResult.
+        UK2Node_FunctionResult* ResultNode = nullptr;
+        for (UEdGraphNode* N : NewGraph->Nodes)
+        {
+            if (N && N->IsA<UK2Node_FunctionResult>())
+            {
+                ResultNode = Cast<UK2Node_FunctionResult>(N);
+                break;
+            }
+        }
+        if (!ResultNode)
+        {
+            // Force its creation by adding a dummy output then removing it.
+            FEdGraphPinType DummyType;
+            DummyType.PinCategory = UEdGraphSchema_K2::PC_Boolean;
+            UEdGraphPin* DummyPin = EntryNode->CreateUserDefinedPin(TEXT("__DummyOutput"), DummyType, EGPD_Input);
+            if (DummyPin)
+            {
+                for (int32 i = EntryNode->UserDefinedPins.Num() - 1; i >= 0; --i)
+                {
+                    if (EntryNode->UserDefinedPins[i]->PinName == TEXT("__DummyOutput"))
+                    {
+                        EntryNode->RemoveUserDefinedPin(EntryNode->UserDefinedPins[i]);
+                        break;
+                    }
+                }
+            }
+            for (UEdGraphNode* N : NewGraph->Nodes)
+            {
+                if (N && N->IsA<UK2Node_FunctionResult>())
+                {
+                    ResultNode = Cast<UK2Node_FunctionResult>(N);
+                    break;
+                }
+            }
+        }
+
+        if (ResultNode)
+        {
+            for (const TSharedPtr<FJsonValue>& Val : *OutputsArr)
+            {
+                const TSharedPtr<FJsonObject>* Obj = nullptr;
+                if (!Val.IsValid() || !Val->TryGetObject(Obj) || !Obj || !Obj->IsValid()) continue;
+
+                FString PName, PType;
+                if (!(*Obj)->TryGetStringField(TEXT("name"), PName)) continue;
+                if (!(*Obj)->TryGetStringField(TEXT("type"), PType)) continue;
+
+                const FEdGraphPinType PinType = MakeInterfacePinType(PType);
+                // Outputs of an interface function are inputs on FunctionResult.
+                UEdGraphPin* NewPin = ResultNode->CreateUserDefinedPin(*PName, PinType, EGPD_Input);
+                if (NewPin) ++NumOutputs;
+            }
+        }
+    }
+
+    FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+    NewGraph->NotifyGraphChanged();
+    FKismetEditorUtilities::CompileBlueprint(Blueprint);
+
+    // Save the interface asset.
+    FString PackageName = Blueprint->GetPathName();
+    int32 DotIdx;
+    if (PackageName.FindChar('.', DotIdx))
+    {
+        PackageName = PackageName.Left(DotIdx);
+    }
+    UEditorAssetLibrary::SaveAsset(PackageName, /*bOnlyIfIsDirty=*/false);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("interface_name"), InterfaceName);
+    Result->SetStringField(TEXT("function_name"), FunctionName);
+    Result->SetNumberField(TEXT("num_inputs"), NumInputs);
+    Result->SetNumberField(TEXT("num_outputs"), NumOutputs);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 3D (v1.15.0) — Compile diagnostics
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Helper: convert FTokenizedMessage to flat JSON object with text + optional node_id.
+static TSharedPtr<FJsonObject> TokenizedMessageToJson(const TSharedRef<FTokenizedMessage>& Message)
+{
+    TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+    Obj->SetStringField(TEXT("text"), Message->ToText().ToString());
+
+    // Scan tokens for first UObject reference that's an UEdGraphNode → expose node_id.
+    for (const TSharedRef<IMessageToken>& Token : Message->GetMessageTokens())
+    {
+        if (Token->GetType() == EMessageToken::Object)
+        {
+            // FUObjectToken::GetObject() returns FWeakObjectPtr (untyped). Resolve to UObject*.
+            const FWeakObjectPtr& Ref = static_cast<const FUObjectToken&>(Token.Get()).GetObject();
+            if (UObject* Resolved = Ref.Get())
+            {
+                if (UEdGraphNode* Node = Cast<UEdGraphNode>(Resolved))
+                {
+                    Obj->SetStringField(TEXT("node_id"), Node->NodeGuid.ToString());
+                    Obj->SetStringField(TEXT("node_title"),
+                        Node->GetNodeTitle(ENodeTitleType::FullTitle).ToString());
+                    break;
+                }
+            }
+        }
+    }
+    return Obj;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCompileBlueprintVerbose(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint && BlueprintName.StartsWith(TEXT("/")))
+    {
+        Blueprint = Cast<UBlueprint>(UEditorAssetLibrary::LoadAsset(BlueprintName));
+    }
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+
+    FCompilerResultsLog ResultsLog;
+    ResultsLog.bAnnotateMentionedNodes = true;
+    ResultsLog.SetSourcePath(Blueprint->GetPathName());
+    FKismetEditorUtilities::CompileBlueprint(Blueprint, EBlueprintCompileOptions::None, &ResultsLog);
+
+    TArray<TSharedPtr<FJsonValue>> Errors;
+    TArray<TSharedPtr<FJsonValue>> Warnings;
+    TArray<TSharedPtr<FJsonValue>> Notes;
+
+    for (const TSharedRef<FTokenizedMessage>& Msg : ResultsLog.Messages)
+    {
+        const EMessageSeverity::Type Severity = Msg->GetSeverity();
+        TSharedPtr<FJsonObject> Obj = TokenizedMessageToJson(Msg);
+
+        if (Severity == EMessageSeverity::Error)
+        {
+            Errors.Add(MakeShared<FJsonValueObject>(Obj));
+        }
+        else if (Severity == EMessageSeverity::Warning ||
+                 Severity == EMessageSeverity::PerformanceWarning)
+        {
+            Warnings.Add(MakeShared<FJsonValueObject>(Obj));
+        }
+        else
+        {
+            Notes.Add(MakeShared<FJsonValueObject>(Obj));
+        }
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+    Result->SetBoolField(TEXT("compiled"), ResultsLog.NumErrors == 0);
+    Result->SetNumberField(TEXT("num_errors"), ResultsLog.NumErrors);
+    Result->SetNumberField(TEXT("num_warnings"), ResultsLog.NumWarnings);
+    Result->SetArrayField(TEXT("errors"), Errors);
+    Result->SetArrayField(TEXT("warnings"), Warnings);
+    Result->SetArrayField(TEXT("notes"), Notes);
+    Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleValidateBlueprint(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_name' parameter"));
+    }
+
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint && BlueprintName.StartsWith(TEXT("/")))
+    {
+        Blueprint = Cast<UBlueprint>(UEditorAssetLibrary::LoadAsset(BlueprintName));
+    }
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+
+    // Run structural validation without invoking the full compiler. We feed the same
+    // FCompilerResultsLog so node-level validators (UEdGraphNode::ValidateNodeDuringCompilation)
+    // can emit their messages without producing a class-rebuild artifact.
+    FCompilerResultsLog ResultsLog;
+    ResultsLog.bAnnotateMentionedNodes = true;
+    ResultsLog.SetSourcePath(Blueprint->GetPathName());
+
+    // Walk all graphs. UE 5.7 stores Blueprint::*Graphs as TArray<TObjectPtr<UEdGraph>>,
+    // which implicitly converts to UEdGraph* inside range-for.
+    auto WalkGraphs = [&](const auto& Graphs)
+    {
+        for (UEdGraph* G : Graphs)
+        {
+            if (!G) continue;
+            for (UEdGraphNode* Node : G->Nodes)
+            {
+                if (!Node) continue;
+                Node->ValidateNodeDuringCompilation(ResultsLog);
+
+                // Surface orphaned pins as explicit warnings — they cause silent
+                // miscompiles otherwise.
+                for (UEdGraphPin* Pin : Node->Pins)
+                {
+                    if (Pin && Pin->bOrphanedPin)
+                    {
+                        ResultsLog.Warning(
+                            TEXT("Node @@ has orphaned pin '@@'"),
+                            Node,
+                            Pin);
+                    }
+                }
+            }
+        }
+    };
+
+    WalkGraphs(Blueprint->UbergraphPages);
+    WalkGraphs(Blueprint->FunctionGraphs);
+    WalkGraphs(Blueprint->MacroGraphs);
+    WalkGraphs(Blueprint->IntermediateGeneratedGraphs);
+    WalkGraphs(Blueprint->DelegateSignatureGraphs);
+
+    TArray<TSharedPtr<FJsonValue>> Errors;
+    TArray<TSharedPtr<FJsonValue>> Warnings;
+
+    for (const TSharedRef<FTokenizedMessage>& Msg : ResultsLog.Messages)
+    {
+        const EMessageSeverity::Type Severity = Msg->GetSeverity();
+        TSharedPtr<FJsonObject> Obj = TokenizedMessageToJson(Msg);
+
+        if (Severity == EMessageSeverity::Error)
+        {
+            Errors.Add(MakeShared<FJsonValueObject>(Obj));
+        }
+        else if (Severity == EMessageSeverity::Warning ||
+                 Severity == EMessageSeverity::PerformanceWarning)
+        {
+            Warnings.Add(MakeShared<FJsonValueObject>(Obj));
+        }
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+    Result->SetNumberField(TEXT("num_errors"), Errors.Num());
+    Result->SetNumberField(TEXT("num_warnings"), Warnings.Num());
+    Result->SetArrayField(TEXT("errors"), Errors);
+    Result->SetArrayField(TEXT("warnings"), Warnings);
     Result->SetBoolField(TEXT("success"), true);
     return Result;
 }

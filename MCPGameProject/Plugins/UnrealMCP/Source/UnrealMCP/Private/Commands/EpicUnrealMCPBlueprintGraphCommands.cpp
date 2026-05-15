@@ -8,6 +8,7 @@
 #include "Commands/BlueprintGraph/NodePropertyManager.h"
 #include "Commands/BlueprintGraph/Function/FunctionManager.h"
 #include "Commands/BlueprintGraph/Function/FunctionIO.h"
+#include "Commands/BlueprintGraph/PinManager.h"
 #include "Engine/Blueprint.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
@@ -127,6 +128,27 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintGraphCommands::HandleCommand(cons
     else if (CommandType == TEXT("add_custom_event_input"))
     {
         return FEventManager::AddCustomEventInput(Params);
+    }
+    // Phase 3C (v1.15.0) — Pin-level operations
+    else if (CommandType == TEXT("split_struct_pin"))
+    {
+        return FPinManager::SplitStructPin(Params);
+    }
+    else if (CommandType == TEXT("recombine_struct_pin"))
+    {
+        return FPinManager::RecombineStructPin(Params);
+    }
+    else if (CommandType == TEXT("set_pin_default_value"))
+    {
+        return FPinManager::SetPinDefaultValue(Params);
+    }
+    else if (CommandType == TEXT("get_pin_info"))
+    {
+        return FPinManager::GetPinInfo(Params);
+    }
+    else if (CommandType == TEXT("disconnect_pin"))
+    {
+        return FPinManager::DisconnectPin(Params);
     }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown blueprint graph command: %s"), *CommandType));

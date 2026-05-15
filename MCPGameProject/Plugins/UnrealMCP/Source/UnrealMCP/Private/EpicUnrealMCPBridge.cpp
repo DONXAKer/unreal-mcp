@@ -283,7 +283,15 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("set_component_transform") ||
                      // Phase 1E (v1.12.0) — Discovery
                      CommandType == TEXT("list_blueprints") ||
-                     CommandType == TEXT("get_blueprint_class_info"))
+                     CommandType == TEXT("get_blueprint_class_info") ||
+                     // Phase 3A (v1.15.0) — Blueprint Interfaces
+                     CommandType == TEXT("create_blueprint_interface") ||
+                     CommandType == TEXT("implement_blueprint_interface") ||
+                     CommandType == TEXT("remove_blueprint_interface") ||
+                     CommandType == TEXT("add_interface_function") ||
+                     // Phase 3D (v1.15.0) — Compile diagnostics
+                     CommandType == TEXT("compile_blueprint_verbose") ||
+                     CommandType == TEXT("validate_blueprint"))
             {
                 ResultJson = BlueprintCommands->HandleCommand(CommandType, Params);
             }
@@ -381,7 +389,13 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("set_function_flags") ||
                      // Phase 1D (v1.12.0) — Custom events
                      CommandType == TEXT("create_custom_event") ||
-                     CommandType == TEXT("add_custom_event_input"))
+                     CommandType == TEXT("add_custom_event_input") ||
+                     // Phase 3C (v1.15.0) — Pin-level operations
+                     CommandType == TEXT("split_struct_pin") ||
+                     CommandType == TEXT("recombine_struct_pin") ||
+                     CommandType == TEXT("set_pin_default_value") ||
+                     CommandType == TEXT("get_pin_info") ||
+                     CommandType == TEXT("disconnect_pin"))
             {
                 ResultJson = BlueprintGraphCommands->HandleCommand(CommandType, Params);
             }

@@ -55,6 +55,16 @@ private:
     TSharedPtr<FJsonObject> HandleListBlueprints(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleGetBlueprintClassInfo(const TSharedPtr<FJsonObject>& Params);
 
+    // Phase 3A (v1.15.0) — Blueprint Interfaces
+    TSharedPtr<FJsonObject> HandleCreateBlueprintInterface(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleImplementBlueprintInterface(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleRemoveBlueprintInterface(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleAddInterfaceFunction(const TSharedPtr<FJsonObject>& Params);
+
+    // Phase 3D (v1.15.0) — Compile diagnostics
+    TSharedPtr<FJsonObject> HandleCompileBlueprintVerbose(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleValidateBlueprint(const TSharedPtr<FJsonObject>& Params);
+
     // Helper: load blueprint by short name or full /Game/... path
     static UBlueprint* LoadBlueprintByName(const FString& BlueprintName);
 };
