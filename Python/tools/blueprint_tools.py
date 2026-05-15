@@ -917,4 +917,206 @@ def register_blueprint_tools(mcp: FastMCP):
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Phase 5 (v1.17.0) — Templates, analysis, read-only discovery
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def create_blueprint_from_template(
+        ctx: Context,
+        assetPath: str,
+        templatePath: str,
+        ifExists: str = None,
+        defaultsOverride: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        Duplicate a template Blueprint into a new asset and optionally override CDO
+        property defaults.
+
+        Args:
+            assetPath: Full /Game/... path of the new Blueprint.
+            templatePath: Full /Game/... path to the source template Blueprint.
+            ifExists: Idempotency mode ("skip" | "fail" | "overwrite" | "update").
+            defaultsOverride: Optional dict {propertyName: value} applied to the
+                generated class' CDO after compile.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {
+                "assetPath": assetPath,
+                "templatePath": templatePath,
+            }
+            if ifExists is not None:
+                params["ifExists"] = ifExists
+            if defaultsOverride is not None:
+                params["defaultsOverride"] = defaultsOverride
+            logger.info(f"Creating blueprint from template: {params}")
+            response = unreal.send_command("create_blueprint_from_template", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error creating blueprint from template: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def read_blueprint_content(
+        ctx: Context,
+        blueprint_path: str,
+        include_event_graph: bool = True,
+        include_functions: bool = True,
+        include_variables: bool = True,
+        include_components: bool = True,
+        include_interfaces: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Read-only structural dump of a Blueprint asset: variables, functions,
+        event graph nodes, components, implemented interfaces.
+
+        Args:
+            blueprint_path: Full /Game/... path of the Blueprint.
+            include_event_graph, include_functions, include_variables,
+            include_components, include_interfaces: section toggles (all default True).
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_path": blueprint_path,
+                "include_event_graph": include_event_graph,
+                "include_functions": include_functions,
+                "include_variables": include_variables,
+                "include_components": include_components,
+                "include_interfaces": include_interfaces,
+            }
+            logger.info(f"Reading blueprint content: {blueprint_path}")
+            response = unreal.send_command("read_blueprint_content", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error reading blueprint content: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def analyze_blueprint_graph(
+        ctx: Context,
+        blueprint_path: str,
+        graph_name: str = "EventGraph",
+        include_node_details: bool = True,
+        include_pin_connections: bool = True,
+        trace_execution_flow: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Walk a single graph inside a Blueprint and return nodes + connections.
+
+        Args:
+            blueprint_path: Full /Game/... path of the Blueprint.
+            graph_name: Graph to analyze (default "EventGraph"). Also accepts function
+                graph names like "ConstructionScript" or user-defined function names.
+            include_node_details: Include pos_x/pos_y/can_rename for each node.
+            include_pin_connections: Emit pins[] + connections[] arrays.
+            trace_execution_flow: Reserved for future use (ignored by the
+                current handler; present for forward compatibility).
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_path": blueprint_path,
+                "graph_name": graph_name,
+                "include_node_details": include_node_details,
+                "include_pin_connections": include_pin_connections,
+                "trace_execution_flow": trace_execution_flow,
+            }
+            logger.info(f"Analyzing blueprint graph: {blueprint_path}::{graph_name}")
+            response = unreal.send_command("analyze_blueprint_graph", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error analyzing blueprint graph: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def get_blueprint_variable_details(
+        ctx: Context,
+        blueprint_path: str,
+        variable_name: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Detailed metadata for one Blueprint variable, or for all variables if
+        variable_name is omitted: type, default value, friendly name, tooltip,
+        property flags, replication mode.
+
+        Args:
+            blueprint_path: Full /Game/... path of the Blueprint.
+            variable_name: Optional single variable to inspect; when None returns
+                an array with all variables.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {"blueprint_path": blueprint_path}
+            if variable_name is not None:
+                params["variable_name"] = variable_name
+            logger.info(f"Getting blueprint variable details: {params}")
+            response = unreal.send_command("get_blueprint_variable_details", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error getting blueprint variable details: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def get_blueprint_function_details(
+        ctx: Context,
+        blueprint_path: str,
+        function_name: str = None,
+        include_graph: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Detailed metadata for one Blueprint function, or for all functions if
+        function_name is omitted: inputs/outputs, node count, optional graph nodes.
+
+        Args:
+            blueprint_path: Full /Game/... path of the Blueprint.
+            function_name: Optional single function to inspect.
+            include_graph: Include node summaries for each function graph.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {
+                "blueprint_path": blueprint_path,
+                "include_graph": include_graph,
+            }
+            if function_name is not None:
+                params["function_name"] = function_name
+            logger.info(f"Getting blueprint function details: {params}")
+            response = unreal.send_command("get_blueprint_function_details", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error getting blueprint function details: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Blueprint tools registered successfully")

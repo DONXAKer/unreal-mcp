@@ -272,6 +272,14 @@ from tools.node_tools import register_blueprint_node_tools
 from tools.project_tools import register_project_tools
 from tools.umg_tools import register_umg_tools
 from tools.animation_tools import register_animation_tools
+# v1.17.0 — Phase 5 wrappers (close the bridge↔FastMCP gap)
+from tools.level_tools import register_level_tools
+from tools.material_tools import register_material_tools
+from tools.asset_tools import register_asset_tools
+from tools.texture_tools import register_texture_tools
+from tools.mesh_tools import register_mesh_tools
+from tools.data_asset_tools import register_data_asset_tools
+from tools.niagara_tools import register_niagara_tools
 
 # Register tools
 register_editor_tools(mcp)
@@ -280,6 +288,13 @@ register_blueprint_node_tools(mcp)
 register_project_tools(mcp)
 register_umg_tools(mcp)
 register_animation_tools(mcp)
+register_level_tools(mcp)
+register_material_tools(mcp)
+register_asset_tools(mcp)
+register_texture_tools(mcp)
+register_mesh_tools(mcp)
+register_data_asset_tools(mcp)
+register_niagara_tools(mcp)
 
 # --- MCP Content Pipeline (MCP-CONTENT-001): config + recipe framework ---
 from tools import project_config as _project_config

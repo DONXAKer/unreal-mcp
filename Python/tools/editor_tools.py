@@ -366,4 +366,30 @@ def register_editor_tools(mcp: FastMCP):
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Connectivity probe (v1.17.0)
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def ping(ctx: Context) -> Dict[str, Any]:
+        """
+        Lightweight connectivity probe — round-trips a `ping` command to the
+        Unreal Editor bridge. Returns the raw {"status": "ok", ...} response.
+        Use this to verify the editor is listening on port 55557 before issuing
+        heavier commands.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("ping", {})
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error pinging Unreal Engine: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Editor tools registered successfully")

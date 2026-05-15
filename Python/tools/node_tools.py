@@ -1023,4 +1023,382 @@ def register_blueprint_node_tools(mcp: FastMCP):
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Phase 5 (v1.17.0) — Function/event/node/variable lifecycle
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def create_function(
+        ctx: Context,
+        blueprint_name: str,
+        function_name: str,
+        return_type: str = "void",
+    ) -> Dict[str, Any]:
+        """
+        Create a new user-defined function graph on a Blueprint.
+
+        Args:
+            blueprint_name: Short name or full /Game/... path of the Blueprint.
+            function_name: Desired function name (no spaces / special chars).
+            return_type: Reserved (default "void"). Output pins should be added
+                separately via add_function_output.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "function_name": function_name,
+                "return_type": return_type,
+            }
+            logger.info(f"Creating function: {params}")
+            response = unreal.send_command("create_function", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error creating function: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def delete_function(
+        ctx: Context,
+        blueprint_name: str,
+        function_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Remove a user-defined function from a Blueprint. System graphs
+        ("Construction Script", "EventGraph") cannot be deleted.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "function_name": function_name,
+            }
+            logger.info(f"Deleting function: {params}")
+            response = unreal.send_command("delete_function", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error deleting function: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def rename_function(
+        ctx: Context,
+        blueprint_name: str,
+        old_function_name: str,
+        new_function_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Rename a user-defined function on a Blueprint.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            old_function_name: Current function name.
+            new_function_name: Desired new name (no spaces / special chars,
+                must not collide with another function in the same BP).
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "old_function_name": old_function_name,
+                "new_function_name": new_function_name,
+            }
+            logger.info(f"Renaming function: {params}")
+            response = unreal.send_command("rename_function", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error renaming function: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def add_function_input(
+        ctx: Context,
+        blueprint_name: str,
+        function_name: str,
+        param_name: str,
+        param_type: str,
+        is_array: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Add an input parameter to a user-defined Blueprint function.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            function_name: Existing function graph name.
+            param_name: Name of the new input pin.
+            param_type: Type string (e.g. "bool", "int", "float", "string",
+                "name", "text", "vector", "rotator", "object").
+            is_array: If True, the pin becomes an array of param_type.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "function_name": function_name,
+                "param_name": param_name,
+                "param_type": param_type,
+                "is_array": is_array,
+            }
+            logger.info(f"Adding function input: {params}")
+            response = unreal.send_command("add_function_input", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error adding function input: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def add_function_output(
+        ctx: Context,
+        blueprint_name: str,
+        function_name: str,
+        param_name: str,
+        param_type: str,
+        is_array: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Add an output parameter to a user-defined Blueprint function.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            function_name: Existing function graph name.
+            param_name: Name of the new output pin.
+            param_type: Same type strings as add_function_input.
+            is_array: If True, the pin becomes an array of param_type.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "function_name": function_name,
+                "param_name": param_name,
+                "param_type": param_type,
+                "is_array": is_array,
+            }
+            logger.info(f"Adding function output: {params}")
+            response = unreal.send_command("add_function_output", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error adding function output: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def delete_node(
+        ctx: Context,
+        blueprint_name: str,
+        node_id: str,
+        function_name: str = None,
+    ) -> Dict[str, Any]:
+        """
+        Remove a node from a Blueprint graph by NodeGuid.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            node_id: NodeGuid string of the node to delete (as returned by
+                add_blueprint_node / find_blueprint_nodes).
+            function_name: Optional — when set, search this function graph.
+                When omitted, the first UbergraphPage (EventGraph) is used.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {
+                "blueprint_name": blueprint_name,
+                "node_id": node_id,
+            }
+            if function_name is not None:
+                params["function_name"] = function_name
+            logger.info(f"Deleting node: {params}")
+            response = unreal.send_command("delete_node", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error deleting node: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def set_node_property(
+        ctx: Context,
+        blueprint_name: str,
+        node_id: str,
+        property_name: str = None,
+        property_value=None,
+        function_name: str = None,
+        action: str = None,
+        extra_params: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        Set a property on a node (legacy mode) or perform a semantic action
+        ("action" mode — delegated to EditNode in C++).
+
+        Args:
+            blueprint_name: Target Blueprint.
+            node_id: NodeGuid of the target node.
+            property_name: Property to set (legacy mode — required when no action).
+            property_value: New value (legacy mode — required when no action).
+            function_name: Optional graph scope.
+            action: Optional semantic action verb (e.g. "set_call_function").
+            extra_params: When using `action`, additional keys merged into the
+                request payload.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {
+                "blueprint_name": blueprint_name,
+                "node_id": node_id,
+            }
+            if action is not None:
+                params["action"] = action
+                if extra_params:
+                    for k, v in extra_params.items():
+                        params[k] = v
+            else:
+                if property_name is None:
+                    return {"success": False, "message": "property_name required when no action specified"}
+                params["property_name"] = property_name
+                params["property_value"] = property_value
+            if function_name is not None:
+                params["function_name"] = function_name
+            logger.info(f"Setting node property: {params}")
+            response = unreal.send_command("set_node_property", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting node property: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def add_component_bound_event(
+        ctx: Context,
+        blueprint_name: str,
+        component_property_name: str,
+        delegate_name: str,
+        delegate_class: str,
+        pos_x: float = 0.0,
+        pos_y: float = 0.0,
+    ) -> Dict[str, Any]:
+        """
+        Add a component-bound delegate event node to a Blueprint's EventGraph
+        (e.g. wire `OnClicked` of a UButton component).
+
+        Args:
+            blueprint_name: Target Blueprint.
+            component_property_name: SCS component variable name on this Blueprint
+                (e.g. "ClickButton") whose delegate to bind to.
+            delegate_name: Multicast delegate property name on the owning class
+                (e.g. "OnClicked").
+            delegate_class: Full UClass path of the owning class
+                (e.g. "/Script/UMG.Button").
+            pos_x, pos_y: Optional graph position.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "component_property_name": component_property_name,
+                "delegate_name": delegate_name,
+                "delegate_class": delegate_class,
+                "pos_x": float(pos_x),
+                "pos_y": float(pos_y),
+            }
+            logger.info(f"Adding component-bound event: {params}")
+            response = unreal.send_command("add_component_bound_event", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error adding component-bound event: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def set_blueprint_variable_properties(
+        ctx: Context,
+        blueprint_name: str,
+        variable_name: str,
+        var_name: str = None,
+        var_type: str = None,
+        is_blueprint_writable: bool = None,
+        is_public: bool = None,
+    ) -> Dict[str, Any]:
+        """
+        Bulk-update properties of an existing Blueprint variable (legacy variant
+        of `set_blueprint_variable_flags` — kept for compatibility).
+
+        Args:
+            blueprint_name: Target Blueprint.
+            variable_name: Existing variable to mutate.
+            var_name: New variable name (rename), optional.
+            var_type: New type string, optional.
+            is_blueprint_writable: When False, sets CPF_BlueprintReadOnly.
+            is_public: When True, sets CPF_Edit (Instance Editable).
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {
+                "blueprint_name": blueprint_name,
+                "variable_name": variable_name,
+            }
+            if var_name is not None:
+                params["var_name"] = var_name
+            if var_type is not None:
+                params["var_type"] = var_type
+            if is_blueprint_writable is not None:
+                params["is_blueprint_writable"] = is_blueprint_writable
+            if is_public is not None:
+                params["is_public"] = is_public
+            logger.info(f"Setting blueprint variable properties: {params}")
+            response = unreal.send_command("set_blueprint_variable_properties", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting blueprint variable properties: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Blueprint node tools registered successfully")

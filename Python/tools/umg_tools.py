@@ -385,4 +385,123 @@ def register_umg_tools(mcp: FastMCP):
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Phase 5 (v1.17.0) — Generic UMG widget/inspection wrappers
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def add_widget_to_umg(
+        ctx: Context,
+        blueprint_path: str,
+        widget_type: str,
+        widget_name: str,
+        parent_name: str = None,
+        is_variable: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Generic widget constructor: add any supported widget type to a Widget
+        Blueprint hierarchy.
+
+        Args:
+            blueprint_path: Full /Game/... path of the Widget Blueprint.
+            widget_type: Class name. Supported: CanvasPanel, TextBlock, Button,
+                VerticalBox, HorizontalBox, ScrollBox, SizeBox, Spacer, SpinBox,
+                Image, Overlay, Border, ProgressBar.
+            widget_name: Unique name for the new widget within the blueprint.
+            parent_name: Optional existing widget name to nest under. When empty
+                the widget becomes the root (or is added to the existing root panel).
+            is_variable: Whether the widget is exposed as a class variable.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: Dict[str, Any] = {
+                "blueprint_path": blueprint_path,
+                "widget_type": widget_type,
+                "widget_name": widget_name,
+                "is_variable": is_variable,
+            }
+            if parent_name is not None:
+                params["parent_name"] = parent_name
+            logger.info(f"Adding widget to UMG: {params}")
+            response = unreal.send_command("add_widget_to_umg", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error adding widget to UMG: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def set_widget_property(
+        ctx: Context,
+        blueprint_path: str,
+        widget_name: str,
+        property_name: str,
+        property_value: str,
+    ) -> Dict[str, Any]:
+        """
+        Set a property on a widget inside a Widget Blueprint. Supports widget
+        properties and slot properties (prefix "Slot.", e.g. "Slot.Position").
+
+        Args:
+            blueprint_path: Full /Game/... path of the Widget Blueprint.
+            widget_name: Widget instance name (or "Root" / "" for the root widget).
+            property_name: Property to set (e.g. "Text", "Slot.Position",
+                "Slot.HorizontalAlignment").
+            property_value: String value (vectors as "X,Y", colors as "R,G,B,A",
+                booleans as "true"/"false", enums by short name).
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_path": blueprint_path,
+                "widget_name": widget_name,
+                "property_name": property_name,
+                "property_value": str(property_value),
+            }
+            logger.info(f"Setting widget property: {params}")
+            response = unreal.send_command("set_widget_property", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting widget property: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def get_umg_hierarchy(
+        ctx: Context,
+        blueprint_path: str,
+    ) -> Dict[str, Any]:
+        """
+        Read-only recursive dump of a Widget Blueprint's widget tree.
+
+        Returns:
+            Dict with root widget object {name, type, is_variable, children[]}
+            or {"empty": true} when the WidgetTree has no root.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {"blueprint_path": blueprint_path}
+            logger.info(f"Reading UMG hierarchy: {blueprint_path}")
+            response = unreal.send_command("get_umg_hierarchy", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error getting UMG hierarchy: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("UMG tools registered successfully") 
