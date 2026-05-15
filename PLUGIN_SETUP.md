@@ -112,6 +112,52 @@ uv run unreal_mcp_server_advanced.py
 }
 ```
 
+## Plugin structure (v1.16.0+)
+
+### Command dispatchers (`Private/Commands/`)
+
+- `EpicUnrealMCPEditorCommands` — Actor / Level operations (spawn, find, transform, properties, viewport focus)
+- `EpicUnrealMCPBlueprintCommands` — Blueprint class, components, interfaces, materials, compile diagnostics
+- `EpicUnrealMCPBlueprintGraphCommands` — Variables, functions, nodes, events, pins (delegates to managers below)
+- `UMGCommands` — UMG widget Blueprints (panel/text/button, hierarchy, viewport)
+- `AnimationBPCommands` (1.16.0+) — Animation Blueprints (skeleton, state machine, transitions, play anim, blend space)
+- `InputCommands` (1.10.0+) — Input action / axis mappings
+- `AssetCommands`, `TextureCommands`, `MaterialCommands`, `MeshCommands`, `LevelCommands`, `DataAssetCommands`, `NiagaraCommands` — content primitives
+
+### Blueprint Graph managers (`Private/Commands/BlueprintGraph/`)
+
+- `NodeManager` — central `add_blueprint_node` dispatcher (NodeType → creator)
+- `BPConnector` — `connect_nodes` / `disconnect_pin`
+- `NodeDeleter`, `NodePropertyManager` — `delete_node`, `set_node_property`, `find_blueprint_nodes`
+- `BPVariables` — variable CRUD (1.11.0+)
+- `EventManager` — `add_event_node`, `add_component_bound_event`, `create_custom_event`, `add_custom_event_input`
+- `PinManager` (1.15.0+) — pin operations (`split_struct_pin`, `recombine_struct_pin`, `get_pin_info`, `set_pin_default_value`)
+- `Function/FunctionManager`, `Function/FunctionIO` (1.12.0+) — function CRUD + input/output pins + local variables
+
+### Node creators (`Private/Commands/BlueprintGraph/Nodes/`)
+
+- `FControlFlowNodeCreator` — Branch, Switch*, Sequence, ForEachLoop, Comparison
+- `FDataNodeCreator` — VariableGet/Set, MakeArray, MakeMap, MakeSet
+- `FUtilityNodeCreator` — Print, CallFunction, Select, SpawnActor
+- `FSpecializedNodeCreator` — GetDataTableRow, AddComponentByClass, Self, ConstructObject, Knot, BreakStruct, MakeStruct, CreateWidget, GetWorldSubsystem
+- `FCastingNodeCreator` — DynamicCast, ClassDynamicCast, CastByteToEnum
+- `FAnimationNodeCreator` — Timeline
+- `FDelegateNodeCreator` (1.13.0+) — Add/Remove/Call/Clear Delegate
+- `FFlowControlExtraNodeCreator` (1.14.0+) — Delay, MultiGate, Gate (macro), DoOnce (macro), FlipFlop (macro)
+
+### Wire protocol
+
+`EpicUnrealMCPBridge.cpp` listens on TCP `127.0.0.1:55557`. Each request is a
+single JSON object:
+
+```json
+{ "type": "<command_name>", "params": { ... } }
+```
+
+Sent without trailing newline; the bridge replies with one JSON object and
+closes the socket. The Python client (`Python/unreal_mcp_server.py::UnrealConnection`)
+always reconnects per command.
+
 ## Решение проблем
 
 | Симптом | Причина / решение |

@@ -219,6 +219,62 @@ After editing `primitives.py` or other Python tools — restart the server.
 
 After editing C++ commands — rebuild the UE plugin, restart the Editor.
 
+## Available Commands (v1.16.0)
+
+The plugin's outer bridge (`EpicUnrealMCPBridge.cpp`) routes ~95 command types
+to category-specific dispatchers. The Python MCP server (`Python/tools/*.py`)
+exposes 68 of these as `@mcp.tool()` entries; recipes wrap the remainder via
+`primitives.py`.
+
+### Outer Commands (routed by EpicUnrealMCPBridge)
+
+#### Editor / Level
+- `get_actors_in_level`, `find_actors_by_name`, `spawn_actor`, `spawn_blueprint_actor`, `delete_actor`, `set_actor_transform`, `get_actor_properties`, `set_actor_property`, `focus_viewport`
+- `create_level`, `load_level`, `save_level`, `spawn_actor_in_level`, `remove_actor_from_level`, `set_actor_transform_in_level`, `list_actors_in_level`
+
+#### Blueprint (class + component)
+- `create_blueprint`, `create_blueprint_from_template`, `reparent_blueprint`, `compile_blueprint`, `compile_blueprint_verbose`, `validate_blueprint`
+- `add_component_to_blueprint`, `delete_component_from_blueprint`, `rename_component`, `list_components`, `set_component_transform`, `set_component_property`, `set_static_mesh_properties`, `set_physics_properties`
+- `set_blueprint_property`
+- `read_blueprint_content`, `analyze_blueprint_graph`, `list_blueprints`, `get_blueprint_class_info`, `get_blueprint_variable_details`, `get_blueprint_function_details`
+- Interfaces: `create_blueprint_interface`, `implement_blueprint_interface`, `remove_blueprint_interface`, `add_interface_function`
+- Materials: `set_mesh_material_color`, `get_available_materials`, `apply_material_to_actor`, `apply_material_to_blueprint`, `get_actor_material_info`, `get_blueprint_material_info`
+
+#### Blueprint Graph (nodes, variables, functions)
+- Nodes: `add_blueprint_node` (see node_type vocabulary below), `connect_nodes`, `delete_node`, `set_node_property`, `find_blueprint_nodes`
+- Events: `add_event_node`, `add_component_bound_event`, `create_custom_event`, `add_custom_event_input`, `add_input_action_node`
+- Pins: `split_struct_pin`, `recombine_struct_pin`, `set_pin_default_value`, `get_pin_info`, `disconnect_pin`
+- Variables: `create_variable`, `set_blueprint_variable_properties`, `set_blueprint_variable_flags`, `set_variable_default_value`, `rename_blueprint_variable`, `delete_blueprint_variable`, `list_blueprint_variables`
+- Functions: `create_function`, `delete_function`, `rename_function`, `add_function_input`, `add_function_output`, `list_blueprint_functions`, `add_function_local_variable`, `set_function_flags`
+
+#### UMG
+- `create_umg_widget_blueprint`, `add_widget_to_umg`, `add_text_block_to_widget`, `add_button_to_widget`, `add_panel_widget_to_widget`, `set_widget_property`, `bind_widget_event`, `set_text_block_binding`, `add_widget_to_viewport`, `get_umg_hierarchy`
+
+#### Animation Blueprint
+- `create_animation_blueprint`, `set_anim_skeleton`, `add_state_machine`, `add_anim_state`, `add_anim_transition`, `add_play_anim_node`, `add_blend_space_player_node`
+
+#### Input
+- `create_input_mapping`
+
+#### Asset / Texture / Material / Mesh / Niagara / DataAsset
+- `asset_exists`, `delete_asset`
+- `import_texture`, `generate_placeholder_texture`
+- `create_material_instance`, `set_material_instance_params`
+- `import_static_mesh`
+- `copy_niagara_system`, `set_niagara_parameters`
+- `import_datatable_from_csv`, `set_datatable_row`, `get_datatable_rows`, `import_sound_wave`
+
+### `add_blueprint_node` — supported `node_type` values (39 total)
+
+- **Flow control**: `Branch`, `Comparison`, `Switch`, `SwitchEnum`, `SwitchInteger`, `ExecutionSequence`, `ForEachLoop`, `Delay`, `MultiGate`, `Gate`, `DoOnce`, `FlipFlop`
+- **Variables**: `VariableGet`, `VariableSet`
+- **Containers**: `MakeArray`, `MakeMap`, `MakeSet`, `BreakStruct`, `MakeStruct`
+- **Functions/events**: `CallFunction`, `Print`, `Select`, `Event` (legacy — prefer `add_event_node`)
+- **Spawn/construct**: `SpawnActor`, `AddComponentByClass`, `ConstructObject`, `CreateWidget`
+- **Casts**: `DynamicCast`, `ClassDynamicCast`, `CastByteToEnum`
+- **Misc**: `Timeline`, `GetDataTableRow`, `Self`, `Knot`, `GetWorldSubsystem`
+- **Delegates**: `AddDelegate`, `RemoveDelegate`, `CallDelegate`, `ClearDelegate`
+
 ## Primitives Reference
 
 All primitives are in `Python/tools/primitives.py`. Each wraps one C++ command.
