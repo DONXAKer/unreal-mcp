@@ -40,7 +40,7 @@
 namespace
 {
     // Split "/Game/Path/AssetName" into ("/Game/Path", "AssetName").
-    bool SplitPackagePath(const FString& InPath, FString& OutPackagePath, FString& OutAssetName)
+    bool SplitAnimAssetPath(const FString& InPath, FString& OutPackagePath, FString& OutAssetName)
     {
         int32 LastSlash = INDEX_NONE;
         if (!InPath.FindLastChar(TCHAR('/'), LastSlash) || LastSlash <= 0)

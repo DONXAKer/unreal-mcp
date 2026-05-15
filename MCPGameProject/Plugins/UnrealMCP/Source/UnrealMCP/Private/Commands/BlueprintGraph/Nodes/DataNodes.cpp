@@ -278,7 +278,8 @@ UK2Node* FDataNodeCreator::CreateMakeMapNode(UEdGraph* Graph, const TSharedPtr<F
 				}
 			}
 			OutputPin->PinType.ContainerType = EPinContainerType::Map;
-			MakeMapNode->PropagatePinType();
+			// Note: PropagatePinType() is protected; ReconstructNode rebuilds pins
+			// from the output PinType, so input wildcards will resolve on first connect.
 			MakeMapNode->ReconstructNode();
 		}
 	}
@@ -321,7 +322,7 @@ UK2Node* FDataNodeCreator::CreateMakeSetNode(UEdGraph* Graph, const TSharedPtr<F
 				OutputPin->PinType.PinSubCategory = ElementType.PinSubCategory;
 				OutputPin->PinType.PinSubCategoryObject = ElementType.PinSubCategoryObject;
 				OutputPin->PinType.ContainerType = EPinContainerType::Set;
-				MakeSetNode->PropagatePinType();
+				// Note: PropagatePinType() is protected; ReconstructNode rebuilds pins.
 				MakeSetNode->ReconstructNode();
 			}
 		}
