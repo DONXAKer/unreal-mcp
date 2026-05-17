@@ -20,7 +20,7 @@ public:
      * Routes an incoming UMG command to the appropriate handler.
      * @param CommandType  Command name (add_widget_to_umg, add_text_block_to_widget,
      *                     add_button_to_widget, add_panel_widget_to_widget,
-     *                     set_widget_property, get_umg_hierarchy)
+     *                     delete_widget_from_umg, set_widget_property, get_umg_hierarchy)
      * @param Params       JSON parameters
      * @return JSON response with result or error
      */
@@ -66,6 +66,14 @@ private:
      * The panel is named so it matches a UPROPERTY(meta=(BindWidget)) field in the parent C++ class.
      */
     TSharedPtr<FJsonObject> HandleAddPanelWidgetToWidget(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * Delete a widget from a Widget Blueprint's WidgetTree. If the widget is a panel, all
+     * of its descendants are removed along with it (UE garbage-collects them once detached).
+     * Params: blueprint_path (full /Game/... path, required), widget_name (required).
+     * Returns: { success, removed: bool, widget_name, blueprint_path }.
+     */
+    TSharedPtr<FJsonObject> HandleDeleteWidgetFromUMG(const TSharedPtr<FJsonObject>& Params);
 
     /**
      * Get the widget hierarchy of a Widget Blueprint as a JSON tree.

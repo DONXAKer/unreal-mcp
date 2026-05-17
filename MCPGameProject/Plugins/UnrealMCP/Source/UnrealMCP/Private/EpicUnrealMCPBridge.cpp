@@ -303,6 +303,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("add_text_block_to_widget") ||
                      CommandType == TEXT("add_button_to_widget") ||
                      CommandType == TEXT("add_panel_widget_to_widget") ||
+                     CommandType == TEXT("delete_widget_from_umg") ||
                      CommandType == TEXT("set_widget_property") ||
                      CommandType == TEXT("get_umg_hierarchy") ||
                      CommandType == TEXT("create_umg_widget_blueprint") ||

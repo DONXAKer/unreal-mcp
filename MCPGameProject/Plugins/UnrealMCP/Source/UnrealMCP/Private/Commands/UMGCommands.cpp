@@ -251,6 +251,7 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleCommand(const FString& Comm
     if (CommandType == TEXT("add_text_block_to_widget"))     return HandleAddTextBlockToWidget(Params);
     if (CommandType == TEXT("add_button_to_widget"))         return HandleAddButtonToWidget(Params);
     if (CommandType == TEXT("add_panel_widget_to_widget"))   return HandleAddPanelWidgetToWidget(Params);
+    if (CommandType == TEXT("delete_widget_from_umg"))       return HandleDeleteWidgetFromUMG(Params);
     if (CommandType == TEXT("set_widget_property"))          return HandleSetWidgetProperty(Params);
     if (CommandType == TEXT("get_umg_hierarchy"))            return HandleGetUMGHierarchy(Params);
     if (CommandType == TEXT("create_umg_widget_blueprint"))  return HandleCreateUMGWidgetBlueprint(Params);
@@ -1620,5 +1621,73 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleSetTextBlockBinding(const T
     Result->SetStringField(TEXT("text_block_name"), TextBlockName);
     Result->SetStringField(TEXT("binding_property"), BindingProperty);
     Result->SetStringField(TEXT("binding_type"), BindingType);
+    return Result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// delete_widget_from_umg
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleDeleteWidgetFromUMG(const TSharedPtr<FJsonObject>& Params)
+{
+    using namespace UMGCommandsUtils;
+
+    // ── Required params ──────────────────────────────────────────────────────
+    FString BlueprintPath;
+    if (!Params->TryGetStringField(TEXT("blueprint_path"), BlueprintPath))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_path' parameter"));
+
+    FString WidgetName;
+    if (!Params->TryGetStringField(TEXT("widget_name"), WidgetName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
+
+    // ── Load Widget Blueprint ────────────────────────────────────────────────
+    UWidgetBlueprint* WB = Cast<UWidgetBlueprint>(UEditorAssetLibrary::LoadAsset(BlueprintPath));
+    if (!WB)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Could not load Widget Blueprint: %s"), *BlueprintPath));
+
+    if (!WB->WidgetTree)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Widget Blueprint has no WidgetTree"));
+
+    // ── Locate target widget ─────────────────────────────────────────────────
+    UWidget* Target = WB->WidgetTree->FindWidget(FName(*WidgetName));
+    if (!Target)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget not found: %s"), *WidgetName));
+
+    // ── Detach from parent or clear root ─────────────────────────────────────
+    // If the widget is a panel, all descendants stay parented to it; once we drop
+    // the last reference (RemoveChild / nulling RootWidget) the whole subtree becomes
+    // unreachable and is collected by the next GC pass — UE does the cleanup for us.
+    bool bWasRoot = (WB->WidgetTree->RootWidget == Target);
+    if (bWasRoot)
+    {
+        WB->WidgetTree->RootWidget = nullptr;
+    }
+    else
+    {
+        UPanelWidget* ParentPanel = Target->GetParent();
+        if (!ParentPanel)
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Widget '%s' has no parent panel and is not the root — cannot detach"), *WidgetName));
+
+        if (!ParentPanel->RemoveChild(Target))
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("RemoveChild failed for widget '%s'"), *WidgetName));
+    }
+
+    // ── Persist ──────────────────────────────────────────────────────────────
+    // MarkAndSaveWidgetBlueprint already runs MarkBlueprintAsStructurallyModified — that's
+    // the correct strength here because we changed the widget hierarchy, not just a property.
+    MarkAndSaveWidgetBlueprint(WB);
+
+    // ── Build response ───────────────────────────────────────────────────────
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetBoolField(TEXT("removed"), true);
+    Result->SetStringField(TEXT("widget_name"), WidgetName);
+    Result->SetStringField(TEXT("blueprint_path"), BlueprintPath);
+    Result->SetBoolField(TEXT("was_root"), bWasRoot);
     return Result;
 }

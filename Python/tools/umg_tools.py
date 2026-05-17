@@ -435,6 +435,51 @@ def register_umg_tools(mcp: FastMCP):
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    # ─────────────────────────────────────────────────────────────────────
+    # delete_widget_from_umg — inverse of add_widget_to_umg
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def delete_widget_from_umg(
+        ctx: Context,
+        blueprint_path: str,
+        widget_name: str,
+    ) -> Dict[str, Any]:
+        """
+        Remove a widget from a Widget Blueprint's WidgetTree.
+
+        If the widget is a panel, all of its descendants are removed along with
+        it (Unreal garbage-collects them once the subtree is detached). Use this
+        to clean up unused leftover widgets — e.g. dropping HBox_CardContainer
+        from WBP_ActionCardHand where only CardsBox is actually wired to C++.
+
+        Args:
+            blueprint_path: Full /Game/... path of the Widget Blueprint.
+            widget_name: Name of the widget instance to delete. Returns
+                {"success": False, "error": "Widget not found: ..."} if missing.
+
+        Returns:
+            {success, removed: bool, widget_name, blueprint_path, was_root: bool}.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_path": blueprint_path,
+                "widget_name": widget_name,
+            }
+            logger.info(f"Deleting widget from UMG: {params}")
+            response = unreal.send_command("delete_widget_from_umg", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error deleting widget from UMG: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     @mcp.tool()
     def set_widget_property(
         ctx: Context,
