@@ -263,8 +263,15 @@ TSharedPtr<FJsonObject> FEventManager::AddComponentBoundEvent(const TSharedPtr<F
 
 	UEdGraph* Graph = Blueprint->UbergraphPages[0];
 
-	// Найти класс-владелец делегата
+	// Найти класс-владелец делегата.
+	// UE 5.7: FindObject(nullptr, ShortName) сломан после удаления ANY_PACKAGE,
+	// поэтому добавляем fallback на FindFirstObject (короткое имя) и LoadObject (полный path).
 	UClass* OwnerClass = FindObject<UClass>(nullptr, *DelegateClass);
+	if (!OwnerClass)
+	{
+		OwnerClass = FindFirstObject<UClass>(*DelegateClass, EFindFirstObjectOptions::None,
+			ELogVerbosity::Warning, TEXT("MCP EventManager"));
+	}
 	if (!OwnerClass)
 	{
 		OwnerClass = LoadObject<UClass>(nullptr, *DelegateClass);

@@ -91,11 +91,19 @@ namespace
 			OutPinType.PinSubCategoryObject = AsStruct;
 			return true;
 		}
-		// Fallback: UClass-ссылка (PC_Object)
+		// Fallback: UClass-ссылка (PC_Object).
+		// UE 5.7: FindObject(nullptr, ShortName) сломан без ANY_PACKAGE — добавляем FindFirstObject ступень.
 		if (UClass* AsClass = FindObject<UClass>(nullptr, *TypeName))
 		{
 			OutPinType.PinCategory = UEdGraphSchema_K2::PC_Object;
 			OutPinType.PinSubCategoryObject = AsClass;
+			return true;
+		}
+		if (UClass* AsClassFirst = FindFirstObject<UClass>(*TypeName, EFindFirstObjectOptions::None,
+			ELogVerbosity::Warning, TEXT("MCP DataNodes")))
+		{
+			OutPinType.PinCategory = UEdGraphSchema_K2::PC_Object;
+			OutPinType.PinSubCategoryObject = AsClassFirst;
 			return true;
 		}
 		if (UClass* AsClassLoaded = LoadObject<UClass>(nullptr, *TypeName))
@@ -133,7 +141,13 @@ UK2Node* FDataNodeCreator::CreateVariableGetNode(UEdGraph* Graph, const TSharedP
 	FString TargetClassName;
 	if (Params->TryGetStringField(TEXT("target_class"), TargetClassName) && !TargetClassName.IsEmpty())
 	{
+		// UE 5.7: FindObject(nullptr, ShortName) сломан без ANY_PACKAGE — fallback FindFirstObject + LoadObject.
 		UClass* TargetClass = FindObject<UClass>(nullptr, *TargetClassName);
+		if (!TargetClass)
+		{
+			TargetClass = FindFirstObject<UClass>(*TargetClassName, EFindFirstObjectOptions::None,
+				ELogVerbosity::Warning, TEXT("MCP DataNodes"));
+		}
 		if (!TargetClass)
 		{
 			TargetClass = LoadObject<UClass>(nullptr, *TargetClassName);

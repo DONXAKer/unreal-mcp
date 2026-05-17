@@ -493,34 +493,93 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleAddComponentToBlu
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
     }
 
-    // Create the component - dynamically find the component class by name
+    // Create the component - dynamically find the component class by name.
+    //
+    // UE 5.7 NOTE: `FindObject<UClass>(nullptr, *ShortName)` perestal rabotat'
+    // dlya klassov iz /Script/Engine, /Script/UMG i t.d. — ranshe rabotal cherez
+    // ANY_PACKAGE, kotoryj deprecated. Pravil'nyj API:
+    //   1) FindFirstObject<UClass>(ShortName, ...) — global'nyj resolve po imeni.
+    //   2) Esli ne najdeno — LoadObject<UClass>(nullptr, TEXT("/Script/<Module>.<Name>")).
+    //   3) Vsegda proveryaem IsChildOf(UActorComponent).
     UClass* ComponentClass = nullptr;
 
-    // Try to find the class with exact name first
-    ComponentClass = FindObject<UClass>(nullptr, *ComponentType);
-    
-    // If not found, try with "Component" suffix
-    if (!ComponentClass && !ComponentType.EndsWith(TEXT("Component")))
+    // Stroim spisok imen-kandidatov: kak prishlo, s suffiksom Component,
+    // s prefiksom U, i obe modifikatsii vmeste.
+    TArray<FString> NameCandidates;
+    NameCandidates.Add(ComponentType);
+    if (!ComponentType.EndsWith(TEXT("Component")))
     {
-        FString ComponentTypeWithSuffix = ComponentType + TEXT("Component");
-        ComponentClass = FindObject<UClass>(nullptr, *ComponentTypeWithSuffix);
+        NameCandidates.Add(ComponentType + TEXT("Component"));
     }
-    
-    // If still not found, try with "U" prefix
-    if (!ComponentClass && !ComponentType.StartsWith(TEXT("U")))
+    if (!ComponentType.StartsWith(TEXT("U")))
     {
-        FString ComponentTypeWithPrefix = TEXT("U") + ComponentType;
-        ComponentClass = FindObject<UClass>(nullptr, *ComponentTypeWithPrefix);
-        
-        // Try with both prefix and suffix
-        if (!ComponentClass && !ComponentType.EndsWith(TEXT("Component")))
+        NameCandidates.Add(TEXT("U") + ComponentType);
+        if (!ComponentType.EndsWith(TEXT("Component")))
         {
-            FString ComponentTypeWithBoth = TEXT("U") + ComponentType + TEXT("Component");
-            ComponentClass = FindObject<UClass>(nullptr, *ComponentTypeWithBoth);
+            NameCandidates.Add(TEXT("U") + ComponentType + TEXT("Component"));
         }
     }
-    
-    // Verify that the class is a valid component type
+    // Esli prishlo s U-prefiksom (UStaticMeshComponent), takzhe probuem bez nego —
+    // FindFirstObject ishchet po realnomu imeni klassa, kotoroe v UE huddraneno
+    // bez prefiksa (StaticMeshComponent), no nekotorye refleksive-tablitsy mogut
+    // soderzhat' i s prefiksom. Doblavlyaem bez U dlya nadezhnosti.
+    if (ComponentType.StartsWith(TEXT("U")) && ComponentType.Len() > 1)
+    {
+        NameCandidates.Add(ComponentType.Mid(1));
+    }
+
+    // Faza 1 — FindFirstObject po korotkomu imeni.
+    for (const FString& Name : NameCandidates)
+    {
+        ComponentClass = FindFirstObject<UClass>(*Name, EFindFirstObjectOptions::None,
+            ELogVerbosity::Warning, TEXT("MCP AddComponentToBlueprint"));
+        if (ComponentClass && ComponentClass->IsChildOf(UActorComponent::StaticClass()))
+        {
+            break;
+        }
+        ComponentClass = nullptr;
+    }
+
+    // Faza 2 — LoadObject po polnomu path'u v izvestnyh modulyah.
+    if (!ComponentClass)
+    {
+        static const TCHAR* ModulePaths[] = {
+            TEXT("/Script/Engine."),
+            TEXT("/Script/UMG."),
+            TEXT("/Script/UMGEditor."),
+            TEXT("/Script/PhysicsCore."),
+            TEXT("/Script/CinematicCamera."),
+            TEXT("/Script/Niagara."),
+            TEXT("/Script/AIModule."),
+            TEXT("/Script/GameplayTasks."),
+            TEXT("/Script/MovieScene."),
+        };
+        for (const FString& Name : NameCandidates)
+        {
+            // Korotkoe imya bez U-prefiksa, esli est', — eto realnoe imya klassa v reflekstsi.
+            FString CleanName = Name;
+            if (CleanName.StartsWith(TEXT("U")) && CleanName.Len() > 1)
+            {
+                CleanName = CleanName.Mid(1);
+            }
+            for (const TCHAR* ModulePath : ModulePaths)
+            {
+                const FString FullPath = FString(ModulePath) + CleanName;
+                ComponentClass = LoadObject<UClass>(nullptr, *FullPath);
+                if (ComponentClass && ComponentClass->IsChildOf(UActorComponent::StaticClass()))
+                {
+                    break;
+                }
+                ComponentClass = nullptr;
+            }
+            if (ComponentClass)
+            {
+                break;
+            }
+        }
+    }
+
+    // Final'naya valitsatsiya — eto dolzhen byt' AActorComponent-naslednik.
     if (!ComponentClass || !ComponentClass->IsChildOf(UActorComponent::StaticClass()))
     {
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown component type: %s"), *ComponentType));

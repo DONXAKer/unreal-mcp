@@ -402,15 +402,18 @@ UK2Node* FSpecializedNodeCreator::CreateGetWorldSubsystemNode(UEdGraph* Graph, c
 	}
 	if (!SubsystemClass)
 	{
-		// Короткое имя — fallback через FindFirstObject
+		// UE 5.7: FindObject(nullptr, ShortName) сломан без ANY_PACKAGE — fallback на FindFirstObject.
+		// Поддерживаем оба варианта входа: полный path "/Script/Engine.GameInstanceSubsystem"
+		// и короткое имя "GameInstanceSubsystem".
+		FString ShortName = SubsystemClassPath;
 		int32 DotIdx;
 		if (SubsystemClassPath.FindLastChar(TEXT('.'), DotIdx))
 		{
-			FString ShortName = SubsystemClassPath.Mid(DotIdx + 1);
-			SubsystemClass = FindFirstObject<UClass>(*ShortName,
-				EFindFirstObjectOptions::None, ELogVerbosity::Warning,
-				TEXT("MCP GetWorldSubsystem class lookup"));
+			ShortName = SubsystemClassPath.Mid(DotIdx + 1);
 		}
+		SubsystemClass = FindFirstObject<UClass>(*ShortName,
+			EFindFirstObjectOptions::None, ELogVerbosity::Warning,
+			TEXT("MCP GetWorldSubsystem class lookup"));
 	}
 
 	if (!SubsystemClass)
