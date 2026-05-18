@@ -5,11 +5,11 @@ WORKDIR /app
 # Install uv for fast dependency management
 RUN pip install uv --no-cache-dir
 
-# Copy dependency files
-COPY Python/pyproject.toml Python/uv.lock ./
+# Copy dependency files (uv.lock dropped — we just bumped mcp; let uv re-resolve)
+COPY Python/pyproject.toml ./
 
 # Install dependencies
-RUN uv sync --frozen --no-dev
+RUN uv sync --no-dev
 
 # Copy server source
 COPY Python/ .

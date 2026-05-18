@@ -17,6 +17,7 @@ import json
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 
 logging.basicConfig(
     level=logging.INFO,
@@ -179,8 +180,25 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
 
 mcp = FastMCP(
     "UnrealMCP",
-    description="Unreal Engine integration via Model Context Protocol (HTTP/SSE)",
+    instructions="Unreal Engine integration via Model Context Protocol (Streamable HTTP).",
     lifespan=server_lifespan,
+    # DNS-rebinding защита блокировала AI-Workflow backend (Java контейнер),
+    # который ходит сюда через host.docker.internal:3001. Разрешаем именно
+    # этот хост + стандартные локальные.
+    transport_security=TransportSecuritySettings(
+        allowed_hosts=[
+            "host.docker.internal:*",
+            "127.0.0.1:*",
+            "localhost:*",
+            "[::1]:*",
+        ],
+        allowed_origins=[
+            "http://host.docker.internal:*",
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            "http://[::1]:*",
+        ],
+    ),
 )
 
 # Register the same tools as the stdio server
@@ -227,14 +245,14 @@ except Exception as _startup_err:
 if __name__ == "__main__":
     import uvicorn
     logger.info("Starting UnrealMCP HTTP/SSE server on port %d", MCP_HTTP_PORT)
-    # FastMCP exposes an ASGI app for SSE transport;
-    # we drive it with uvicorn to control host/port.
+    # FastMCP exposes an ASGI app for Streamable HTTP transport (single POST
+    # endpoint with session header) — what AI-Workflow's Java McpClient speaks.
+    # The legacy SSE transport (GET /sse + POST /messages/?session_id=) is kept
+    # as a fallback for older clients via mount_sse().
     try:
-        # mcp >= 1.1 exposes sse_app()
-        app = mcp.sse_app()
+        app = mcp.streamable_http_app()
+        logger.info("Streamable HTTP endpoint: POST %s", mcp.settings.streamable_http_path)
     except AttributeError:
-        # fallback: let FastMCP handle the loop itself on default port
-        logger.warning("sse_app() not available — falling back to mcp.run(transport='sse')")
-        mcp.run(transport="sse")
-        raise SystemExit(0)
+        logger.warning("streamable_http_app() not available — falling back to sse_app()")
+        app = mcp.sse_app()
     uvicorn.run(app, host="0.0.0.0", port=MCP_HTTP_PORT)
