@@ -5,6 +5,7 @@ A simple MCP server for interacting with Unreal Engine.
 """
 
 import logging
+import os
 import socket
 import sys
 import json
@@ -23,9 +24,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("UnrealMCP")
 
-# Configuration
-UNREAL_HOST = "127.0.0.1"
-UNREAL_PORT = 55557
+# Configuration — honour UNREAL_HOST/UNREAL_PORT env (set by the Docker image to
+# host.docker.internal so the containerised server reaches the Editor on the host).
+# Falls back to 127.0.0.1 for non-container/local use.
+UNREAL_HOST = os.environ.get("UNREAL_HOST", "127.0.0.1")
+UNREAL_PORT = int(os.environ.get("UNREAL_PORT", "55557"))
 
 class UnrealConnection:
     """Connection to an Unreal Engine instance."""

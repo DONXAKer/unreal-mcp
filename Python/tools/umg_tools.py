@@ -549,4 +549,132 @@ def register_umg_tools(mcp: FastMCP):
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
-    logger.info("UMG tools registered successfully") 
+    @mcp.tool()
+    def build_umg_widget(
+        ctx: Context,
+        blueprint_path: str,
+        tree: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Build an entire UMG widget tree in ONE call from a declarative spec.
+
+        Preferred way to populate a Widget Blueprint: instead of dozens of
+        individual add_widget_to_umg / set_widget_property calls, hand the whole
+        hierarchy as a nested JSON object — the server constructs it depth-first.
+
+        Args:
+            blueprint_path: Full /Game/... path of the Widget Blueprint
+                (create it first via create_umg_widget_blueprint).
+            tree: Root widget node. Node schema (recursive):
+                {
+                  "name": "UniqueWidgetName",            # required
+                  "type": "CanvasPanel",                 # required; one of:
+                      # CanvasPanel, VerticalBox, HorizontalBox, ScrollBox,
+                      # Overlay, Border, SizeBox, UniformGridPanel, WrapBox,
+                      # TextBlock, Button, Image, ProgressBar, Spacer, SpinBox
+                  "is_variable": true,                   # optional, default true
+                  "properties": {                        # optional
+                      "Text": "Hello",                   #   widget property, or
+                      "Slot.Anchors": "0,0,1,1"          #   slot property (Slot.* prefix)
+                  },
+                  "events": { "OnClicked": "OnPlayClicked" },  # optional (Button etc.)
+                  "children": [ { ...node... }, ... ]          # optional
+                }
+
+        Returns:
+            {success, widgets_created, properties_set, events_bound,
+             errors: [...], log: [...]}. success is False if any node failed;
+            the rest of the tree is still attempted (partial build reported).
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
+            bp_short = blueprint_path.rstrip("/").split("/")[-1]
+            stats = {"widgets_created": 0, "properties_set": 0, "events_bound": 0}
+            errors: List[str] = []
+            log: List[str] = []
+
+            def _ok(resp) -> bool:
+                return isinstance(resp, dict) and resp.get("success", True) \
+                    and "error" not in resp
+
+            def _msg(resp) -> str:
+                if not isinstance(resp, dict):
+                    return str(resp)
+                return resp.get("error") or resp.get("message") or str(resp)
+
+            def build_node(node: Dict[str, Any], parent_name) -> None:
+                if not isinstance(node, dict):
+                    errors.append(f"node is not an object: {node!r}")
+                    return
+                wname = node.get("name")
+                wtype = node.get("type")
+                if not wname or not wtype:
+                    errors.append(f"node missing name/type: {node!r}")
+                    return
+
+                params: Dict[str, Any] = {
+                    "blueprint_path": blueprint_path,
+                    "widget_type": wtype,
+                    "widget_name": wname,
+                    "is_variable": bool(node.get("is_variable", True)),
+                }
+                if parent_name:
+                    params["parent_name"] = parent_name
+                resp = unreal.send_command("add_widget_to_umg", params)
+                if _ok(resp):
+                    stats["widgets_created"] += 1
+                    log.append(f"+ {wtype} '{wname}'"
+                               + (f" under '{parent_name}'" if parent_name else " (root)"))
+                else:
+                    errors.append(f"add '{wname}' ({wtype}): {_msg(resp)}")
+                    return  # children cannot attach to a missing parent
+
+                for prop, val in (node.get("properties") or {}).items():
+                    pr = unreal.send_command("set_widget_property", {
+                        "blueprint_path": blueprint_path,
+                        "widget_name": wname,
+                        "property_name": prop,
+                        "property_value": str(val),
+                    })
+                    if _ok(pr):
+                        stats["properties_set"] += 1
+                    else:
+                        errors.append(f"set '{wname}'.{prop}: {_msg(pr)}")
+
+                for event, fn in (node.get("events") or {}).items():
+                    er = unreal.send_command("bind_widget_event", {
+                        "widget_name": bp_short,
+                        "widget_component_name": wname,
+                        "event_name": event,
+                        "function_name": fn or f"{wname}_{event}",
+                    })
+                    if _ok(er):
+                        stats["events_bound"] += 1
+                    else:
+                        errors.append(f"bind '{wname}'.{event}: {_msg(er)}")
+
+                for child in (node.get("children") or []):
+                    build_node(child, wname)
+
+            logger.info(f"build_umg_widget: building tree into {blueprint_path}")
+            build_node(tree, None)
+
+            result = {
+                "success": len(errors) == 0,
+                "blueprint_path": blueprint_path,
+                **stats,
+                "errors": errors,
+                "log": log,
+            }
+            logger.info(f"build_umg_widget result: {stats}, {len(errors)} error(s)")
+            return result
+        except Exception as e:
+            error_msg = f"Error building UMG widget tree: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    logger.info("UMG tools registered successfully")
