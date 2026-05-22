@@ -1401,4 +1401,119 @@ def register_blueprint_node_tools(mcp: FastMCP):
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    # ─────────────────────────────────────────────────────────────────────
+    # FIX-UI-008 extras — Branch / VariableGet / VariableSet node helpers
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def add_blueprint_branch_node(
+        ctx: Context,
+        blueprint_name: str,
+        pos_x: float = 0.0,
+        pos_y: float = 0.0,
+    ) -> Dict[str, Any]:
+        """
+        Add a Branch (If-Then-Else) node to a Blueprint's EventGraph.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            pos_x, pos_y: Optional graph position.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "node_type": "Branch",
+                "pos_x": pos_x,
+                "pos_y": pos_y,
+            }
+            logger.info(f"Adding Branch node to blueprint '{blueprint_name}'")
+            response = unreal.send_command("add_blueprint_node", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error adding branch node: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def add_blueprint_variable_get_node(
+        ctx: Context,
+        blueprint_name: str,
+        variable_name: str,
+        pos_x: float = 0.0,
+        pos_y: float = 0.0,
+    ) -> Dict[str, Any]:
+        """
+        Add a VariableGet node (self member getter) to a Blueprint's EventGraph.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            variable_name: Name of the Blueprint variable to read.
+            pos_x, pos_y: Optional graph position.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "node_type": "VariableGet",
+                "variable_name": variable_name,
+                "pos_x": pos_x,
+                "pos_y": pos_y,
+            }
+            logger.info(f"Adding VariableGet node for '{variable_name}' in blueprint '{blueprint_name}'")
+            response = unreal.send_command("add_blueprint_node", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error adding variable get node: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def add_blueprint_variable_set_node(
+        ctx: Context,
+        blueprint_name: str,
+        variable_name: str,
+        pos_x: float = 0.0,
+        pos_y: float = 0.0,
+    ) -> Dict[str, Any]:
+        """
+        Add a VariableSet node (self member setter) to a Blueprint's EventGraph.
+
+        Args:
+            blueprint_name: Target Blueprint.
+            variable_name: Name of the Blueprint variable to write.
+            pos_x, pos_y: Optional graph position.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_name": blueprint_name,
+                "node_type": "VariableSet",
+                "variable_name": variable_name,
+                "pos_x": pos_x,
+                "pos_y": pos_y,
+            }
+            logger.info(f"Adding VariableSet node for '{variable_name}' in blueprint '{blueprint_name}'")
+            response = unreal.send_command("add_blueprint_node", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error adding variable set node: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Blueprint node tools registered successfully")

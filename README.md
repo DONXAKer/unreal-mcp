@@ -32,9 +32,10 @@ Recipes live in your project's `Content/Python/recipes/*.py` and are discovered 
 MCP Client (Claude / Cursor / Windsurf)
     │  MCP Protocol (stdio or HTTP)
     ▼
-Python MCP Server  (Python/unreal_mcp_server_advanced.py, port auto)
-    │  @recipe framework  →  discovers Content/Python/recipes/*.py
-    │  tools/primitives.py  →  thin wrappers over send_command()
+Python MCP Server  (stdio: unreal_mcp_server.py · HTTP/SSE: unreal_mcp_server_http.py)
+    │  tools/*_tools.py     →  117 @mcp.tool() commands in 13 domain modules
+    │  @recipe framework    →  discovers Content/Python/recipes/*.py
+    │  tools/primitives.py  →  thin wrappers used by recipes
     │  TCP Socket + JSON  (port 55557)
     ▼
 C++ Plugin  (EpicUnrealMCPBridge.cpp)
@@ -53,7 +54,7 @@ UE5 Editor Subsystems
 
 ## Quick Start
 
-**Requirements:** Unreal Engine 5.5+, Python 3.12+, [uv](https://docs.astral.sh/uv/)
+**Requirements:** Unreal Engine 5.5+. For the local stdio server — Python 3.12+ and [uv](https://docs.astral.sh/uv/). For the containerised HTTP server — only Docker.
 
 ### 1. Plugin
 
@@ -70,26 +71,56 @@ Or add the plugin to an existing project — see [PLUGIN_SETUP.md](PLUGIN_SETUP.
 
 Create `mcp-project.json` in your UE project root (next to the `.uproject` file). See **Config schema** below.
 
-### 3. Python server
+### 3. MCP server
+
+Two ways to run it.
+
+**A. Local — stdio, for desktop MCP clients:**
 
 ```bash
 cd Python/
 uv sync
-uv run unreal_mcp_server_advanced.py
+uv run unreal_mcp_server.py        # registers all 13 tool modules (117 tools)
 ```
 
+**B. Docker — HTTP/SSE, for networked / pipeline clients:**
+
+```bash
+docker build -t unreal-mcp .
+docker run --rm -p 3001:3001 \
+  -e UNREAL_HOST=host.docker.internal \
+  -e UNREAL_PORT=55557 \
+  -e MCP_HTTP_PORT=3001 \
+  unreal-mcp
+```
+
+The container runs `unreal_mcp_server_http.py` and serves the MCP Streamable-HTTP
+endpoint (legacy SSE kept as a fallback) on `http://localhost:3001`. It reaches the
+Unreal Editor's in-process C++ bridge over TCP at `UNREAL_HOST:UNREAL_PORT`.
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `UNREAL_HOST` | `host.docker.internal` | Host running the Unreal Editor |
+| `UNREAL_PORT` | `55557` | TCP port of the in-Editor C++ bridge |
+| `MCP_HTTP_PORT` | `3001` | Port the MCP server listens on |
+
 ### 4. MCP client
+
+For a **stdio** client, point it at the server script:
 
 ```json
 {
   "mcpServers": {
     "unrealMCP": {
       "command": "uv",
-      "args": ["--directory", "/absolute/path/to/Python", "run", "unreal_mcp_server_advanced.py"]
+      "args": ["--directory", "/absolute/path/to/Python", "run", "unreal_mcp_server.py"]
     }
   }
 }
 ```
+
+For an **HTTP** client (e.g. an AI-Workflow pipeline agent), point it at the
+running container's URL — `http://localhost:3001`.
 
 Config file locations:
 
@@ -219,12 +250,17 @@ After editing `primitives.py` or other Python tools — restart the server.
 
 After editing C++ commands — rebuild the UE plugin, restart the Editor.
 
-## Available Commands (v1.17.0)
+## Available Commands (v1.18.1)
 
-The plugin's outer bridge (`EpicUnrealMCPBridge.cpp`) routes 109 command types
-to category-specific dispatchers. The Python MCP server (`Python/tools/*.py`)
-exposes **all 109** of these as `@mcp.tool()` entries (as of v1.17.0); recipes
-wrap higher-level workflows via `primitives.py`.
+The Python MCP server exposes **117 `@mcp.tool()` commands** across 13 domain
+modules in `Python/tools/` (each registered by a `register_*_tools(mcp)` call),
+plus the `reload_config` / `reload_recipes` server tools. Recipes add
+higher-level project workflows on top — see the Recipes Cookbook.
+
+> **Server coverage differs.** The stdio server (`unreal_mcp_server.py`)
+> registers all 13 modules. The Docker / HTTP server (`unreal_mcp_server_http.py`)
+> currently registers the 5 core modules — `editor`, `blueprint`, `node`,
+> `project`, `umg` (84 tools) — plus the server tools.
 
 ### Naming convention (adopted v1.17.0)
 
@@ -251,54 +287,59 @@ When implementing a new command, the `unreal-mcp-plugin-dev` agent enforces
 outer bridge allow-list. Old verb_first names are added ONLY when the agent
 explicitly notes they are needed for an existing caller in `tasks/active/`.
 
-### Outer Commands (routed by EpicUnrealMCPBridge)
+### Commands by module
 
-#### Editor / Level
-- `get_actors_in_level`, `find_actors_by_name`, `spawn_actor`, `spawn_blueprint_actor`, `delete_actor`, `set_actor_transform`, `get_actor_properties`, `set_actor_property`, `focus_viewport`
-- `create_level`, `load_level`, `save_level`, `spawn_actor_in_level`, `remove_actor_from_level`, `set_actor_transform_in_level`, `list_actors_in_level`
+Counts are `@mcp.tool()` entries per file in `Python/tools/`.
 
-#### Blueprint (class + component)
-- `create_blueprint`, `create_blueprint_from_template`, `reparent_blueprint`, `compile_blueprint`, `compile_blueprint_verbose`, `validate_blueprint`
-- `add_component_to_blueprint`, `delete_component_from_blueprint`, `rename_component`, `list_components`, `set_component_transform`, `set_component_property`, `set_static_mesh_properties`, `set_physics_properties`
-- `set_blueprint_property`
-- `read_blueprint_content`, `analyze_blueprint_graph`, `list_blueprints`, `get_blueprint_class_info`, `get_blueprint_variable_details`, `get_blueprint_function_details`
+#### Editor — `editor_tools.py` (10)
+`get_actors_in_level`, `find_actors_by_name`, `spawn_actor`, `spawn_blueprint_actor`, `delete_actor`, `set_actor_transform`, `get_actor_properties`, `set_actor_property`, `focus_viewport`, `ping`
+
+#### Level — `level_tools.py` (7)
+`create_level`, `load_level`, `save_level`, `spawn_actor_in_level`, `remove_actor_from_level`, `set_actor_transform_in_level`, `list_actors_in_level`
+
+#### Blueprint class & components — `blueprint_tools.py` (26)
+- Class: `create_blueprint`, `create_blueprint_from_template`, `reparent_blueprint`, `compile_blueprint`, `compile_blueprint_verbose`, `validate_blueprint`, `set_blueprint_property`, `set_pawn_properties`
+- Components: `add_component_to_blueprint`, `delete_component_from_blueprint`, `rename_component`, `list_components`, `set_component_transform`, `set_component_property`, `set_static_mesh_properties`, `set_physics_properties`
+- Introspection: `list_blueprints`, `get_blueprint_class_info`, `read_blueprint_content`, `analyze_blueprint_graph`, `get_blueprint_variable_details`, `get_blueprint_function_details`
 - Interfaces: `create_blueprint_interface`, `implement_blueprint_interface`, `remove_blueprint_interface`, `add_interface_function`
-- Materials: `set_mesh_material_color`, `get_available_materials`, `apply_material_to_actor`, `apply_material_to_blueprint`, `get_actor_material_info`, `get_blueprint_material_info`
 
-#### Blueprint Graph (nodes, variables, functions)
-- Nodes: `add_blueprint_node` (see node_type vocabulary below), `connect_nodes`, `delete_node`, `set_node_property`, `find_blueprint_nodes`
-- Events: `add_event_node`, `add_component_bound_event`, `create_custom_event`, `add_custom_event_input`, `add_input_action_node`
+#### Blueprint graph — `node_tools.py` (35)
+- Nodes: `add_blueprint_event_node`, `add_blueprint_input_action_node`, `add_blueprint_function_node`, `add_blueprint_branch_node`, `add_blueprint_variable_get_node`, `add_blueprint_variable_set_node`, `connect_blueprint_nodes`, `delete_node`, `set_node_property`, `find_blueprint_nodes`
+- Events: `create_custom_event`, `add_custom_event_input`, `add_component_bound_event`
+- Self / component refs: `add_blueprint_self_reference`, `add_blueprint_get_self_component_reference`
 - Pins: `split_struct_pin`, `recombine_struct_pin`, `set_pin_default_value`, `get_pin_info`, `disconnect_pin`
-- Variables: `create_variable`, `set_blueprint_variable_properties`, `set_blueprint_variable_flags`, `set_variable_default_value`, `rename_blueprint_variable`, `delete_blueprint_variable`, `list_blueprint_variables`
-- Functions: `create_function`, `delete_function`, `rename_function`, `add_function_input`, `add_function_output`, `list_blueprint_functions`, `add_function_local_variable`, `set_function_flags`
+- Variables: `add_blueprint_variable`, `rename_blueprint_variable`, `delete_blueprint_variable`, `list_blueprint_variables`, `set_variable_default_value`, `set_blueprint_variable_properties`, `set_blueprint_variable_flags`
+- Functions: `create_function`, `delete_function`, `rename_function`, `add_function_input`, `add_function_output`, `add_function_local_variable`, `set_function_flags`, `list_blueprint_functions`
 
-#### UMG
-- `create_umg_widget_blueprint`, `add_widget_to_umg`, `add_text_block_to_widget`, `add_button_to_widget`, `add_panel_widget_to_widget`, `set_widget_property`, `bind_widget_event`, `set_text_block_binding`, `add_widget_to_viewport`, `get_umg_hierarchy`
+#### UMG — `umg_tools.py` (12)
+`create_umg_widget_blueprint`, `build_umg_widget`, `add_widget_to_umg`, `delete_widget_from_umg`, `add_text_block_to_widget`, `add_button_to_widget`, `add_panel_widget_to_widget`, `set_widget_property`, `set_text_block_binding`, `bind_widget_event`, `add_widget_to_viewport`, `get_umg_hierarchy`
 
-#### Animation Blueprint
-- `create_animation_blueprint`, `set_anim_skeleton`, `add_state_machine`, `add_anim_state`, `add_anim_transition`, `add_play_anim_node`, `add_blend_space_player_node`
+#### Animation Blueprint — `animation_tools.py` (7)
+`create_animation_blueprint`, `set_anim_skeleton`, `add_state_machine`, `add_anim_state`, `add_anim_transition`, `add_play_anim_node`, `add_blend_space_player_node`
 
-#### Input
-- `create_input_mapping`
+#### Input — `project_tools.py` (1)
+`create_input_mapping`
 
-#### Asset / Texture / Material / Mesh / Niagara / DataAsset
-- `asset_exists`, `delete_asset`
-- `import_texture`, `generate_placeholder_texture`
-- `create_material_instance`, `set_material_instance_params`
-- `import_static_mesh`
-- `copy_niagara_system`, `set_niagara_parameters`
-- `import_datatable_from_csv`, `set_datatable_row`, `get_datatable_rows`, `import_sound_wave`
+#### Materials — `material_tools.py` (8)
+`create_material_instance`, `set_material_instance_params`, `set_mesh_material_color`, `get_available_materials`, `apply_material_to_actor`, `apply_material_to_blueprint`, `get_actor_material_info`, `get_blueprint_material_info`
 
-### `add_blueprint_node` — supported `node_type` values (39 total)
+#### Textures — `texture_tools.py` (2)
+`import_texture`, `generate_placeholder_texture`
 
-- **Flow control**: `Branch`, `Comparison`, `Switch`, `SwitchEnum`, `SwitchInteger`, `ExecutionSequence`, `ForEachLoop`, `Delay`, `MultiGate`, `Gate`, `DoOnce`, `FlipFlop`
-- **Variables**: `VariableGet`, `VariableSet`
-- **Containers**: `MakeArray`, `MakeMap`, `MakeSet`, `BreakStruct`, `MakeStruct`
-- **Functions/events**: `CallFunction`, `Print`, `Select`, `Event` (legacy — prefer `add_event_node`)
-- **Spawn/construct**: `SpawnActor`, `AddComponentByClass`, `ConstructObject`, `CreateWidget`
-- **Casts**: `DynamicCast`, `ClassDynamicCast`, `CastByteToEnum`
-- **Misc**: `Timeline`, `GetDataTableRow`, `Self`, `Knot`, `GetWorldSubsystem`
-- **Delegates**: `AddDelegate`, `RemoveDelegate`, `CallDelegate`, `ClearDelegate`
+#### Static Mesh — `mesh_tools.py` (1)
+`import_static_mesh`
+
+#### Niagara — `niagara_tools.py` (2)
+`copy_niagara_system`, `set_niagara_parameters`
+
+#### DataTable & Sound — `data_asset_tools.py` (4)
+`import_datatable_from_csv`, `set_datatable_row`, `get_datatable_rows`, `import_sound_wave`
+
+#### Asset utilities — `asset_tools.py` (2)
+`asset_exists`, `delete_asset`
+
+#### Server tools (always registered)
+`reload_config` — reload `mcp-project.json` from disk · `reload_recipes` — hot-reload recipes without restarting the server
 
 ## Primitives Reference
 
@@ -459,11 +500,16 @@ unreal-mcp/
 │       └── Source/UnrealMCP/
 │           ├── Public/Commands/
 │           └── Private/Commands/
+├── Dockerfile                          # builds the HTTP/SSE server image
 ├── Python/
-│   ├── unreal_mcp_server.py           # Basic server
-│   ├── unreal_mcp_server_advanced.py  # Full server (recommended)
+│   ├── unreal_mcp_server.py            # stdio server — registers all 13 tool modules
+│   ├── unreal_mcp_server_http.py       # HTTP/SSE server (Docker, port 3001)
+│   ├── unreal_mcp_server_advanced.py   # monolithic variant — 47 inline tools + helpers/
 │   ├── tools/
-│   │   ├── primitives.py          # Python wrappers for C++ commands
+│   │   ├── editor_tools.py  blueprint_tools.py  node_tools.py  umg_tools.py
+│   │   ├── animation_tools.py  level_tools.py  material_tools.py  project_tools.py
+│   │   ├── texture_tools.py  mesh_tools.py  niagara_tools.py  data_asset_tools.py  asset_tools.py
+│   │   ├── primitives.py          # Python wrappers used by recipes
 │   │   ├── recipe_framework.py    # @recipe / @arg decorators + registry
 │   │   ├── project_config.py      # mcp-project.json loader
 │   │   └── result_format.py       # ok() / fail() helpers

@@ -45,6 +45,9 @@ TSharedPtr<FJsonObject> FBlueprintNodeManager::AddNode(const TSharedPtr<FJsonObj
 	}
 
 	// Get optional node parameters
+	// Falls back to top-level Params when no "node_params" sub-object is present,
+	// so Python callers can pass fields like target_function/variable_name at the
+	// top level without wrapping them in a nested object.
 	const TSharedPtr<FJsonObject>* NodeParamsPtr;
 	TSharedPtr<FJsonObject> NodeParams;
 	if (Params->TryGetObjectField(TEXT("node_params"), NodeParamsPtr))
@@ -53,7 +56,7 @@ TSharedPtr<FJsonObject> FBlueprintNodeManager::AddNode(const TSharedPtr<FJsonObj
 	}
 	else
 	{
-		NodeParams = MakeShareable(new FJsonObject);
+		NodeParams = Params;
 	}
 
 	// Load the Blueprint

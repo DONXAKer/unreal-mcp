@@ -39,6 +39,7 @@
 #include "Kismet2/BlueprintEditorUtils.h"
 #include "EditorAssetLibrary.h"
 #include "Fonts/SlateFontInfo.h"
+#include "Widgets/Layout/Anchors.h"
 
 // For create_umg_widget_blueprint / bind_widget_event / add_widget_to_viewport / set_text_block_binding
 #include "WidgetBlueprintFactory.h"
@@ -383,6 +384,10 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddWidgetToUMG(const TShare
 
     FBlueprintEditorUtils::MarkBlueprintAsModified(WidgetBlueprint);
     WidgetBlueprint->MarkPackageDirty();
+    // Persist to disk synchronously — the Editor autosave is async and misses
+    // the pipeline's commit window, so build_umg_widget output never lands in
+    // the commit. Same SaveAsset pattern as HandleCreateUMGWidgetBlueprint.
+    UEditorAssetLibrary::SaveAsset(BlueprintPath, /*bOnlyIfIsDirty=*/ false);
 
     TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
     Result->SetStringField(TEXT("widget_name"), WidgetName);
@@ -817,6 +822,33 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleSetWidgetProperty(const TSh
             else if (SlotPropName == TEXT("AutoSize"))
             {
                 CPSlot->SetAutoSize(PropertyValue.ToBool());
+                bModified = true;
+            }
+            else if (SlotPropName == TEXT("Anchors"))
+            {
+                // format: "MinX,MinY,MaxX,MaxY"
+                TArray<FString> Parts;
+                PropertyValue.ParseIntoArray(Parts, TEXT(","));
+                if (Parts.Num() == 4)
+                {
+                    FAnchors Anchors;
+                    Anchors.Minimum = FVector2D(FCString::Atof(*Parts[0]), FCString::Atof(*Parts[1]));
+                    Anchors.Maximum = FVector2D(FCString::Atof(*Parts[2]), FCString::Atof(*Parts[3]));
+                    CPSlot->SetAnchors(Anchors);
+                    bModified = true;
+                }
+                else
+                {
+                    return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Slot.Anchors expects 'MinX,MinY,MaxX,MaxY'"));
+                }
+            }
+            else if (SlotPropName == TEXT("Offsets"))
+            {
+                // format: "Left,Top,Right,Bottom"
+                FMargin Margin;
+                if (!UMGCommandsUtils::ParseMargin(PropertyValue, Margin))
+                    return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Slot.Offsets expects float or 'L,T,R,B'"));
+                CPSlot->SetOffsets(Margin);
                 bModified = true;
             }
         }
