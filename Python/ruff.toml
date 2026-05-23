@@ -4,8 +4,6 @@ line-length = 100
 extend-exclude = [
   ".venv",
   "tests/fixtures",
-  # Legacy monolithic server — superseded by tools/*_tools.py; will be removed in PR2.
-  "unreal_mcp_server_advanced.py",
 ]
 
 [lint]

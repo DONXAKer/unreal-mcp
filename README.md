@@ -504,7 +504,6 @@ unreal-mcp/
 ├── Python/
 │   ├── unreal_mcp_server.py            # stdio server — registers all 13 tool modules
 │   ├── unreal_mcp_server_http.py       # HTTP/SSE server (Docker, port 3001)
-│   ├── unreal_mcp_server_advanced.py   # monolithic variant — 47 inline tools + helpers/
 │   ├── tools/
 │   │   ├── editor_tools.py  blueprint_tools.py  node_tools.py  umg_tools.py
 │   │   ├── animation_tools.py  level_tools.py  material_tools.py  project_tools.py

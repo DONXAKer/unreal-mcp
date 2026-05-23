@@ -93,7 +93,7 @@ YourProject/Content/Python/recipes/
 ```bash
 cd unreal-mcp/Python/
 uv sync
-uv run unreal_mcp_server_advanced.py
+uv run unreal_mcp_server.py
 ```
 
 ## 7. Настройка MCP-клиента
@@ -105,7 +105,7 @@ uv run unreal_mcp_server_advanced.py
       "command": "uv",
       "args": [
         "--directory", "/absolute/path/to/unreal-mcp/Python",
-        "run", "unreal_mcp_server_advanced.py"
+        "run", "unreal_mcp_server.py"
       ]
     }
   }
@@ -194,4 +194,4 @@ always reconnects per command.
 | `reload_recipes()` → 0 recipes | Убедитесь что `mcp-project.json` в корне проекта и `recipesDir` существует |
 | Blueprint создаётся, но не видно в Content Browser | Обновитесь до ≥ 1.6.3 (fix: `create_blueprint` теперь вызывает `SaveAsset`) |
 | `NIAGARA_UNAVAILABLE` | Включите плагин Niagara в Edit → Plugins, пересоберите |
-| Порт 55557 занят | Измените порт в `unreal_mcp_server_advanced.py` (переменная `UE_TCP_PORT`) и перезапустите Editor |
+| Порт 55557 занят | Установите `UNREAL_PORT=NNNNN` перед запуском `unreal_mcp_server.py` и поменяйте порт в `EpicUnrealMCPBridge.cpp` со стороны плагина (пересобрать) |
