@@ -7,28 +7,29 @@ Introduced: v1.17.0 (Phase 5 — close the bridge↔FastMCP wrapper gap).
 """
 
 import logging
-from typing import Dict, List, Any
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
 
 logger = logging.getLogger("UnrealMCP")
 
 
-def register_texture_tools(mcp: FastMCP):
+def register_texture_tools(mcp: FastMCP) -> None:
     """Register Texture tools with the MCP server."""
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def import_texture(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         assetPath: str,
         sourcePath: str,
         sRGB: bool = True,
         compression: str = "BC7",
         mipGen: str = "FromTexture",
         ifExists: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Import a texture from disk (PNG/TGA/JPG/etc) into Unreal as a UTexture2D.
 
@@ -46,7 +47,7 @@ def register_texture_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "assetPath": assetPath,
                 "sourcePath": sourcePath,
                 "sRGB": sRGB,
@@ -67,13 +68,13 @@ def register_texture_tools(mcp: FastMCP):
 
     @mcp.tool()
     def generate_placeholder_texture(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         assetPath: str,
         size: int = 512,
-        color: List[float] = None,
+        color: list[float] = None,
         label: str = None,
         ifExists: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Generate a synthetic placeholder UTexture2D (solid color, optionally with
         an inline label).
@@ -90,7 +91,7 @@ def register_texture_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "assetPath": assetPath,
                 "size": int(size),
             }

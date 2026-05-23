@@ -20,7 +20,6 @@ Exit 0 on success, 1 on any failure.
 from __future__ import annotations
 
 import sys
-from typing import Any, Dict
 
 from tests._smoke_common import (
     assert_success,
@@ -44,7 +43,7 @@ def _parse_skeleton(argv: list[str]) -> str:
 
 
 def main(argv: list[str]) -> int:
-    _no_cleanup = parse_no_cleanup(argv)  # noqa: F841
+    _no_cleanup = parse_no_cleanup(argv)
     skeleton_path = _parse_skeleton(argv)
     print(f"using skeleton: {skeleton_path}")
 

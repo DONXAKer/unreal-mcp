@@ -8,7 +8,7 @@ the same JSON shape. See MCP-CONTENT-001 task for design decisions.
 from typing import Any, Literal
 
 Status = Literal["created", "skipped", "overwritten", "updated"]
-ErrorCategory = Literal["user", "io", "ue_internal", "validation", "config"]
+ErrorCategory = Literal["user", "io", "ue_internal", "validation", "config", "test"]
 
 
 def ok(status: Status, asset_path: str, **meta: Any) -> dict[str, Any]:

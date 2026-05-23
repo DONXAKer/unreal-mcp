@@ -7,23 +7,24 @@ Introduced: v1.17.0 (Phase 5 — close the bridge↔FastMCP wrapper gap).
 """
 
 import logging
-from typing import Dict, Any
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
 
 logger = logging.getLogger("UnrealMCP")
 
 
-def register_asset_tools(mcp: FastMCP):
+def register_asset_tools(mcp: FastMCP) -> None:
     """Register Asset tools with the MCP server."""
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def asset_exists(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         assetPath: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Read-only: check whether an asset exists in the AssetRegistry.
 
@@ -51,10 +52,10 @@ def register_asset_tools(mcp: FastMCP):
 
     @mcp.tool()
     def delete_asset(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         assetPath: str,
         ifMissing: str = "skip",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Delete an asset by /Game/... path.
 

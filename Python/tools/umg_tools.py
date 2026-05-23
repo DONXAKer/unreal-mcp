@@ -5,25 +5,26 @@ This module provides tools for creating and manipulating UMG Widget Blueprints i
 """
 
 import logging
-from typing import Dict, List, Any
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
 
 # Get logger
 logger = logging.getLogger("UnrealMCP")
 
-def register_umg_tools(mcp: FastMCP):
+def register_umg_tools(mcp: FastMCP) -> None:
     """Register UMG tools with the MCP server."""
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def create_umg_widget_blueprint(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         widget_name: str,
         parent_class: str = "UserWidget",
         path: str = "/Game/UI"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new UMG Widget Blueprint.
         
@@ -66,15 +67,15 @@ def register_umg_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_text_block_to_widget(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         widget_name: str,
         text_block_name: str,
         text: str = "",
-        position: List[float] = [0.0, 0.0],
-        size: List[float] = [200.0, 50.0],
+        position: list[float] = None,
+        size: list[float] = None,
         font_size: int = 12,
-        color: List[float] = [1.0, 1.0, 1.0, 1.0]
-    ) -> Dict[str, Any]:
+        color: list[float] = None,
+    ) -> dict[str, Any]:
         """
         Add a Text Block widget to a UMG Widget Blueprint.
         
@@ -102,12 +103,12 @@ def register_umg_tools(mcp: FastMCP):
                 "widget_name": widget_name,
                 "text_block_name": text_block_name,
                 "text": text,
-                "position": position,
-                "size": size,
+                "position": position if position is not None else [0.0, 0.0],
+                "size": size if size is not None else [200.0, 50.0],
                 "font_size": font_size,
-                "color": color
+                "color": color if color is not None else [1.0, 1.0, 1.0, 1.0],
             }
-            
+
             logger.info(f"Adding Text Block to widget with params: {params}")
             response = unreal.send_command("add_text_block_to_widget", params)
             
@@ -125,16 +126,16 @@ def register_umg_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_button_to_widget(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         widget_name: str,
         button_name: str,
         text: str = "",
-        position: List[float] = [0.0, 0.0],
-        size: List[float] = [200.0, 50.0],
+        position: list[float] = None,
+        size: list[float] = None,
         font_size: int = 12,
-        color: List[float] = [1.0, 1.0, 1.0, 1.0],
-        background_color: List[float] = [0.1, 0.1, 0.1, 1.0]
-    ) -> Dict[str, Any]:
+        color: list[float] = None,
+        background_color: list[float] = None,
+    ) -> dict[str, Any]:
         """
         Add a Button widget to a UMG Widget Blueprint.
         
@@ -163,13 +164,13 @@ def register_umg_tools(mcp: FastMCP):
                 "widget_name": widget_name,
                 "button_name": button_name,
                 "text": text,
-                "position": position,
-                "size": size,
+                "position": position if position is not None else [0.0, 0.0],
+                "size": size if size is not None else [200.0, 50.0],
                 "font_size": font_size,
-                "color": color,
-                "background_color": background_color
+                "color": color if color is not None else [1.0, 1.0, 1.0, 1.0],
+                "background_color": background_color if background_color is not None else [0.1, 0.1, 0.1, 1.0],
             }
-            
+
             logger.info(f"Adding Button to widget with params: {params}")
             response = unreal.send_command("add_button_to_widget", params)
             
@@ -187,13 +188,13 @@ def register_umg_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_panel_widget_to_widget(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         widget_name: str,
         panel_name: str,
         panel_type: str,
-        position: List[float] = [0.0, 0.0],
-        size: List[float] = [400.0, 100.0]
-    ) -> Dict[str, Any]:
+        position: list[float] = None,
+        size: list[float] = None,
+    ) -> dict[str, Any]:
         """
         Add a container/panel widget (HorizontalBox, VerticalBox, UniformGridPanel,
         CanvasPanel, ScrollBox, WrapBox, Overlay) to a Widget Blueprint's root canvas.
@@ -221,8 +222,8 @@ def register_umg_tools(mcp: FastMCP):
                 "widget_name": widget_name,
                 "panel_name": panel_name,
                 "panel_type": panel_type,
-                "position": position,
-                "size": size
+                "position": position if position is not None else [0.0, 0.0],
+                "size": size if size is not None else [400.0, 100.0],
             }
 
             logger.info(f"Adding panel widget to widget with params: {params}")
@@ -242,12 +243,12 @@ def register_umg_tools(mcp: FastMCP):
 
     @mcp.tool()
     def bind_widget_event(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         widget_name: str,
         widget_component_name: str,
         event_name: str,
         function_name: str = ""
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Bind an event on a widget component to a function.
         
@@ -296,10 +297,10 @@ def register_umg_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_widget_to_viewport(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         widget_name: str,
         z_order: int = 0
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add a Widget Blueprint instance to the viewport.
         
@@ -340,12 +341,12 @@ def register_umg_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_text_block_binding(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         widget_name: str,
         text_block_name: str,
         binding_property: str,
         binding_type: str = "Text"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Set up a property binding for a Text Block widget.
         
@@ -394,13 +395,13 @@ def register_umg_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_widget_to_umg(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_path: str,
         widget_type: str,
         widget_name: str,
         parent_name: str = None,
         is_variable: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Generic widget constructor: add any supported widget type to a Widget
         Blueprint hierarchy.
@@ -420,7 +421,7 @@ def register_umg_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "blueprint_path": blueprint_path,
                 "widget_type": widget_type,
                 "widget_name": widget_name,
@@ -444,10 +445,10 @@ def register_umg_tools(mcp: FastMCP):
 
     @mcp.tool()
     def delete_widget_from_umg(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_path: str,
         widget_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Remove a widget from a Widget Blueprint's WidgetTree.
 
@@ -485,12 +486,12 @@ def register_umg_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_widget_property(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_path: str,
         widget_name: str,
         property_name: str,
         property_value: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Set a property on a widget inside a Widget Blueprint. Supports widget
         properties and slot properties (prefix "Slot.", e.g. "Slot.Position").
@@ -526,9 +527,9 @@ def register_umg_tools(mcp: FastMCP):
 
     @mcp.tool()
     def get_umg_hierarchy(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_path: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Read-only recursive dump of a Widget Blueprint's widget tree.
 
@@ -554,10 +555,10 @@ def register_umg_tools(mcp: FastMCP):
 
     @mcp.tool()
     def build_umg_widget(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_path: str,
-        tree: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        tree: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Build an entire UMG widget tree in ONE call from a declarative spec.
 
@@ -597,19 +598,19 @@ def register_umg_tools(mcp: FastMCP):
 
             bp_short = blueprint_path.rstrip("/").split("/")[-1]
             stats = {"widgets_created": 0, "properties_set": 0, "events_bound": 0}
-            errors: List[str] = []
-            log: List[str] = []
+            errors: list[str] = []
+            log: list[str] = []
 
-            def _ok(resp) -> bool:
+            def _ok(resp: Any) -> bool:
                 return isinstance(resp, dict) and resp.get("success", True) \
                     and "error" not in resp
 
-            def _msg(resp) -> str:
+            def _msg(resp: Any) -> str:
                 if not isinstance(resp, dict):
                     return str(resp)
                 return resp.get("error") or resp.get("message") or str(resp)
 
-            def build_node(node: Dict[str, Any], parent_name) -> None:
+            def build_node(node: dict[str, Any], parent_name: str | None) -> None:
                 if not isinstance(node, dict):
                     errors.append(f"node is not an object: {node!r}")
                     return
@@ -619,7 +620,7 @@ def register_umg_tools(mcp: FastMCP):
                     errors.append(f"node missing name/type: {node!r}")
                     return
 
-                params: Dict[str, Any] = {
+                params: dict[str, Any] = {
                     "blueprint_path": blueprint_path,
                     "widget_type": wtype,
                     "widget_name": wname,

@@ -8,26 +8,27 @@ Introduced: v1.17.0 (Phase 5 — close the bridge↔FastMCP wrapper gap).
 """
 
 import logging
-from typing import Dict, Any
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
 
 logger = logging.getLogger("UnrealMCP")
 
 
-def register_data_asset_tools(mcp: FastMCP):
+def register_data_asset_tools(mcp: FastMCP) -> None:
     """Register DataAsset tools with the MCP server."""
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def import_datatable_from_csv(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         assetPath: str,
         csvPath: str,
         rowStruct: str = None,
         ifExists: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Import a CSV into a UDataTable.
 
@@ -43,7 +44,7 @@ def register_data_asset_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "assetPath": assetPath,
                 "csvPath": csvPath,
             }
@@ -63,11 +64,11 @@ def register_data_asset_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_datatable_row(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         assetPath: str,
         rowName: str,
-        rowJson: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        rowJson: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Insert or update a single row in a UDataTable. Field names not present
         on the row struct are silently skipped (returned in meta).
@@ -100,9 +101,9 @@ def register_data_asset_tools(mcp: FastMCP):
 
     @mcp.tool()
     def get_datatable_rows(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         assetPath: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Read-only: enumerate all rows of a UDataTable with their reflected field
         values.
@@ -128,11 +129,11 @@ def register_data_asset_tools(mcp: FastMCP):
 
     @mcp.tool()
     def import_sound_wave(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         assetPath: str,
         wavPath: str,
         ifExists: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Import a .wav file as a USoundWave asset.
 
@@ -146,7 +147,7 @@ def register_data_asset_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "assetPath": assetPath,
                 "wavPath": wavPath,
             }

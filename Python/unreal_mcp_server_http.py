@@ -10,12 +10,14 @@ Environment variables:
   MCP_HTTP_PORT - port to listen on for HTTP/SSE (default: 3001)
 """
 
+import json
 import logging
 import os
 import socket
-import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Dict, Any, Optional
+from typing import Any
+
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
@@ -34,8 +36,8 @@ logger.info("UnrealMCP HTTP: will connect to Unreal at %s:%d", UNREAL_HOST, UNRE
 
 
 class UnrealConnection:
-    def __init__(self):
-        self.socket = None
+    def __init__(self) -> None:
+        self.socket: socket.socket | None = None
         self.connected = False
 
     def connect(self) -> bool:
@@ -59,7 +61,7 @@ class UnrealConnection:
             self.connected = False
             return False
 
-    def disconnect(self):
+    def disconnect(self) -> None:
         if self.socket:
             try:
                 self.socket.close()
@@ -68,8 +70,8 @@ class UnrealConnection:
         self.socket = None
         self.connected = False
 
-    def receive_full_response(self, sock, buffer_size=4096) -> bytes:
-        chunks = []
+    def receive_full_response(self, sock: socket.socket, buffer_size: int = 4096) -> bytes:
+        chunks: list[bytes] = []
         sock.settimeout(5)
         try:
             while True:
@@ -85,7 +87,7 @@ class UnrealConnection:
                     return data
                 except json.JSONDecodeError:
                     continue
-        except socket.timeout:
+        except TimeoutError:
             if chunks:
                 data = b''.join(chunks)
                 try:
@@ -93,9 +95,13 @@ class UnrealConnection:
                     return data
                 except Exception:
                     pass
-            raise Exception("Timeout receiving Unreal response")
+            raise RuntimeError("Timeout receiving Unreal response") from None
 
-    def send_command(self, command: str, params: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+        # Unreachable: loop exits via break only when EOF + partial chunks, which
+        # already raises above. Kept to satisfy strict mypy "missing return".
+        return b"".join(chunks)
+
+    def send_command(self, command: str, params: dict[str, Any] = None) -> dict[str, Any] | None:
         if self.socket:
             try:
                 self.socket.close()
@@ -106,13 +112,14 @@ class UnrealConnection:
 
         if not self.connect():
             return {"status": "error", "error": f"Cannot connect to Unreal at {UNREAL_HOST}:{UNREAL_PORT}"}
+        assert self.socket is not None  # connect() set it on success
 
         try:
             command_obj = {"type": command, "params": params or {}}
             command_json = json.dumps(command_obj)
             self.socket.sendall(command_json.encode('utf-8'))
             response_data = self.receive_full_response(self.socket)
-            response = json.loads(response_data.decode('utf-8'))
+            response: dict[str, Any] = json.loads(response_data.decode('utf-8'))
 
             if response.get("status") == "error":
                 error_message = response.get("error") or response.get("message", "Unknown Unreal error")
@@ -122,28 +129,30 @@ class UnrealConnection:
                 error_message = response.get("error") or response.get("message", "Unknown Unreal error")
                 response = {"status": "error", "error": error_message}
 
-            try:
-                self.socket.close()
-            except Exception:
-                pass
+            if self.socket is not None:
+                try:
+                    self.socket.close()
+                except Exception:
+                    pass
             self.socket = None
             self.connected = False
             return response
         except Exception as e:
             logger.error("Error sending command: %s", e)
             self.connected = False
-            try:
-                self.socket.close()
-            except Exception:
-                pass
+            if self.socket is not None:
+                try:
+                    self.socket.close()
+                except Exception:
+                    pass
             self.socket = None
             return {"status": "error", "error": str(e)}
 
 
-_unreal_connection: Optional[UnrealConnection] = None
+_unreal_connection: UnrealConnection | None = None
 
 
-def get_unreal_connection() -> Optional[UnrealConnection]:
+def get_unreal_connection() -> UnrealConnection | None:
     global _unreal_connection
     try:
         if _unreal_connection is None:
@@ -158,7 +167,7 @@ def get_unreal_connection() -> Optional[UnrealConnection]:
 
 
 @asynccontextmanager
-async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
+async def server_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
     global _unreal_connection
     logger.info("UnrealMCP HTTP server starting")
     try:
@@ -202,8 +211,8 @@ mcp = FastMCP(
 )
 
 # Register the same tools as the stdio server
-from tools.editor_tools import register_editor_tools
 from tools.blueprint_tools import register_blueprint_tools
+from tools.editor_tools import register_editor_tools
 from tools.node_tools import register_blueprint_node_tools
 from tools.project_tools import register_project_tools
 from tools.umg_tools import register_umg_tools
@@ -224,13 +233,13 @@ _server_mcp = _wrap_with_envelope(mcp)
 
 
 @_server_mcp.tool()
-def reload_config() -> Dict[str, Any]:
+def reload_config() -> dict[str, Any]:
     """Reload <ProjectRoot>/mcp-project.json from disk."""
     return _project_config.reload_config()
 
 
 @_server_mcp.tool()
-def reload_recipes() -> Dict[str, Any]:
+def reload_recipes() -> dict[str, Any]:
     """Rediscover and re-register all recipes under the configured recipesDir."""
     return _recipe_framework.reload_recipes_impl()
 

@@ -1,8 +1,10 @@
 """Test recipe for DataTable primitives: import CSV → set_row → get_rows → delete."""
 
-import tempfile
 import os
-from tools.result_format import ok, fail
+import tempfile
+from typing import Any
+
+from tools.result_format import fail, ok
 
 TEST_ASSET = "/Game/Dev/MCP005_Test_DT_CardStats"
 
@@ -18,7 +20,7 @@ def _call(command, **params):
     return raw
 
 
-def run() -> dict:
+def run() -> dict[str, Any]:
     errors = []
 
     # Create a minimal CSV for import

@@ -228,15 +228,20 @@ class _EnvelopeProxy:
         return getattr(self._inner, name)
 
 
-def wrap_with_envelope(mcp: FastMCP) -> Any:
+def wrap_with_envelope(mcp: FastMCP) -> FastMCP:
     """Return a proxy around `mcp` whose `.tool()` decorator post-processes
     every registered function with `_normalize_outbound`.
 
     Call as the first line of each `register_X_tools(mcp)`:
 
-        def register_blueprint_tools(mcp: FastMCP):
+        def register_blueprint_tools(mcp: FastMCP) -> None:
             mcp = wrap_with_envelope(mcp)
             @mcp.tool()
             def create_blueprint(...): ...
+
+    Note: the runtime object is `_EnvelopeProxy`, not `FastMCP` — but it
+    duck-types as one (every non-.tool attribute is delegated). Typing it
+    as `FastMCP` lets callers reassign `mcp = wrap_with_envelope(mcp)`
+    without an [assignment] error and keeps `.tool()` typed.
     """
-    return _EnvelopeProxy(mcp)
+    return _EnvelopeProxy(mcp)  # type: ignore[return-value]

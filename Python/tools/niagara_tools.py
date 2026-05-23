@@ -7,25 +7,26 @@ Introduced: v1.17.0 (Phase 5 — close the bridge↔FastMCP wrapper gap).
 """
 
 import logging
-from typing import Dict, Any
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
 
 logger = logging.getLogger("UnrealMCP")
 
 
-def register_niagara_tools(mcp: FastMCP):
+def register_niagara_tools(mcp: FastMCP) -> None:
     """Register Niagara tools with the MCP server."""
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def copy_niagara_system(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         sourcePath: str,
         destPath: str,
         ifExists: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Duplicate a UNiagaraSystem to a new /Game/... path.
 
@@ -39,7 +40,7 @@ def register_niagara_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "sourcePath": sourcePath,
                 "destPath": destPath,
             }
@@ -57,10 +58,10 @@ def register_niagara_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_niagara_parameters(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         assetPath: str,
-        params: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
         """
         Set exposed user parameters on a UNiagaraSystem. Each key is the
         parameter name (with or without "User." prefix; the C++ side normalizes).

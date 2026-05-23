@@ -17,17 +17,17 @@ from __future__ import annotations
 import inspect
 import sys
 import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from tools import project_config, recipe_framework, result_format  # noqa: E402
+from tools import project_config, recipe_framework, result_format
 
-
-Result = Tuple[bool, str]
+Result = tuple[bool, str]
 
 
 def _check(label: str, fn: Callable[[], None]) -> Result:
@@ -36,7 +36,7 @@ def _check(label: str, fn: Callable[[], None]) -> Result:
         return True, label
     except AssertionError as e:
         return False, f"{label}: {e}"
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False, f"{label}: unexpected\n{traceback.format_exc()}"
 
 
@@ -67,16 +67,16 @@ def test_normalize_legacy_error() -> None:
 
 
 def test_namespace_derivation() -> None:
-    assert project_config.ProjectConfig(projectName="WarCard").namespace == "wc"
-    assert project_config.ProjectConfig(projectName="Project Name").namespace == "pn"
-    assert project_config.ProjectConfig(projectName="MyGameProject").namespace == "mgp"
+    assert project_config.ProjectConfig(project_name="WarCard").namespace == "wc"
+    assert project_config.ProjectConfig(project_name="Project Name").namespace == "pn"
+    assert project_config.ProjectConfig(project_name="MyGameProject").namespace == "mgp"
 
 
 def test_recipe_decorator_collects_args_and_produces() -> None:
     @recipe_framework.recipe(name="demo", desc="d", produces=["/Game/T_{id}"])
     @recipe_framework.arg("id", int, required=True)
     @recipe_framework.arg("opt", str, required=False, default="x")
-    def demo(id: int, opt: str) -> Dict[str, Any]:
+    def demo(id: int, opt: str) -> dict[str, Any]:
         return result_format.ok("created", f"/Game/T_{id}_{opt}")
 
     spec = getattr(demo, recipe_framework._RECIPE_SPEC_ATTR)
@@ -100,7 +100,7 @@ def test_recipe_wire_tool_builds_signature() -> None:
     @recipe_framework.recipe(name="sig_demo", desc="s")
     @recipe_framework.arg("x", int, required=True)
     @recipe_framework.arg("y", str, required=False, default="")
-    def sig_demo(x: int, y: str) -> Dict[str, Any]:
+    def sig_demo(x: int, y: str) -> dict[str, Any]:
         return result_format.ok("created", f"/Game/{x}_{y}")
 
     spec = getattr(sig_demo, recipe_framework._RECIPE_SPEC_ATTR)
@@ -122,7 +122,7 @@ def test_recipe_wire_tool_builds_signature() -> None:
 
 # --- Layer 2: bridge integration (skipped if no UE) --------------------------
 
-def _call_bridge(command: str, params: Dict[str, Any]) -> Dict[str, Any]:
+def _call_bridge(command: str, params: dict[str, Any]) -> dict[str, Any]:
     from unreal_mcp_server import get_unreal_connection  # type: ignore
     conn = get_unreal_connection()
     if conn is None:
@@ -149,7 +149,7 @@ def test_asset_exists_negative_bridge() -> None:
 
 # --- Runner ------------------------------------------------------------------
 
-UNIT_TESTS: List[Callable[[], None]] = [
+UNIT_TESTS: list[Callable[[], None]] = [
     test_result_format_shapes,
     test_normalize_legacy_success,
     test_normalize_legacy_error,
@@ -158,13 +158,13 @@ UNIT_TESTS: List[Callable[[], None]] = [
     test_recipe_wire_tool_builds_signature,
 ]
 
-BRIDGE_TESTS: List[Callable[[], None]] = [
+BRIDGE_TESTS: list[Callable[[], None]] = [
     test_asset_exists_bridge,
     test_asset_exists_negative_bridge,
 ]
 
 
-def run() -> Dict[str, Any]:
+def run() -> dict[str, Any]:
     unit_results = [_check(t.__name__, t) for t in UNIT_TESTS]
     bridge_available = True
     skip_reason = ""
@@ -175,11 +175,11 @@ def run() -> Dict[str, Any]:
             if "Unknown command" in err:
                 bridge_available = False
                 skip_reason = "plugin not rebuilt (UnrealMCP 1.3.0 required)"
-    except Exception:  # noqa: BLE001
+    except Exception:
         bridge_available = False
         skip_reason = "bridge unreachable"
 
-    bridge_results: List[Result]
+    bridge_results: list[Result]
     if bridge_available:
         bridge_results = [_check(t.__name__, t) for t in BRIDGE_TESTS]
     else:

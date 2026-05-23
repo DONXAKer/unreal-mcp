@@ -12,7 +12,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 
 logger = logging.getLogger("UnrealMCP")
 
@@ -21,9 +21,9 @@ class _TestModule:
     def __init__(self, name: str, path: Path):
         self.name = name
         self.path = path
-        self._mod = None
+        self._mod: Any = None
 
-    def _load(self):
+    def _load(self) -> None:
         if self._mod is not None:
             return
         mod_name = f"_mcp_tests.{self.name}"
@@ -35,7 +35,7 @@ class _TestModule:
         spec.loader.exec_module(mod)
         self._mod = mod
 
-    def run(self) -> Dict[str, Any]:
+    def run(self) -> dict[str, Any]:
         start = time.monotonic()
         try:
             self._load()
@@ -53,7 +53,7 @@ class _TestModule:
             result.setdefault("name", self.name)
             result.setdefault("duration_ms", duration_ms)
             return result
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             duration_ms = int((time.monotonic() - start) * 1000)
             logger.exception("Test %s raised an exception", self.name)
             return {
@@ -64,7 +64,7 @@ class _TestModule:
             }
 
 
-def discover_test_modules(tests_dir: str) -> List[_TestModule]:
+def discover_test_modules(tests_dir: str) -> list[_TestModule]:
     """Return a list of _TestModule wrappers for every test_*.py in tests_dir."""
     root = Path(tests_dir)
     if not root.is_dir():

@@ -35,24 +35,11 @@ jobs:
       - name: Sync dev dependencies
         run: uv sync --dev
 
-      - name: Ruff check (PR1 scope — core modules + tests; expanded in PR3)
-        run: |
-          uv run ruff check \
-            tools/_envelope.py \
-            tools/result_format.py \
-            tools/project_config.py \
-            tools/recipe_framework.py \
-            tools/primitives.py \
-            tests/unit/
+      - name: Ruff check
+        run: uv run ruff check .
 
-      - name: Mypy (PR1 scope — core modules only; expanded in PR3)
-        run: |
-          uv run mypy \
-            tools/_envelope.py \
-            tools/result_format.py \
-            tools/project_config.py \
-            tools/recipe_framework.py \
-            tools/primitives.py
+      - name: Mypy strict
+        run: uv run mypy .
 
       - name: Pytest (unit only — bridge tests need a live UE Editor)
         run: uv run pytest -m "not bridge" -q

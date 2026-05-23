@@ -4,8 +4,10 @@ Test recipe for wc.create_match_arena.
 Covers: create → verify actors → retry skip → retry overwrite → delete.
 """
 
-from tools.primitives import list_actors_in_level, delete_asset, asset_exists
-from tools.result_format import ok, fail
+from typing import Any
+
+from tools.primitives import delete_asset, list_actors_in_level
+from tools.result_format import fail, ok
 
 TEST_MAP = "/Game/Maps/TestArena_MCP004"
 REQUIRED_ACTORS = {"Sun", "Sky", "GlobalPP", "MatchCamera"}
@@ -27,7 +29,7 @@ def _call_recipe(name: str, **kwargs):
     return raw
 
 
-def run() -> dict:
+def run() -> dict[str, Any]:
     errors = []
 
     # ── 1. Create arena (default theme) ──────────────────────────────────────

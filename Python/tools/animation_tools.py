@@ -8,27 +8,28 @@ dispatcher; responses follow the unified MCP Content Pipeline contract
 """
 
 import logging
-from typing import Dict, List, Any, Optional
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
 
 logger = logging.getLogger("UnrealMCP")
 
 
-def register_animation_tools(mcp: FastMCP):
+def register_animation_tools(mcp: FastMCP) -> None:
     """Register Animation Blueprint tools with the MCP server."""
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def create_animation_blueprint(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         name: str,
         skeleton_path: str,
         parent_class_path: str = "/Script/Engine.AnimInstance",
         package_path: str = "/Game/Animations",
         ifExists: str = "skip",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new Animation Blueprint asset bound to a Skeleton.
 
@@ -60,10 +61,10 @@ def register_animation_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_anim_skeleton(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         skeleton_path: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Retarget an existing Animation Blueprint to a different Skeleton.
 
@@ -85,11 +86,11 @@ def register_animation_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_state_machine(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         state_machine_name: str,
-        node_position: Optional[List[float]] = None,
-    ) -> Dict[str, Any]:
+        node_position: list[float] | None = None,
+    ) -> dict[str, Any]:
         """
         Add a new State Machine node to the AnimBP's AnimGraph and rename its
         sub-graph to the requested name.
@@ -104,7 +105,7 @@ def register_animation_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"ok": False, "error": {"message": "Failed to connect to Unreal Engine"}}
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "state_machine_name": state_machine_name,
             }
@@ -118,13 +119,13 @@ def register_animation_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_anim_state(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         state_machine_name: str,
         state_name: str,
-        animation_asset_path: Optional[str] = None,
-        node_position: Optional[List[float]] = None,
-    ) -> Dict[str, Any]:
+        animation_asset_path: str | None = None,
+        node_position: list[float] | None = None,
+    ) -> dict[str, Any]:
         """
         Add a State node to an existing State Machine. If `animation_asset_path`
         is provided, a SequencePlayer for that UAnimSequence is dropped into
@@ -142,7 +143,7 @@ def register_animation_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"ok": False, "error": {"message": "Failed to connect to Unreal Engine"}}
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "state_machine_name": state_machine_name,
                 "state_name": state_name,
@@ -159,13 +160,13 @@ def register_animation_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_anim_transition(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         state_machine_name: str,
         from_state: str,
         to_state: str,
         priority_order: int = 1,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add a one-way transition between two existing states.
 
@@ -197,13 +198,13 @@ def register_animation_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_play_anim_node(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         animation_asset_path: str,
         loop: bool = True,
         play_rate: float = 1.0,
-        node_position: Optional[List[float]] = None,
-    ) -> Dict[str, Any]:
+        node_position: list[float] | None = None,
+    ) -> dict[str, Any]:
         """
         Drop a free-standing SequencePlayer node into the AnimGraph and
         configure its UAnimSequence / loop / play-rate properties.
@@ -220,7 +221,7 @@ def register_animation_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"ok": False, "error": {"message": "Failed to connect to Unreal Engine"}}
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "animation_asset_path": animation_asset_path,
                 "loop": loop,
@@ -236,11 +237,11 @@ def register_animation_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_blend_space_player_node(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         blend_space_path: str,
-        node_position: Optional[List[float]] = None,
-    ) -> Dict[str, Any]:
+        node_position: list[float] | None = None,
+    ) -> dict[str, Any]:
         """
         Drop a BlendSpacePlayer node into the AnimGraph bound to a UBlendSpace.
 
@@ -254,7 +255,7 @@ def register_animation_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"ok": False, "error": {"message": "Failed to connect to Unreal Engine"}}
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "blend_space_path": blend_space_path,
             }

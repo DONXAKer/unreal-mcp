@@ -9,26 +9,27 @@ Introduced: v1.17.0 (Phase 5 — close the bridge↔FastMCP wrapper gap).
 """
 
 import logging
-from typing import Dict, List, Any
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
 
 logger = logging.getLogger("UnrealMCP")
 
 
-def register_material_tools(mcp: FastMCP):
+def register_material_tools(mcp: FastMCP) -> None:
     """Register Material tools with the MCP server."""
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def create_material_instance(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         assetPath: str,
         parentMaterial: str,
         ifExists: str = None,
-        params: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] = None,
+    ) -> dict[str, Any]:
         """
         Create a UMaterialInstanceConstant from a parent UMaterial(Interface).
 
@@ -47,7 +48,7 @@ def register_material_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            payload: Dict[str, Any] = {
+            payload: dict[str, Any] = {
                 "assetPath": assetPath,
                 "parentMaterial": parentMaterial,
             }
@@ -67,11 +68,11 @@ def register_material_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_material_instance_params(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         assetPath: str,
-        params: Dict[str, Any],
+        params: dict[str, Any],
         ifMissing: str = "fail",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Apply parameter overrides to an existing UMaterialInstanceConstant.
 
@@ -102,14 +103,14 @@ def register_material_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_mesh_material_color(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         component_name: str,
-        color: List[float],
+        color: list[float],
         material_slot: int = 0,
         parameter_name: str = "BaseColor",
         material_path: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a dynamic material instance on a primitive component and set a
         vector parameter (default "BaseColor") to `color`.
@@ -130,7 +131,7 @@ def register_material_tools(mcp: FastMCP):
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
             if not isinstance(color, list) or len(color) != 4:
                 return {"success": False, "message": "color must be a 4-element list [R, G, B, A]"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "component_name": component_name,
                 "color": [float(v) for v in color],
@@ -151,10 +152,10 @@ def register_material_tools(mcp: FastMCP):
 
     @mcp.tool()
     def get_available_materials(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         search_path: str = "",
         include_engine_materials: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Asset-registry query for materials.
 
@@ -183,11 +184,11 @@ def register_material_tools(mcp: FastMCP):
 
     @mcp.tool()
     def apply_material_to_actor(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         actor_name: str,
         material_path: str,
         material_slot: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Set a material on every UStaticMeshComponent of an actor in the editor world.
         """
@@ -213,12 +214,12 @@ def register_material_tools(mcp: FastMCP):
 
     @mcp.tool()
     def apply_material_to_blueprint(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         component_name: str,
         material_path: str,
         material_slot: int = 0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Assign a material to a primitive component template inside a Blueprint
         (so spawned instances inherit it).
@@ -246,9 +247,9 @@ def register_material_tools(mcp: FastMCP):
 
     @mcp.tool()
     def get_actor_material_info(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         actor_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Read-only: enumerate material slots across all UStaticMeshComponents
         on an actor in the editor world.
@@ -271,10 +272,10 @@ def register_material_tools(mcp: FastMCP):
 
     @mcp.tool()
     def get_blueprint_material_info(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         component_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Read-only: enumerate material slots on a static-mesh component template
         inside a Blueprint.

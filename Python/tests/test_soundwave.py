@@ -1,9 +1,11 @@
 """Test recipe for SoundWave primitive: import WAV → asset_exists → delete."""
 
+import os
 import struct
 import tempfile
-import os
-from tools.result_format import ok, fail
+from typing import Any
+
+from tools.result_format import fail, ok
 
 TEST_ASSET = "/Game/Dev/MCP005_Test_SW_CardHit"
 
@@ -46,7 +48,7 @@ def _make_minimal_wav(path: str) -> None:
         f.write(data)
 
 
-def run() -> dict:
+def run() -> dict[str, Any]:
     errors = []
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         wav_path = f.name

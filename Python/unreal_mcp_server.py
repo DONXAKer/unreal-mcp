@@ -4,13 +4,14 @@ Unreal Engine MCP Server
 A simple MCP server for interacting with Unreal Engine.
 """
 
+import json
 import logging
 import os
 import socket
-import sys
-import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Dict, Any, Optional
+from typing import Any
+
 from mcp.server.fastmcp import FastMCP
 
 # Configure logging with more detailed format
@@ -33,9 +34,9 @@ UNREAL_PORT = int(os.environ.get("UNREAL_PORT", "55557"))
 class UnrealConnection:
     """Connection to an Unreal Engine instance."""
     
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize the connection."""
-        self.socket = None
+        self.socket: socket.socket | None = None
         self.connected = False
     
     def connect(self) -> bool:
@@ -45,7 +46,7 @@ class UnrealConnection:
             if self.socket:
                 try:
                     self.socket.close()
-                except:
+                except Exception:
                     pass
                 self.socket = None
             
@@ -71,19 +72,19 @@ class UnrealConnection:
             self.connected = False
             return False
     
-    def disconnect(self):
+    def disconnect(self) -> None:
         """Disconnect from the Unreal Engine instance."""
         if self.socket:
             try:
                 self.socket.close()
-            except:
+            except Exception:
                 pass
         self.socket = None
         self.connected = False
 
-    def receive_full_response(self, sock, buffer_size=4096) -> bytes:
+    def receive_full_response(self, sock: socket.socket, buffer_size: int = 4096) -> bytes:
         """Receive a complete response from Unreal, handling chunked data."""
-        chunks = []
+        chunks: list[bytes] = []
         sock.settimeout(5)  # 5 second timeout
         try:
             while True:
@@ -105,12 +106,12 @@ class UnrealConnection:
                     return data
                 except json.JSONDecodeError:
                     # Not complete JSON yet, continue reading
-                    logger.debug(f"Received partial response, waiting for more data...")
+                    logger.debug("Received partial response, waiting for more data...")
                     continue
                 except Exception as e:
-                    logger.warning(f"Error processing response chunk: {str(e)}")
+                    logger.warning(f"Error processing response chunk: {e!s}")
                     continue
-        except socket.timeout:
+        except TimeoutError:
             logger.warning("Socket timeout during receive")
             if chunks:
                 # If we have some data already, try to use it
@@ -119,44 +120,50 @@ class UnrealConnection:
                     json.loads(data.decode('utf-8'))
                     logger.info(f"Using partial response after timeout ({len(data)} bytes)")
                     return data
-                except:
+                except Exception:
                     pass
-            raise Exception("Timeout receiving Unreal response")
+            raise RuntimeError("Timeout receiving Unreal response") from None
         except Exception as e:
-            logger.error(f"Error during receive: {str(e)}")
+            logger.error(f"Error during receive: {e!s}")
             raise
-    
-    def send_command(self, command: str, params: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
+
+        # Unreachable: loop exits via break only when EOF + partial chunks, which
+        # already happened above. Kept to satisfy strict mypy "missing return".
+        return b"".join(chunks)
+
+
+    def send_command(self, command: str, params: dict[str, Any] = None) -> dict[str, Any] | None:
         """Send a command to Unreal Engine and get the response."""
         # Always reconnect for each command, since Unreal closes the connection after each command
         # This is different from Unity which keeps connections alive
         if self.socket:
             try:
                 self.socket.close()
-            except:
+            except Exception:
                 pass
             self.socket = None
             self.connected = False
-        
+
         if not self.connect():
             logger.error("Failed to connect to Unreal Engine for command")
             return None
-        
+        assert self.socket is not None  # connect() set it on success
+
         try:
             # Match Unity's command format exactly
             command_obj = {
                 "type": command,  # Use "type" instead of "command"
                 "params": params or {}  # Use Unity's params or {} pattern
             }
-            
+
             # Send without newline, exactly like Unity
             command_json = json.dumps(command_obj)
             logger.info(f"Sending command: {command_json}")
             self.socket.sendall(command_json.encode('utf-8'))
-            
+
             # Read response using improved handler
             response_data = self.receive_full_response(self.socket)
-            response = json.loads(response_data.decode('utf-8'))
+            response: dict[str, Any] = json.loads(response_data.decode('utf-8'))
             
             # Log complete response for debugging
             logger.info(f"Complete response from Unreal: {response}")
@@ -180,23 +187,25 @@ class UnrealConnection:
             
             # Always close the connection after command is complete
             # since Unreal will close it on its side anyway
-            try:
-                self.socket.close()
-            except:
-                pass
+            if self.socket is not None:
+                try:
+                    self.socket.close()
+                except Exception:
+                    pass
             self.socket = None
             self.connected = False
-            
+
             return response
-            
+
         except Exception as e:
             logger.error(f"Error sending command: {e}")
             # Always reset connection state on any error
             self.connected = False
-            try:
-                self.socket.close()
-            except:
-                pass
+            if self.socket is not None:
+                try:
+                    self.socket.close()
+                except Exception:
+                    pass
             self.socket = None
             return {
                 "status": "error",
@@ -204,9 +213,9 @@ class UnrealConnection:
             }
 
 # Global connection state
-_unreal_connection: UnrealConnection = None
+_unreal_connection: UnrealConnection | None = None
 
-def get_unreal_connection() -> Optional[UnrealConnection]:
+def get_unreal_connection() -> UnrealConnection | None:
     """Return the cached UnrealConnection, lazily constructed on first call.
 
     No liveness probe — `send_command` already reopens the socket on every
@@ -227,7 +236,7 @@ def get_unreal_connection() -> Optional[UnrealConnection]:
         return None
 
 @asynccontextmanager
-async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
+async def server_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
     """Handle server startup and shutdown."""
     global _unreal_connection
     logger.info("UnrealMCP server starting up")
@@ -256,20 +265,21 @@ mcp = FastMCP(
 )
 
 # Import and register tools
-from tools.editor_tools import register_editor_tools
-from tools.blueprint_tools import register_blueprint_tools
-from tools.node_tools import register_blueprint_node_tools
-from tools.project_tools import register_project_tools
-from tools.umg_tools import register_umg_tools
 from tools.animation_tools import register_animation_tools
+from tools.asset_tools import register_asset_tools
+from tools.blueprint_tools import register_blueprint_tools
+from tools.data_asset_tools import register_data_asset_tools
+from tools.editor_tools import register_editor_tools
+
 # v1.17.0 — Phase 5 wrappers (close the bridge↔FastMCP gap)
 from tools.level_tools import register_level_tools
 from tools.material_tools import register_material_tools
-from tools.asset_tools import register_asset_tools
-from tools.texture_tools import register_texture_tools
 from tools.mesh_tools import register_mesh_tools
-from tools.data_asset_tools import register_data_asset_tools
 from tools.niagara_tools import register_niagara_tools
+from tools.node_tools import register_blueprint_node_tools
+from tools.project_tools import register_project_tools
+from tools.texture_tools import register_texture_tools
+from tools.umg_tools import register_umg_tools
 
 # Register tools
 register_editor_tools(mcp)
@@ -296,12 +306,12 @@ _recipe_framework.init_registry(mcp)
 _server_mcp = _wrap_with_envelope(mcp)
 
 @_server_mcp.tool()
-def reload_config() -> Dict[str, Any]:
+def reload_config() -> dict[str, Any]:
     """Reload <ProjectRoot>/mcp-project.json from disk."""
     return _project_config.reload_config()
 
 @_server_mcp.tool()
-def reload_recipes() -> Dict[str, Any]:
+def reload_recipes() -> dict[str, Any]:
     """Rediscover and re-register all recipes under the configured recipesDir."""
     return _recipe_framework.reload_recipes_impl()
 
@@ -315,11 +325,11 @@ try:
         )
     else:
         logger.info("MCP Content Pipeline: no mcp-project.json — recipes not loaded")
-except Exception as _startup_err:  # noqa: BLE001
+except Exception as _startup_err:
     logger.exception("MCP Content Pipeline startup failed: %s", _startup_err)
 
 @mcp.prompt()
-def info():
+def info() -> str:
     """Information about available Unreal MCP tools and best practices."""
     return """
     # Unreal MCP Server Tools and Best Practices

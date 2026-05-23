@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import json
 import socket
-import sys
 import traceback
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from collections.abc import Callable
+from typing import Any
 
 UNREAL_HOST = "127.0.0.1"
 UNREAL_PORT = 55557
@@ -28,14 +28,14 @@ RECV_TIMEOUT_S = 10.0
 class SmokeFailure(RuntimeError):
     """Raised when a smoke-test step fails. Wraps the bridge response."""
 
-    def __init__(self, step_index: int, step_name: str, detail: str, raw: Optional[Dict[str, Any]] = None):
+    def __init__(self, step_index: int, step_name: str, detail: str, raw: dict[str, Any] | None = None):
         super().__init__(f"[step {step_index}] {step_name}: {detail}")
         self.step_index = step_index
         self.step_name = step_name
         self.raw = raw
 
 
-def send_command(command: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def send_command(command: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
     """Send one command to the UnrealMCP plugin and return the parsed response.
 
     Raises SmokeFailure on socket/JSON errors. Bridge-level errors
@@ -47,7 +47,7 @@ def send_command(command: str, params: Optional[Dict[str, Any]] = None) -> Dict[
     try:
         sock.connect((UNREAL_HOST, UNREAL_PORT))
         sock.sendall(payload.encode("utf-8"))
-        chunks: List[bytes] = []
+        chunks: list[bytes] = []
         while True:
             chunk = sock.recv(8192)
             if not chunk:
@@ -59,7 +59,7 @@ def send_command(command: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             except json.JSONDecodeError:
                 continue
         raise SmokeFailure(-1, command, "connection closed before complete JSON received")
-    except (OSError, socket.timeout) as exc:
+    except (TimeoutError, OSError) as exc:
         raise SmokeFailure(-1, command, f"socket error: {exc}") from exc
     finally:
         try:
@@ -68,7 +68,7 @@ def send_command(command: str, params: Optional[Dict[str, Any]] = None) -> Dict[
             pass
 
 
-def assert_success(response: Dict[str, Any], step_index: int, step_name: str) -> Dict[str, Any]:
+def assert_success(response: dict[str, Any], step_index: int, step_name: str) -> dict[str, Any]:
     """Validate a bridge response is success-shaped, return its result payload.
 
     Bridge wraps successful results as {"status": "success", "result": {...}}.
@@ -88,7 +88,7 @@ def assert_success(response: Dict[str, Any], step_index: int, step_name: str) ->
     raise SmokeFailure(step_index, step_name, str(err), response)
 
 
-def run_steps(label: str, steps: List[Tuple[str, Callable[[], Optional[Dict[str, Any]]]]]) -> int:
+def run_steps(label: str, steps: list[tuple[str, Callable[[], dict[str, Any] | None]]]) -> int:
     """Execute a list of (name, callable) steps with progress output.
 
     Each callable returns the response dict (or None on internal handling).
@@ -114,5 +114,5 @@ def run_steps(label: str, steps: List[Tuple[str, Callable[[], Optional[Dict[str,
     return 0
 
 
-def parse_no_cleanup(argv: List[str]) -> bool:
+def parse_no_cleanup(argv: list[str]) -> bool:
     return "--no-cleanup" in argv[1:]

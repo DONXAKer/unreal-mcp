@@ -65,10 +65,8 @@ class MaterialDefaults(BaseModel):
 
 
 class DefaultsConfig(BaseModel):
-    # `default_factory=ModelCls` is the canonical pydantic idiom; mypy's strict
-    # check trips on the implicit aliased-Field constructor signature here.
-    texture: TextureDefaults = Field(default_factory=TextureDefaults)  # type: ignore[arg-type]
-    material: MaterialDefaults = Field(default_factory=MaterialDefaults)  # type: ignore[arg-type]
+    texture: TextureDefaults = Field(default_factory=TextureDefaults)
+    material: MaterialDefaults = Field(default_factory=MaterialDefaults)
 
     model_config = {"extra": "allow"}
 
@@ -76,8 +74,8 @@ class DefaultsConfig(BaseModel):
 class ProjectConfig(BaseModel):
     project_name: str = Field(..., alias="projectName")
     asset_root: str = Field("/Game", alias="assetRoot")
-    naming: NamingConfig = Field(default_factory=NamingConfig)  # type: ignore[arg-type]
-    paths: PathsConfig = Field(default_factory=PathsConfig)  # type: ignore[arg-type]
+    naming: NamingConfig = Field(default_factory=NamingConfig)
+    paths: PathsConfig = Field(default_factory=PathsConfig)
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     recipes_dir: str = Field("Content/Python/recipes", alias="recipesDir")
 

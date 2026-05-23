@@ -8,25 +8,26 @@ Introduced: v1.17.0 (Phase 5 — close the bridge↔FastMCP wrapper gap).
 """
 
 import logging
-from typing import Dict, List, Any
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
 
 logger = logging.getLogger("UnrealMCP")
 
 
-def register_level_tools(mcp: FastMCP):
+def register_level_tools(mcp: FastMCP) -> None:
     """Register Level tools with the MCP server."""
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def create_level(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         destMapPath: str,
         template: str = "Empty",
         ifExists: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new .umap asset.
 
@@ -41,7 +42,7 @@ def register_level_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "destMapPath": destMapPath,
                 "template": template,
             }
@@ -59,9 +60,9 @@ def register_level_tools(mcp: FastMCP):
 
     @mcp.tool()
     def load_level(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         mapPath: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Load a .umap in the Editor world context.
 
@@ -86,9 +87,9 @@ def register_level_tools(mcp: FastMCP):
 
     @mcp.tool()
     def save_level(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         mapPath: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Save a .umap.
 
@@ -101,7 +102,7 @@ def register_level_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {}
+            params: dict[str, Any] = {}
             if mapPath is not None:
                 params["mapPath"] = mapPath
             logger.info(f"Saving level: {params}")
@@ -116,14 +117,14 @@ def register_level_tools(mcp: FastMCP):
 
     @mcp.tool()
     def spawn_actor_in_level(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         actorClass: str,
         mapPath: str = None,
         name: str = None,
         ifExists: str = None,
-        transform: Dict[str, List[float]] = None,
-        properties: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
+        transform: dict[str, list[float]] = None,
+        properties: dict[str, Any] = None,
+    ) -> dict[str, Any]:
         """
         Spawn an actor into a specific level (currently loaded, or one identified
         by mapPath).
@@ -143,7 +144,7 @@ def register_level_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {"actorClass": actorClass}
+            params: dict[str, Any] = {"actorClass": actorClass}
             if mapPath is not None:
                 params["mapPath"] = mapPath
             if name is not None:
@@ -166,10 +167,10 @@ def register_level_tools(mcp: FastMCP):
 
     @mcp.tool()
     def remove_actor_from_level(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         actorName: str,
         mapPath: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Destroy/remove an actor from a level by name.
 
@@ -183,7 +184,7 @@ def register_level_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {"actorName": actorName}
+            params: dict[str, Any] = {"actorName": actorName}
             if mapPath is not None:
                 params["mapPath"] = mapPath
             logger.info(f"Removing actor from level: {params}")
@@ -198,11 +199,11 @@ def register_level_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_actor_transform_in_level(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         actorName: str,
-        transform: Dict[str, List[float]],
+        transform: dict[str, list[float]],
         mapPath: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Apply a relative/absolute transform to a level actor.
 
@@ -217,7 +218,7 @@ def register_level_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "actorName": actorName,
                 "transform": transform,
             }
@@ -235,10 +236,10 @@ def register_level_tools(mcp: FastMCP):
 
     @mcp.tool()
     def list_actors_in_level(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         mapPath: str = None,
         classFilter: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Read-only listing of actors in a level.
 
@@ -253,7 +254,7 @@ def register_level_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {}
+            params: dict[str, Any] = {}
             if mapPath is not None:
                 params["mapPath"] = mapPath
             if classFilter is not None:

@@ -5,8 +5,10 @@ Requires at least one existing NiagaraSystem in the project. Skipped (not failed
 if none exists.
 """
 
+from typing import Any
+
 from tools.primitives import asset_exists, delete_asset
-from tools.result_format import ok, fail
+from tools.result_format import fail, ok
 
 BASE_NS = "/Game/VFX/NS_CardHitBase"
 TEST_NS = "/Game/Dev/MCP005_Test_NS_CardHit"
@@ -23,7 +25,7 @@ def _call(command, **params):
     return raw
 
 
-def run() -> dict:
+def run() -> dict[str, Any]:
     errors = []
 
     # Skip gracefully if base Niagara system doesn't exist

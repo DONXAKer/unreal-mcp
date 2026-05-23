@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import sys
 import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any
 
 import pytest
 
@@ -25,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 pytestmark = pytest.mark.bridge
 
 
-Result = Tuple[bool, str]
+Result = tuple[bool, str]
 
 # Unique paths used only by these tests; cleaned up at the end. The /Game/Dev
 # prefix intentionally avoids clashing with real WarCard content.
@@ -41,11 +42,11 @@ def _check(label: str, fn: Callable[[], None]) -> Result:
         return True, label
     except AssertionError as e:
         return False, f"{label}: {e}"
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False, f"{label}: unexpected\n{traceback.format_exc()}"
 
 
-def _call(command: str, params: Dict[str, Any]) -> Dict[str, Any]:
+def _call(command: str, params: dict[str, Any]) -> dict[str, Any]:
     from unreal_mcp_server import get_unreal_connection  # type: ignore
     conn = get_unreal_connection()
     if conn is None:
@@ -55,7 +56,7 @@ def _call(command: str, params: Dict[str, Any]) -> Dict[str, Any]:
     return raw.get("result", raw)
 
 
-def _assert_ok(resp: Dict[str, Any], expected_status: str) -> None:
+def _assert_ok(resp: dict[str, Any], expected_status: str) -> None:
     assert resp.get("ok") is True, f"expected ok=true, got {resp}"
     assert resp.get("status") == expected_status, \
         f"expected status={expected_status}, got {resp.get('status')} ({resp})"
@@ -139,7 +140,7 @@ def test_import_png_fixture() -> None:
 
 # --- runner ------------------------------------------------------------------
 
-TESTS: List[Callable[[], None]] = [
+TESTS: list[Callable[[], None]] = [
     test_placeholder_created,
     test_placeholder_skip_idempotent,
     test_placeholder_overwrite,
@@ -148,11 +149,11 @@ TESTS: List[Callable[[], None]] = [
 ]
 
 
-def run() -> Dict[str, Any]:
+def run() -> dict[str, Any]:
     # Probe the bridge; skip all tests if not reachable / command not present.
     try:
         probe = _call("asset_exists", {"assetPath": "/Game/__probe__"})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {
             "ok": True,
             "passed": 0,

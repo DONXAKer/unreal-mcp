@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import sys
 import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any
 
 import pytest
 
@@ -28,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 pytestmark = pytest.mark.bridge
 
 
-Result = Tuple[bool, str]
+Result = tuple[bool, str]
 
 MAP_PATH = "/Game/Dev/MCPContent/Map_SpawnTmp"
 ACTOR_LABEL = "MCP_Probe_Sun"
@@ -41,11 +42,11 @@ def _check(label: str, fn: Callable[[], None]) -> Result:
         return True, label
     except AssertionError as e:
         return False, f"{label}: {e}"
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False, f"{label}: unexpected\n{traceback.format_exc()}"
 
 
-def _call(command: str, params: Dict[str, Any]) -> Dict[str, Any]:
+def _call(command: str, params: dict[str, Any]) -> dict[str, Any]:
     from unreal_mcp_server import get_unreal_connection  # type: ignore
     conn = get_unreal_connection()
     if conn is None:
@@ -54,14 +55,14 @@ def _call(command: str, params: Dict[str, Any]) -> Dict[str, Any]:
     return raw.get("result", raw)
 
 
-def _assert_ok(resp: Dict[str, Any], *statuses: str) -> None:
+def _assert_ok(resp: dict[str, Any], *statuses: str) -> None:
     assert resp.get("ok") is True, f"expected ok=true, got {resp}"
     if statuses:
         assert resp.get("status") in statuses, \
             f"expected status in {statuses}, got {resp.get('status')} ({resp})"
 
 
-def _list_labels(map_path: str) -> List[str]:
+def _list_labels(map_path: str) -> list[str]:
     resp = _call("list_actors_in_level", {"mapPath": map_path})
     _assert_ok(resp)
     actors = resp.get("meta", {}).get("actors", [])
@@ -149,7 +150,7 @@ def test_cleanup() -> None:
 
 # --- runner ------------------------------------------------------------------
 
-TESTS: List[Callable[[], None]] = [
+TESTS: list[Callable[[], None]] = [
     test_setup_level,
     test_spawn_actor,
     test_list_contains_spawned,
@@ -160,10 +161,10 @@ TESTS: List[Callable[[], None]] = [
 ]
 
 
-def run() -> Dict[str, Any]:
+def run() -> dict[str, Any]:
     try:
         probe = _call("asset_exists", {"assetPath": "/Game/__probe__"})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {
             "ok": True, "passed": 0, "failed": 0, "bridge_available": False,
             "results": [{"pass": True, "message": f"{t.__name__}: SKIPPED (bridge: {e})"}

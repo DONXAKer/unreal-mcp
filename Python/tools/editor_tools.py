@@ -5,20 +5,21 @@ This module provides tools for controlling the Unreal Editor viewport and other 
 """
 
 import logging
-from typing import Dict, List, Any, Optional
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
 
 # Get logger
 logger = logging.getLogger("UnrealMCP")
 
-def register_editor_tools(mcp: FastMCP):
+def register_editor_tools(mcp: FastMCP) -> None:
     """Register editor tools with the MCP server."""
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
-    def get_actors_in_level(ctx: Context) -> List[Dict[str, Any]]:
+    def get_actors_in_level(ctx: Context[Any, Any, Any]) -> list[dict[str, Any]]:
         """Get a list of all actors in the current level."""
         from unreal_mcp_server import get_unreal_connection
         
@@ -39,13 +40,13 @@ def register_editor_tools(mcp: FastMCP):
             
             # Check response format
             if "result" in response and "actors" in response["result"]:
-                actors = response["result"]["actors"]
+                actors: list[dict[str, Any]] = response["result"]["actors"]
                 logger.info(f"Found {len(actors)} actors in level")
                 return actors
             elif "actors" in response:
-                actors = response["actors"]
-                logger.info(f"Found {len(actors)} actors in level")
-                return actors
+                actors2: list[dict[str, Any]] = response["actors"]
+                logger.info(f"Found {len(actors2)} actors in level")
+                return actors2
                 
             logger.warning(f"Unexpected response format: {response}")
             return []
@@ -55,7 +56,7 @@ def register_editor_tools(mcp: FastMCP):
             return []
 
     @mcp.tool()
-    def find_actors_by_name(ctx: Context, pattern: str) -> List[str]:
+    def find_actors_by_name(ctx: Context[Any, Any, Any], pattern: str) -> list[str]:
         """Find actors by name pattern."""
         from unreal_mcp_server import get_unreal_connection
         
@@ -72,20 +73,21 @@ def register_editor_tools(mcp: FastMCP):
             if not response:
                 return []
                 
-            return response.get("actors", [])
-            
+            result: list[str] = response.get("actors", [])
+            return result
+
         except Exception as e:
             logger.error(f"Error finding actors: {e}")
             return []
     
     @mcp.tool()
     def spawn_actor(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         name: str,
         type: str,
-        location: List[float] = [0.0, 0.0, 0.0],
-        rotation: List[float] = [0.0, 0.0, 0.0]
-    ) -> Dict[str, Any]:
+        location: list[float] = None,
+        rotation: list[float] = None,
+    ) -> dict[str, Any]:
         """Create a new actor in the current level.
         
         Args:
@@ -110,10 +112,10 @@ def register_editor_tools(mcp: FastMCP):
             params = {
                 "name": name,
                 "type": type.upper(),  # Make sure type is uppercase
-                "location": location,
-                "rotation": rotation
+                "location": location if location is not None else [0.0, 0.0, 0.0],
+                "rotation": rotation if rotation is not None else [0.0, 0.0, 0.0],
             }
-            
+
             # Validate location and rotation formats
             for param_name in ["location", "rotation"]:
                 param_value = params[param_name]
@@ -147,7 +149,7 @@ def register_editor_tools(mcp: FastMCP):
             return {"success": False, "message": error_msg}
     
     @mcp.tool()
-    def delete_actor(ctx: Context, name: str) -> Dict[str, Any]:
+    def delete_actor(ctx: Context[Any, Any, Any], name: str) -> dict[str, Any]:
         """Delete an actor by name."""
         from unreal_mcp_server import get_unreal_connection
         
@@ -168,12 +170,12 @@ def register_editor_tools(mcp: FastMCP):
     
     @mcp.tool()
     def set_actor_transform(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         name: str,
-        location: List[float]  = None,
-        rotation: List[float]  = None,
-        scale: List[float] = None
-    ) -> Dict[str, Any]:
+        location: list[float]  = None,
+        rotation: list[float]  = None,
+        scale: list[float] = None
+    ) -> dict[str, Any]:
         """Set the transform of an actor."""
         from unreal_mcp_server import get_unreal_connection
         
@@ -183,14 +185,14 @@ def register_editor_tools(mcp: FastMCP):
                 logger.error("Failed to connect to Unreal Engine")
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
                 
-            params = {"name": name}
+            params: dict[str, Any] = {"name": name}
             if location is not None:
                 params["location"] = location
             if rotation is not None:
                 params["rotation"] = rotation
             if scale is not None:
                 params["scale"] = scale
-                
+
             response = unreal.send_command("set_actor_transform", params)
             return response or {}
             
@@ -199,7 +201,7 @@ def register_editor_tools(mcp: FastMCP):
             return {}
     
     @mcp.tool()
-    def get_actor_properties(ctx: Context, name: str) -> Dict[str, Any]:
+    def get_actor_properties(ctx: Context[Any, Any, Any], name: str) -> dict[str, Any]:
         """Get all properties of an actor."""
         from unreal_mcp_server import get_unreal_connection
         
@@ -220,11 +222,11 @@ def register_editor_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_actor_property(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         name: str,
         property_name: str,
-        property_value,
-    ) -> Dict[str, Any]:
+        property_value: Any,
+    ) -> dict[str, Any]:
         """
         Set a property on an actor.
         
@@ -264,12 +266,12 @@ def register_editor_tools(mcp: FastMCP):
 
     # @mcp.tool() commented out because it's buggy
     def focus_viewport(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         target: str = None,
-        location: List[float] = None,
+        location: list[float] = None,
         distance: float = 1000.0,
-        orientation: List[float] = None
-    ) -> Dict[str, Any]:
+        orientation: list[float] = None
+    ) -> dict[str, Any]:
         """
         Focus the viewport on a specific actor or location.
         
@@ -290,18 +292,18 @@ def register_editor_tools(mcp: FastMCP):
                 logger.error("Failed to connect to Unreal Engine")
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
                 
-            params = {}
+            params: dict[str, Any] = {}
             if target:
                 params["target"] = target
             elif location:
                 params["location"] = location
-            
+
             if distance:
                 params["distance"] = distance
-                
+
             if orientation:
                 params["orientation"] = orientation
-                
+
             response = unreal.send_command("focus_viewport", params)
             return response or {}
             
@@ -311,12 +313,12 @@ def register_editor_tools(mcp: FastMCP):
 
     @mcp.tool()
     def spawn_blueprint_actor(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         actor_name: str,
-        location: List[float] = [0.0, 0.0, 0.0],
-        rotation: List[float] = [0.0, 0.0, 0.0]
-    ) -> Dict[str, Any]:
+        location: list[float] = None,
+        rotation: list[float] = None,
+    ) -> dict[str, Any]:
         """Spawn an actor from a Blueprint.
         
         Args:
@@ -374,7 +376,7 @@ def register_editor_tools(mcp: FastMCP):
     # ─────────────────────────────────────────────────────────────────────
 
     @mcp.tool()
-    def ping(ctx: Context) -> Dict[str, Any]:
+    def ping(ctx: Context[Any, Any, Any]) -> dict[str, Any]:
         """
         Lightweight connectivity probe — round-trips a `ping` command to the
         Unreal Editor bridge. Returns the raw {"status": "ok", ...} response.

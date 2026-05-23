@@ -5,25 +5,26 @@ This module provides tools for manipulating Blueprint graph nodes and connection
 """
 
 import logging
-from typing import Dict, List, Any, Optional
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
 
 # Get logger
 logger = logging.getLogger("UnrealMCP")
 
-def register_blueprint_node_tools(mcp: FastMCP):
+def register_blueprint_node_tools(mcp: FastMCP) -> None:
     """Register Blueprint node manipulation tools with the MCP server."""
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def add_blueprint_event_node(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         event_name: str,
-        node_position = None
-    ) -> Dict[str, Any]:
+        node_position: list[float] | None = None
+    ) -> dict[str, Any]:
         """
         Add an event node to a Blueprint's event graph.
         
@@ -73,11 +74,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
     
     @mcp.tool()
     def add_blueprint_input_action_node(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         action_name: str,
-        node_position = None
-    ) -> Dict[str, Any]:
+        node_position: list[float] | None = None
+    ) -> dict[str, Any]:
         """
         Add an input action event node to a Blueprint's event graph.
         
@@ -124,13 +125,13 @@ def register_blueprint_node_tools(mcp: FastMCP):
     
     @mcp.tool()
     def add_blueprint_function_node(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         target: str,
         function_name: str,
-        params = None,
-        node_position = None
-    ) -> Dict[str, Any]:
+        params: dict[str, Any] | None = None,
+        node_position: list[float] | None = None
+    ) -> dict[str, Any]:
         """
         Add a function call node to a Blueprint's event graph.
         
@@ -184,13 +185,13 @@ def register_blueprint_node_tools(mcp: FastMCP):
             
     @mcp.tool()
     def connect_blueprint_nodes(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         source_node_id: str,
         source_pin: str,
         target_node_id: str,
         target_pin: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Connect two nodes in a Blueprint's event graph.
         
@@ -237,12 +238,12 @@ def register_blueprint_node_tools(mcp: FastMCP):
     
     @mcp.tool()
     def add_blueprint_variable(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         variable_name: str,
         variable_type: str,
         is_exposed: bool = False
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add a variable to a Blueprint.
         
@@ -287,11 +288,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
     
     @mcp.tool()
     def add_blueprint_get_self_component_reference(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         component_name: str,
-        node_position = None
-    ) -> Dict[str, Any]:
+        node_position: list[float] | None = None
+    ) -> dict[str, Any]:
         """
         Add a node that gets a reference to a component owned by the current Blueprint.
         This creates a node similar to what you get when dragging a component from the Components panel.
@@ -340,10 +341,10 @@ def register_blueprint_node_tools(mcp: FastMCP):
     
     @mcp.tool()
     def add_blueprint_self_reference(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
-        node_position = None
-    ) -> Dict[str, Any]:
+        node_position: list[float] | None = None
+    ) -> dict[str, Any]:
         """
         Add a 'Get Self' node to a Blueprint's event graph that returns a reference to this actor.
         
@@ -388,11 +389,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
     
     @mcp.tool()
     def find_blueprint_nodes(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
-        node_type = None,
-        event_type = None
-    ) -> Dict[str, Any]:
+        node_type: str = None,
+        event_type: str = None,
+    ) -> dict[str, Any]:
         """
         Find nodes in a Blueprint's event graph.
         
@@ -439,11 +440,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def rename_blueprint_variable(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         old_name: str,
         new_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Rename a member variable of a Blueprint. Updates all Get/Set references in the graph.
 
@@ -474,10 +475,10 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def delete_blueprint_variable(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         variable_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Delete a member variable from a Blueprint. Removes all Get/Set references too.
         """
@@ -502,11 +503,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_variable_default_value(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         variable_name: str,
         default_value: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Set the default value of a Blueprint variable.
 
@@ -539,9 +540,9 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def list_blueprint_variables(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Read-only: list all NewVariables of a Blueprint.
 
@@ -567,7 +568,7 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_blueprint_variable_flags(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         variable_name: str,
         instance_editable: bool = None,
@@ -575,7 +576,7 @@ def register_blueprint_node_tools(mcp: FastMCP):
         blueprint_read_only: bool = None,
         category: str = None,
         replication: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Update a focused subset of variable flags. Use this for clean instance_editable /
         expose_on_spawn / blueprint_read_only / category / replication changes; for the
@@ -597,7 +598,7 @@ def register_blueprint_node_tools(mcp: FastMCP):
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
 
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "variable_name": variable_name,
             }
@@ -628,9 +629,9 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def list_blueprint_functions(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Read-only: list all user-defined functions of a Blueprint with their I/O counts
         and flags.
@@ -657,13 +658,13 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_function_local_variable(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         function_name: str,
         variable_name: str,
         variable_type: str,
         default_value: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add a local variable to a Blueprint function. The variable is stored on the
         K2Node_FunctionEntry's LocalVariables array (function-scoped, NOT on
@@ -683,7 +684,7 @@ def register_blueprint_node_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "function_name": function_name,
                 "variable_name": variable_name,
@@ -703,14 +704,14 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_function_flags(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         function_name: str,
         is_pure: bool = None,
         is_const: bool = None,
         access: str = None,
         category: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Update flags of a Blueprint function. Recompiles the Blueprint so changes
         propagate to the generated UFunction.
@@ -728,7 +729,7 @@ def register_blueprint_node_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "function_name": function_name,
             }
@@ -756,11 +757,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def create_custom_event(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         event_name: str,
-        node_position = None,
-    ) -> Dict[str, Any]:
+        node_position: list[float] | None = None,
+    ) -> dict[str, Any]:
         """
         Create a brand-new K2Node_CustomEvent in the Blueprint's Ubergraph. Unlike
         add_blueprint_event_node (which overrides ReceiveBeginPlay / ReceiveTick etc.),
@@ -797,12 +798,12 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_custom_event_input(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         event_name: str,
         parameter_name: str,
         parameter_type: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add an input parameter pin to an existing custom event.
 
@@ -840,11 +841,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def split_struct_pin(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         node_id: str,
         pin_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Split a struct pin into per-field sub-pins (e.g. FVector → X/Y/Z).
 
@@ -878,11 +879,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def recombine_struct_pin(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         node_id: str,
         pin_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Inverse of split_struct_pin — collapse sub-pins back into one struct pin.
 
@@ -913,12 +914,12 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_pin_default_value(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         node_id: str,
         pin_name: str,
         default_value: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Set the literal default value of a pin (unconnected pins use this value at runtime).
 
@@ -956,11 +957,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def get_pin_info(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         node_id: str,
         pin_name: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Read-only pin inspection. If pin_name is provided, returns info for a single
         pin under 'pin'. Otherwise returns info for all pins on the node under 'pins[]'.
@@ -976,7 +977,7 @@ def register_blueprint_node_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "node_id": node_id,
             }
@@ -994,11 +995,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def disconnect_pin(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         node_id: str,
         pin_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Break all links on a pin (UEdGraphSchema_K2::BreakPinLinks).
 
@@ -1032,11 +1033,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def create_function(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         function_name: str,
         return_type: str = "void",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new user-defined function graph on a Blueprint.
 
@@ -1068,10 +1069,10 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def delete_function(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         function_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Remove a user-defined function from a Blueprint. System graphs
         ("Construction Script", "EventGraph") cannot be deleted.
@@ -1097,11 +1098,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def rename_function(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         old_function_name: str,
         new_function_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Rename a user-defined function on a Blueprint.
 
@@ -1133,13 +1134,13 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_function_input(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         function_name: str,
         param_name: str,
         param_type: str,
         is_array: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add an input parameter to a user-defined Blueprint function.
 
@@ -1175,13 +1176,13 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_function_output(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         function_name: str,
         param_name: str,
         param_type: str,
         is_array: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add an output parameter to a user-defined Blueprint function.
 
@@ -1216,11 +1217,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def delete_node(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         node_id: str,
         function_name: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Remove a node from a Blueprint graph by NodeGuid.
 
@@ -1236,7 +1237,7 @@ def register_blueprint_node_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "node_id": node_id,
             }
@@ -1254,15 +1255,15 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_node_property(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         node_id: str,
         property_name: str = None,
-        property_value=None,
+        property_value: Any = None,
         function_name: str = None,
         action: str = None,
-        extra_params: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
+        extra_params: dict[str, Any] = None,
+    ) -> dict[str, Any]:
         """
         Set a property on a node (legacy mode) or perform a semantic action
         ("action" mode — delegated to EditNode in C++).
@@ -1282,7 +1283,7 @@ def register_blueprint_node_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "node_id": node_id,
             }
@@ -1310,14 +1311,14 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_component_bound_event(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         component_property_name: str,
         delegate_name: str,
         delegate_class: str,
         pos_x: float = 0.0,
         pos_y: float = 0.0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add a component-bound delegate event node to a Blueprint's EventGraph
         (e.g. wire `OnClicked` of a UButton component).
@@ -1357,14 +1358,14 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_blueprint_variable_properties(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         variable_name: str,
         var_name: str = None,
         var_type: str = None,
         is_blueprint_writable: bool = None,
         is_public: bool = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Bulk-update properties of an existing Blueprint variable (legacy variant
         of `set_blueprint_variable_flags` — kept for compatibility).
@@ -1382,7 +1383,7 @@ def register_blueprint_node_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "variable_name": variable_name,
             }
@@ -1410,11 +1411,11 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_blueprint_branch_node(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         pos_x: float = 0.0,
         pos_y: float = 0.0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add a Branch (If-Then-Else) node to a Blueprint's EventGraph.
 
@@ -1445,12 +1446,12 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_blueprint_variable_get_node(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         variable_name: str,
         pos_x: float = 0.0,
         pos_y: float = 0.0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add a VariableGet node (self member getter) to a Blueprint's EventGraph.
 
@@ -1483,12 +1484,12 @@ def register_blueprint_node_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_blueprint_variable_set_node(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         variable_name: str,
         pos_x: float = 0.0,
         pos_y: float = 0.0,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add a VariableSet node (self member setter) to a Blueprint's EventGraph.
 

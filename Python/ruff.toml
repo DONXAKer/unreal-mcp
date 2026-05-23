@@ -15,12 +15,23 @@ select = [
   "UP",   # pyupgrade — modern 3.12 idioms
   "RUF",  # ruff-specific
 ]
-# E501 (line-too-long) is noisy on the existing 100-col logs; handled by line-length above.
-# RUF012 (mutable-class-attrs) overlaps B008 — pick one in PR3 if needed.
-ignore = []
+ignore = [
+  # .clinerules mandates `x: T = None` (NOT `Optional[T] = None`) on @mcp.tool
+  # signatures — defaults are unwrapped inside the function body. RUF013 is the
+  # opposite preference; we follow the project rule instead.
+  "RUF013",
+  # E501 (line too long) is noisy on legacy log-format strings and long
+  # FastMCP-tool docstrings. Treat as cosmetic — clean up opportunistically.
+  "E501",
+]
 
 [lint.per-file-ignores]
 # Tests can rebind names / use star-imports / have long parametrize tables.
-"tests/**/*.py" = ["B017", "B018"]
+# E402: sys.path.insert(0, ...) sits between imports — required for tools/ resolution.
+"tests/**/*.py" = ["B017", "B018", "E402"]
 # scripts/ are one-off probes, not production.
 "scripts/**/*.py" = ["E", "F", "B", "I", "UP", "RUF"]
+# Server entry points: register_*_tools imports happen AFTER FastMCP instance
+# creation — they wire tools onto `mcp`, so the order is load-bearing, not lazy.
+"unreal_mcp_server.py" = ["E402"]
+"unreal_mcp_server_http.py" = ["E402"]

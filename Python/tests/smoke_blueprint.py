@@ -22,7 +22,7 @@ Exit 0 on success, 1 on any failure.
 from __future__ import annotations
 
 import sys
-from typing import Any, Dict
+from typing import Any
 
 from tests._smoke_common import (
     SmokeFailure,
@@ -36,7 +36,7 @@ BP_NAME = "BP_SmokeTest"
 BP_FOLDER = "/Game/Smoke"
 
 
-def _find_variable(result: Dict[str, Any], var_name: str) -> bool:
+def _find_variable(result: dict[str, Any], var_name: str) -> bool:
     """list_blueprint_variables payload shape varies; do a tolerant scan."""
     if not isinstance(result, dict):
         return False
@@ -52,7 +52,7 @@ def _find_variable(result: Dict[str, Any], var_name: str) -> bool:
     return False
 
 
-def _find_component(result: Dict[str, Any], comp_name: str) -> bool:
+def _find_component(result: dict[str, Any], comp_name: str) -> bool:
     if not isinstance(result, dict):
         return False
     components = result.get("components") or result.get("Components") or []

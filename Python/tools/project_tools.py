@@ -5,25 +5,26 @@ This module provides tools for managing project-wide settings and configuration.
 """
 
 import logging
-from typing import Dict, Any
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
 
 # Get logger
 logger = logging.getLogger("UnrealMCP")
 
-def register_project_tools(mcp: FastMCP):
+def register_project_tools(mcp: FastMCP) -> None:
     """Register project tools with the MCP server."""
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def create_input_mapping(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         action_name: str,
         key: str,
         input_type: str = "Action"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create an input mapping for the project.
         

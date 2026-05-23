@@ -16,9 +16,8 @@ Exit 0 on success, 1 on any failure.
 
 from __future__ import annotations
 
-import json
 import sys
-from typing import Any, Dict
+from typing import Any
 
 from tests._smoke_common import (
     SmokeFailure,
@@ -32,7 +31,7 @@ WIDGET_NAME = "WBP_SmokeTest"
 WIDGET_PATH = "/Game/Smoke"
 
 
-def _hierarchy_contains(payload: Dict[str, Any], target_name: str) -> bool:
+def _hierarchy_contains(payload: dict[str, Any], target_name: str) -> bool:
     """Tolerant DFS over a UMG hierarchy payload looking for a widget by name."""
     if isinstance(payload, dict):
         name = payload.get("name") or payload.get("Name") or payload.get("widget_name")
@@ -49,7 +48,7 @@ def _hierarchy_contains(payload: Dict[str, Any], target_name: str) -> bool:
 
 
 def main(argv: list[str]) -> int:
-    _no_cleanup = parse_no_cleanup(argv)  # noqa: F841 — kept for CLI parity
+    _no_cleanup = parse_no_cleanup(argv)
 
     def step_create():
         resp = send_command("create_umg_widget_blueprint", {

@@ -7,27 +7,28 @@ Introduced: v1.17.0 (Phase 5 — close the bridge↔FastMCP wrapper gap).
 """
 
 import logging
-from typing import Dict, Any
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
 
 logger = logging.getLogger("UnrealMCP")
 
 
-def register_mesh_tools(mcp: FastMCP):
+def register_mesh_tools(mcp: FastMCP) -> None:
     """Register Mesh tools with the MCP server."""
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def import_static_mesh(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         assetPath: str,
         sourcePath: str,
         generateCollision: str = "Simple",
-        materialOverrides: Dict[str, str] = None,
+        materialOverrides: dict[str, str] = None,
         ifExists: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Import an FBX or OBJ static mesh into Unreal as a UStaticMesh.
 
@@ -44,7 +45,7 @@ def register_mesh_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "assetPath": assetPath,
                 "sourcePath": sourcePath,
                 "generateCollision": generateCollision,

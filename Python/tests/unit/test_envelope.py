@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -208,7 +209,7 @@ def test_wrapped_callable_preserves_normal_return():
 
 def test_wrapped_callable_preserves_signature():
     """functools.wraps must keep the original __name__ so FastMCP introspection works."""
-    def my_tool(x: int, y: str = "z") -> dict:
+    def my_tool(x: int, y: str = "z") -> dict[str, Any]:
         return {"success": True, "x": x, "y": y}
 
     wrapped = _wrap_callable(my_tool)
@@ -231,7 +232,7 @@ def test_envelope_proxy_passes_through_non_tool_attrs():
         def some_other_method(self):
             return "passthrough"
 
-    proxy = wrap_with_envelope(FakeMCP())  # type: ignore[arg-type]
+    proxy: Any = wrap_with_envelope(FakeMCP())  # type: ignore[arg-type]
     assert proxy.name == "fake"
     assert proxy.some_other_method() == "passthrough"
 

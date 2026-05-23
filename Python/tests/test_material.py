@@ -22,8 +22,9 @@ from __future__ import annotations
 
 import sys
 import traceback
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any
 
 import pytest
 
@@ -32,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 pytestmark = pytest.mark.bridge
 
 
-Result = Tuple[bool, str]
+Result = tuple[bool, str]
 
 PARENT_MATERIAL = "/Engine/EngineMaterials/WorldGridMaterial"
 MI_PATH = "/Game/Dev/MCPContent/MI_MCP_Material_Test"
@@ -44,11 +45,11 @@ def _check(label: str, fn: Callable[[], None]) -> Result:
         return True, label
     except AssertionError as e:
         return False, f"{label}: {e}"
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False, f"{label}: unexpected\n{traceback.format_exc()}"
 
 
-def _call(command: str, params: Dict[str, Any]) -> Dict[str, Any]:
+def _call(command: str, params: dict[str, Any]) -> dict[str, Any]:
     from unreal_mcp_server import get_unreal_connection  # type: ignore
     conn = get_unreal_connection()
     if conn is None:
@@ -57,7 +58,7 @@ def _call(command: str, params: Dict[str, Any]) -> Dict[str, Any]:
     return raw.get("result", raw)
 
 
-def _assert_ok(resp: Dict[str, Any], expected_status: str) -> None:
+def _assert_ok(resp: dict[str, Any], expected_status: str) -> None:
     assert resp.get("ok") is True, f"expected ok, got {resp}"
     assert resp.get("status") == expected_status, \
         f"expected status={expected_status}, got {resp.get('status')} ({resp})"
@@ -123,7 +124,7 @@ def test_mi_deleted() -> None:
 
 # --- runner ------------------------------------------------------------------
 
-TESTS: List[Callable[[], None]] = [
+TESTS: list[Callable[[], None]] = [
     test_mi_created_with_scalar_param,
     test_mi_skip_when_exists,
     test_mi_set_params_point_update,
@@ -131,10 +132,10 @@ TESTS: List[Callable[[], None]] = [
 ]
 
 
-def run() -> Dict[str, Any]:
+def run() -> dict[str, Any]:
     try:
         probe = _call("asset_exists", {"assetPath": "/Game/__probe__"})
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         return {
             "ok": True, "passed": 0, "failed": 0, "bridge_available": False,
             "results": [{"pass": True, "message": f"{t.__name__}: SKIPPED (bridge: {e})"}

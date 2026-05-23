@@ -5,25 +5,26 @@ This module provides tools for creating and manipulating Blueprint assets in Unr
 """
 
 import logging
-from typing import Dict, List, Any
-from mcp.server.fastmcp import FastMCP, Context
+from typing import Any
+
+from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
 
 # Get logger
 logger = logging.getLogger("UnrealMCP")
 
-def register_blueprint_tools(mcp: FastMCP):
+def register_blueprint_tools(mcp: FastMCP) -> None:
     """Register Blueprint tools with the MCP server."""
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def create_blueprint(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         name: str,
         parent_class: str,
         folder_path: str = ""
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Create a new Blueprint class.
 
         Args:
@@ -68,10 +69,10 @@ def register_blueprint_tools(mcp: FastMCP):
     
     @mcp.tool()
     def reparent_blueprint(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         new_parent_class: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Change the parent class of an existing Blueprint (including Widget Blueprints).
 
@@ -114,15 +115,15 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_component_to_blueprint(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         component_type: str,
         component_name: str,
-        location: List[float] = [],
-        rotation: List[float] = [],
-        scale: List[float] = [],
-        component_properties: Dict[str, Any] = {}
-    ) -> Dict[str, Any]:
+        location: list[float] = None,
+        rotation: list[float] = None,
+        scale: list[float] = None,
+        component_properties: dict[str, Any] = None,
+    ) -> dict[str, Any]:
         """
         Add a component to a Blueprint.
         
@@ -142,13 +143,13 @@ def register_blueprint_tools(mcp: FastMCP):
         
         try:
             # Ensure all parameters are properly formatted
-            params = {
+            params: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "component_type": component_type,
                 "component_name": component_name,
                 "location": location or [0.0, 0.0, 0.0],
                 "rotation": rotation or [0.0, 0.0, 0.0],
-                "scale": scale or [1.0, 1.0, 1.0]
+                "scale": scale or [1.0, 1.0, 1.0],
             }
             
             # Add component_properties if provided
@@ -186,11 +187,11 @@ def register_blueprint_tools(mcp: FastMCP):
     
     @mcp.tool()
     def set_static_mesh_properties(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         component_name: str,
         static_mesh: str = "/Engine/BasicShapes/Cube.Cube"
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Set static mesh properties on a StaticMeshComponent.
         
@@ -233,12 +234,12 @@ def register_blueprint_tools(mcp: FastMCP):
     
     @mcp.tool()
     def set_component_property(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         component_name: str,
         property_name: str,
-        property_value,
-    ) -> Dict[str, Any]:
+        property_value: Any,
+    ) -> dict[str, Any]:
         """Set a property on a component in a Blueprint."""
         from unreal_mcp_server import get_unreal_connection
         
@@ -272,7 +273,7 @@ def register_blueprint_tools(mcp: FastMCP):
     
     @mcp.tool()
     def set_physics_properties(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         component_name: str,
         simulate_physics: bool = True,
@@ -280,7 +281,7 @@ def register_blueprint_tools(mcp: FastMCP):
         mass: float = 1.0,
         linear_damping: float = 0.01,
         angular_damping: float = 0.0
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Set physics properties on a component."""
         from unreal_mcp_server import get_unreal_connection
         
@@ -317,9 +318,9 @@ def register_blueprint_tools(mcp: FastMCP):
     
     @mcp.tool()
     def compile_blueprint(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Compile a Blueprint."""
         from unreal_mcp_server import get_unreal_connection
         
@@ -350,11 +351,11 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_blueprint_property(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         property_name: str,
-        property_value
-    ) -> Dict[str, Any]:
+        property_value: Any,
+    ) -> dict[str, Any]:
         """
         Set a property on a Blueprint class default object.
         
@@ -397,14 +398,14 @@ def register_blueprint_tools(mcp: FastMCP):
 
     # @mcp.tool() commented out, just use set_component_property instead
     def set_pawn_properties(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         auto_possess_player: str = "",
         use_controller_rotation_yaw: bool = None,
         use_controller_rotation_pitch: bool = None,
         use_controller_rotation_roll: bool = None,
         can_be_damaged: bool = None
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Set common Pawn properties on a Blueprint.
         This is a utility function that sets multiple pawn-related properties at once.
@@ -429,10 +430,10 @@ def register_blueprint_tools(mcp: FastMCP):
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
             
             # Define the properties to set
-            properties = {}
+            properties: dict[str, Any] = {}
             if auto_possess_player and auto_possess_player != "":
                 properties["auto_possess_player"] = auto_possess_player
-            
+
             # Only include boolean properties if they were explicitly set
             if use_controller_rotation_yaw is not None:
                 properties["bUseControllerRotationYaw"] = use_controller_rotation_yaw
@@ -488,10 +489,10 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def delete_component_from_blueprint(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         component_name: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Remove a component (SCS_Node) from a Blueprint.
 
@@ -525,11 +526,11 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def rename_component(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         old_name: str,
         new_name: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Rename a component in a Blueprint. Updates the variable name on the SCS node and
         all Get/Set node references in event graph + functions.
@@ -562,9 +563,9 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def list_components(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Read-only: list all SCS components of a Blueprint with class, parent, root flag and
         relative transform (location/rotation/scale).
@@ -591,13 +592,13 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def set_component_transform(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         component_name: str,
-        location: List[float] = None,
-        rotation: List[float] = None,
-        scale: List[float] = None,
-    ) -> Dict[str, Any]:
+        location: list[float] = None,
+        rotation: list[float] = None,
+        scale: list[float] = None,
+    ) -> dict[str, Any]:
         """
         Set the relative transform of a USceneComponent on a Blueprint's SCS template.
         Any omitted field is left unchanged.
@@ -614,7 +615,7 @@ def register_blueprint_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "blueprint_name": blueprint_name,
                 "component_name": component_name,
             }
@@ -640,10 +641,10 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def list_blueprints(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         path: str = "/Game",
         filter_class: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Walk the AssetRegistry and return all Blueprint assets under `path`. Optionally
         filter by parent class.
@@ -664,7 +665,7 @@ def register_blueprint_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {"path": path}
+            params: dict[str, Any] = {"path": path}
             if filter_class is not None:
                 params["filter_class"] = str(filter_class)
             logger.info(f"Listing blueprints: {params}")
@@ -679,9 +680,9 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def get_blueprint_class_info(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Read-only summary of a Blueprint's class metadata.
 
@@ -716,10 +717,10 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def create_blueprint_interface(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         interface_name: str,
         package_path: str = "/Game/Interfaces",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Create a new Blueprint Interface asset.
 
@@ -751,10 +752,10 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def implement_blueprint_interface(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         interface_path: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Add a Blueprint Interface to a Blueprint's implemented interfaces list.
 
@@ -784,10 +785,10 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def remove_blueprint_interface(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
         interface_path: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Remove an interface from a Blueprint. Overridden functions are kept.
 
@@ -816,12 +817,12 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def add_interface_function(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         interface_name: str,
         function_name: str,
-        inputs: List[Dict[str, str]] = None,
-        outputs: List[Dict[str, str]] = None,
-    ) -> Dict[str, Any]:
+        inputs: list[dict[str, str]] = None,
+        outputs: list[dict[str, str]] = None,
+    ) -> dict[str, Any]:
         """
         Add a function signature to a Blueprint Interface. The function will show up
         as an overridable event/function in any Blueprint that implements the interface.
@@ -838,7 +839,7 @@ def register_blueprint_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "interface_name": interface_name,
                 "function_name": function_name,
             }
@@ -862,9 +863,9 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def compile_blueprint_verbose(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Compile a Blueprint and return structured diagnostics.
 
@@ -892,9 +893,9 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def validate_blueprint(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_name: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Run structural validation across all graphs of a Blueprint without doing a
         full compile. Picks up orphaned pins + per-node ValidateNodeDuringCompilation
@@ -926,12 +927,12 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def create_blueprint_from_template(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         assetPath: str,
         templatePath: str,
         ifExists: str = None,
-        defaultsOverride: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
+        defaultsOverride: dict[str, Any] = None,
+    ) -> dict[str, Any]:
         """
         Duplicate a template Blueprint into a new asset and optionally override CDO
         property defaults.
@@ -948,7 +949,7 @@ def register_blueprint_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "assetPath": assetPath,
                 "templatePath": templatePath,
             }
@@ -968,14 +969,14 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def read_blueprint_content(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_path: str,
         include_event_graph: bool = True,
         include_functions: bool = True,
         include_variables: bool = True,
         include_components: bool = True,
         include_interfaces: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Read-only structural dump of a Blueprint asset: variables, functions,
         event graph nodes, components, implemented interfaces.
@@ -1010,13 +1011,13 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def analyze_blueprint_graph(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_path: str,
         graph_name: str = "EventGraph",
         include_node_details: bool = True,
         include_pin_connections: bool = True,
         trace_execution_flow: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Walk a single graph inside a Blueprint and return nodes + connections.
 
@@ -1053,10 +1054,10 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def get_blueprint_variable_details(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_path: str,
         variable_name: str = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Detailed metadata for one Blueprint variable, or for all variables if
         variable_name is omitted: type, default value, friendly name, tooltip,
@@ -1072,7 +1073,7 @@ def register_blueprint_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {"blueprint_path": blueprint_path}
+            params: dict[str, Any] = {"blueprint_path": blueprint_path}
             if variable_name is not None:
                 params["variable_name"] = variable_name
             logger.info(f"Getting blueprint variable details: {params}")
@@ -1087,11 +1088,11 @@ def register_blueprint_tools(mcp: FastMCP):
 
     @mcp.tool()
     def get_blueprint_function_details(
-        ctx: Context,
+        ctx: Context[Any, Any, Any],
         blueprint_path: str,
         function_name: str = None,
         include_graph: bool = True,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Detailed metadata for one Blueprint function, or for all functions if
         function_name is omitted: inputs/outputs, node count, optional graph nodes.
@@ -1106,7 +1107,7 @@ def register_blueprint_tools(mcp: FastMCP):
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            params: Dict[str, Any] = {
+            params: dict[str, Any] = {
                 "blueprint_path": blueprint_path,
                 "include_graph": include_graph,
             }
