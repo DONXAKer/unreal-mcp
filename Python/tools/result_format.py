@@ -5,13 +5,13 @@ All content primitives (C++ via bridge) and Python recipes return
 the same JSON shape. See MCP-CONTENT-001 task for design decisions.
 """
 
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal
 
 Status = Literal["created", "skipped", "overwritten", "updated"]
 ErrorCategory = Literal["user", "io", "ue_internal", "validation", "config"]
 
 
-def ok(status: Status, asset_path: str, **meta: Any) -> Dict[str, Any]:
+def ok(status: Status, asset_path: str, **meta: Any) -> dict[str, Any]:
     """Build a success response.
 
     Args:
@@ -35,7 +35,7 @@ def fail(
     code: str,
     message: str,
     **details: Any,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build a failure response.
 
     Args:
@@ -58,12 +58,12 @@ def fail(
     }
 
 
-def is_ok(response: Optional[Dict[str, Any]]) -> bool:
+def is_ok(response: dict[str, Any] | None) -> bool:
     """Return True iff `response` is a non-None unified-format success."""
-    return bool(response) and response.get("ok") is True
+    return response is not None and response.get("ok") is True
 
 
-def normalize_legacy_response(response: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def normalize_legacy_response(response: dict[str, Any] | None) -> dict[str, Any]:
     """Best-effort convert legacy {success,message}/{status:"error"} shapes
     into the unified format. Used while existing (non-content) commands
     still return the old shape.

@@ -3,7 +3,7 @@ name = "unreal-mcp"
 version = "0.1.0"
 description = "Unreal MCP Server: A server for Unreal Engine integration via the Model Context Protocol (MCP)."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
   "mcp[cli]>=1.10.0",
   "fastmcp>=0.2.0",
@@ -13,10 +13,24 @@ dependencies = [
   "requests"
 ]
 
+[dependency-groups]
+dev = [
+  "pytest>=8",
+  "ruff>=0.6",
+  "mypy>=1.10",
+]
+
 [build-system]
 requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-# The main server script is a single-file module
-py-modules = ["unreal_mcp_server"] 
+py-modules = ["unreal_mcp_server"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+  "bridge: requires a live Unreal Editor with the UnrealMCP plugin (skipped in CI)",
+]
+addopts = "--strict-markers -ra"

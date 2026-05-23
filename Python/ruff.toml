@@ -1,0 +1,28 @@
+target-version = "py312"
+line-length = 100
+
+extend-exclude = [
+  ".venv",
+  "tests/fixtures",
+  # Legacy monolithic server — superseded by tools/*_tools.py; will be removed in PR2.
+  "unreal_mcp_server_advanced.py",
+]
+
+[lint]
+select = [
+  "E",    # pycodestyle errors
+  "F",    # pyflakes
+  "B",    # flake8-bugbear (mutable defaults, no-op .strip(), etc.)
+  "I",    # isort
+  "UP",   # pyupgrade — modern 3.12 idioms
+  "RUF",  # ruff-specific
+]
+# E501 (line-too-long) is noisy on the existing 100-col logs; handled by line-length above.
+# RUF012 (mutable-class-attrs) overlaps B008 — pick one in PR3 if needed.
+ignore = []
+
+[lint.per-file-ignores]
+# Tests can rebind names / use star-imports / have long parametrize tables.
+"tests/**/*.py" = ["B017", "B018"]
+# scripts/ are one-off probes, not production.
+"scripts/**/*.py" = ["E", "F", "B", "I", "UP", "RUF"]

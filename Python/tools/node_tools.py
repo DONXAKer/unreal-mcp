@@ -8,12 +8,15 @@ import logging
 from typing import Dict, List, Any, Optional
 from mcp.server.fastmcp import FastMCP, Context
 
+from tools._envelope import wrap_with_envelope
+
 # Get logger
 logger = logging.getLogger("UnrealMCP")
 
 def register_blueprint_node_tools(mcp: FastMCP):
     """Register Blueprint node manipulation tools with the MCP server."""
-    
+    mcp = wrap_with_envelope(mcp)
+
     @mcp.tool()
     def add_blueprint_event_node(
         ctx: Context,

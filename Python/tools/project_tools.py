@@ -8,12 +8,15 @@ import logging
 from typing import Dict, Any
 from mcp.server.fastmcp import FastMCP, Context
 
+from tools._envelope import wrap_with_envelope
+
 # Get logger
 logger = logging.getLogger("UnrealMCP")
 
 def register_project_tools(mcp: FastMCP):
     """Register project tools with the MCP server."""
-    
+    mcp = wrap_with_envelope(mcp)
+
     @mcp.tool()
     def create_input_mapping(
         ctx: Context,

@@ -13,12 +13,12 @@ layer uses `destAssetPath` (more explicit) so we normalize here.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from tools.result_format import fail
 
 
-def _call(command: str, params: Dict[str, Any]) -> Dict[str, Any]:
+def _call(command: str, params: dict[str, Any]) -> dict[str, Any]:
     # Imported lazily to avoid a top-level cycle with the server module,
     # which imports this file indirectly via recipe discovery.
     from unreal_mcp_server import get_unreal_connection
@@ -42,12 +42,12 @@ def _call(command: str, params: Dict[str, Any]) -> Dict[str, Any]:
 def import_texture(
     sourcePath: str,
     destAssetPath: str,
-    sRGB: Optional[bool] = None,
-    compression: Optional[str] = None,
-    mipGen: Optional[str] = None,
+    sRGB: bool | None = None,
+    compression: str | None = None,
+    mipGen: str | None = None,
     ifExists: str = "skip",
-) -> Dict[str, Any]:
-    params: Dict[str, Any] = {
+) -> dict[str, Any]:
+    params: dict[str, Any] = {
         "sourcePath": sourcePath,
         "assetPath": destAssetPath,
         "ifExists": ifExists,
@@ -64,10 +64,10 @@ def import_texture(
 def generate_placeholder_texture(
     destAssetPath: str,
     size: int = 512,
-    color: Optional[List[float]] = None,
+    color: list[float] | None = None,
     label: str = "",
     ifExists: str = "skip",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return _call("generate_placeholder_texture", {
         "assetPath": destAssetPath,
         "size": size,
@@ -80,9 +80,9 @@ def generate_placeholder_texture(
 def create_material_instance(
     parentMaterial: str,
     destAssetPath: str,
-    params: Optional[Dict[str, Any]] = None,
+    params: dict[str, Any] | None = None,
     ifExists: str = "skip",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return _call("create_material_instance", {
         "parentMaterial": parentMaterial,
         "assetPath": destAssetPath,
@@ -93,8 +93,8 @@ def create_material_instance(
 
 def set_material_instance_params(
     assetPath: str,
-    params: Dict[str, Any],
-) -> Dict[str, Any]:
+    params: dict[str, Any],
+) -> dict[str, Any]:
     return _call("set_material_instance_params", {
         "assetPath": assetPath,
         "params": params,
@@ -104,9 +104,9 @@ def set_material_instance_params(
 def create_blueprint_from_template(
     templatePath: str,
     destAssetPath: str,
-    defaultsOverride: Optional[Dict[str, Any]] = None,
+    defaultsOverride: dict[str, Any] | None = None,
     ifExists: str = "skip",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return _call("create_blueprint_from_template", {
         "templatePath": templatePath,
         "assetPath": destAssetPath,
@@ -121,7 +121,7 @@ def create_level(
     destMapPath: str,
     template: str = "Empty",
     ifExists: str = "skip",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return _call("create_level", {
         "destMapPath": destMapPath,
         "template": template,
@@ -129,12 +129,12 @@ def create_level(
     })
 
 
-def load_level(mapPath: str) -> Dict[str, Any]:
+def load_level(mapPath: str) -> dict[str, Any]:
     return _call("load_level", {"mapPath": mapPath})
 
 
-def save_level(mapPath: Optional[str] = None) -> Dict[str, Any]:
-    params: Dict[str, Any] = {}
+def save_level(mapPath: str | None = None) -> dict[str, Any]:
+    params: dict[str, Any] = {}
     if mapPath:
         params["mapPath"] = mapPath
     return _call("save_level", params)
@@ -142,13 +142,13 @@ def save_level(mapPath: Optional[str] = None) -> Dict[str, Any]:
 
 def spawn_actor_in_level(
     actorClass: str,
-    mapPath: Optional[str] = None,
-    name: Optional[str] = None,
-    transform: Optional[Dict[str, Any]] = None,
-    properties: Optional[Dict[str, Any]] = None,
+    mapPath: str | None = None,
+    name: str | None = None,
+    transform: dict[str, Any] | None = None,
+    properties: dict[str, Any] | None = None,
     ifExists: str = "skip",
-) -> Dict[str, Any]:
-    params: Dict[str, Any] = {"actorClass": actorClass, "ifExists": ifExists}
+) -> dict[str, Any]:
+    params: dict[str, Any] = {"actorClass": actorClass, "ifExists": ifExists}
     if mapPath:
         params["mapPath"] = mapPath
     if name:
@@ -161,10 +161,10 @@ def spawn_actor_in_level(
 
 
 def list_actors_in_level(
-    mapPath: Optional[str] = None,
-    classFilter: Optional[str] = None,
-) -> Dict[str, Any]:
-    params: Dict[str, Any] = {}
+    mapPath: str | None = None,
+    classFilter: str | None = None,
+) -> dict[str, Any]:
+    params: dict[str, Any] = {}
     if mapPath:
         params["mapPath"] = mapPath
     if classFilter:
@@ -172,11 +172,11 @@ def list_actors_in_level(
     return _call("list_actors_in_level", params)
 
 
-def asset_exists(assetPath: str) -> Dict[str, Any]:
+def asset_exists(assetPath: str) -> dict[str, Any]:
     return _call("asset_exists", {"assetPath": assetPath})
 
 
-def delete_asset(assetPath: str, ifMissing: str = "skip") -> Dict[str, Any]:
+def delete_asset(assetPath: str, ifMissing: str = "skip") -> dict[str, Any]:
     return _call("delete_asset", {"assetPath": assetPath, "ifMissing": ifMissing})
 
 
@@ -185,10 +185,10 @@ def delete_asset(assetPath: str, ifMissing: str = "skip") -> Dict[str, Any]:
 def import_datatable_from_csv(
     csvPath: str,
     destAssetPath: str,
-    rowStruct: Optional[str] = None,
+    rowStruct: str | None = None,
     ifExists: str = "skip",
-) -> Dict[str, Any]:
-    params: Dict[str, Any] = {
+) -> dict[str, Any]:
+    params: dict[str, Any] = {
         "csvPath": csvPath,
         "assetPath": destAssetPath,
         "ifExists": ifExists,
@@ -201,8 +201,8 @@ def import_datatable_from_csv(
 def set_datatable_row(
     assetPath: str,
     rowName: str,
-    rowJson: Dict[str, Any],
-) -> Dict[str, Any]:
+    rowJson: dict[str, Any],
+) -> dict[str, Any]:
     return _call("set_datatable_row", {
         "assetPath": assetPath,
         "rowName": rowName,
@@ -210,7 +210,7 @@ def set_datatable_row(
     })
 
 
-def get_datatable_rows(assetPath: str) -> Dict[str, Any]:
+def get_datatable_rows(assetPath: str) -> dict[str, Any]:
     return _call("get_datatable_rows", {"assetPath": assetPath})
 
 
@@ -218,7 +218,7 @@ def import_sound_wave(
     wavPath: str,
     destAssetPath: str,
     ifExists: str = "skip",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return _call("import_sound_wave", {
         "wavPath": wavPath,
         "assetPath": destAssetPath,
@@ -232,7 +232,7 @@ def copy_niagara_system(
     sourcePath: str,
     destPath: str,
     ifExists: str = "skip",
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     return _call("copy_niagara_system", {
         "sourcePath": sourcePath,
         "destPath": destPath,
@@ -242,8 +242,8 @@ def copy_niagara_system(
 
 def set_niagara_parameters(
     assetPath: str,
-    params: Dict[str, Any],
-) -> Dict[str, Any]:
+    params: dict[str, Any],
+) -> dict[str, Any]:
     return _call("set_niagara_parameters", {
         "assetPath": assetPath,
         "params": params,

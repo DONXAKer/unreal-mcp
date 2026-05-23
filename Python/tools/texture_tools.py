@@ -10,11 +10,14 @@ import logging
 from typing import Dict, List, Any
 from mcp.server.fastmcp import FastMCP, Context
 
+from tools._envelope import wrap_with_envelope
+
 logger = logging.getLogger("UnrealMCP")
 
 
 def register_texture_tools(mcp: FastMCP):
     """Register Texture tools with the MCP server."""
+    mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def import_texture(

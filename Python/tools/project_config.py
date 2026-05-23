@@ -14,7 +14,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -59,14 +59,16 @@ class TextureDefaults(BaseModel):
 
 
 class MaterialDefaults(BaseModel):
-    master_material: Optional[str] = Field(None, alias="masterMaterial")
+    master_material: str | None = Field(None, alias="masterMaterial")
 
     model_config = {"populate_by_name": True, "extra": "allow"}
 
 
 class DefaultsConfig(BaseModel):
-    texture: TextureDefaults = Field(default_factory=TextureDefaults)
-    material: MaterialDefaults = Field(default_factory=MaterialDefaults)
+    # `default_factory=ModelCls` is the canonical pydantic idiom; mypy's strict
+    # check trips on the implicit aliased-Field constructor signature here.
+    texture: TextureDefaults = Field(default_factory=TextureDefaults)  # type: ignore[arg-type]
+    material: MaterialDefaults = Field(default_factory=MaterialDefaults)  # type: ignore[arg-type]
 
     model_config = {"extra": "allow"}
 
@@ -74,8 +76,8 @@ class DefaultsConfig(BaseModel):
 class ProjectConfig(BaseModel):
     project_name: str = Field(..., alias="projectName")
     asset_root: str = Field("/Game", alias="assetRoot")
-    naming: NamingConfig = Field(default_factory=NamingConfig)
-    paths: PathsConfig = Field(default_factory=PathsConfig)
+    naming: NamingConfig = Field(default_factory=NamingConfig)  # type: ignore[arg-type]
+    paths: PathsConfig = Field(default_factory=PathsConfig)  # type: ignore[arg-type]
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     recipes_dir: str = Field("Content/Python/recipes", alias="recipesDir")
 
@@ -101,11 +103,11 @@ class ProjectConfig(BaseModel):
         return name.lower()
 
 
-_cached_config: Optional[ProjectConfig] = None
-_cached_config_path: Optional[Path] = None
+_cached_config: ProjectConfig | None = None
+_cached_config_path: Path | None = None
 
 
-def resolve_project_root(explicit: Optional[str] = None) -> Optional[Path]:
+def resolve_project_root(explicit: str | None = None) -> Path | None:
     """Resolve the UE project root that owns the mcp-project.json.
 
     Search order:
@@ -126,7 +128,7 @@ def resolve_project_root(explicit: Optional[str] = None) -> Optional[Path]:
         if root.is_dir():
             return root
 
-    def _find_root(start: Path) -> Optional[Path]:
+    def _find_root(start: Path) -> Path | None:
         # Walk up; at each level also scan immediate children so monorepos
         # (e.g. D:/WarCard/client/ when the MCP server runs from a sibling
         # unreal-mcp/ dir) are discoverable without env vars. Prefer a dir
@@ -160,7 +162,7 @@ def resolve_project_root(explicit: Optional[str] = None) -> Optional[Path]:
     return _find_root(Path(__file__).resolve().parent)
 
 
-def load_config(project_root: Optional[str] = None) -> Optional[ProjectConfig]:
+def load_config(project_root: str | None = None) -> ProjectConfig | None:
     """Load (or reload) mcp-project.json from the resolved project root.
 
     Returns None if no config file is found — callers must handle this
@@ -179,7 +181,7 @@ def load_config(project_root: Optional[str] = None) -> Optional[ProjectConfig]:
         return None
 
     try:
-        raw: Dict[str, Any] = json.loads(config_path.read_text(encoding="utf-8"))
+        raw: dict[str, Any] = json.loads(config_path.read_text(encoding="utf-8"))
         cfg = ProjectConfig.model_validate(raw)
     except (json.JSONDecodeError, ValidationError) as e:
         logger.error("Invalid %s: %s", config_path, e)
@@ -196,7 +198,7 @@ def load_config(project_root: Optional[str] = None) -> Optional[ProjectConfig]:
     return cfg
 
 
-def get_config() -> Optional[ProjectConfig]:
+def get_config() -> ProjectConfig | None:
     """Return the cached ProjectConfig, loading it lazily if needed."""
     global _cached_config
     if _cached_config is None:
@@ -204,7 +206,7 @@ def get_config() -> Optional[ProjectConfig]:
     return _cached_config
 
 
-def reload_config() -> Dict[str, Any]:
+def reload_config() -> dict[str, Any]:
     """MCP-exposed hot reload of mcp-project.json.
 
     Returns a unified-format result so callers see a consistent shape.

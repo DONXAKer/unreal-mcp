@@ -21,7 +21,11 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+pytestmark = pytest.mark.bridge
 
 
 Result = Tuple[bool, str]

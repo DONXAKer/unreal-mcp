@@ -11,11 +11,14 @@ import logging
 from typing import Dict, Any
 from mcp.server.fastmcp import FastMCP, Context
 
+from tools._envelope import wrap_with_envelope
+
 logger = logging.getLogger("UnrealMCP")
 
 
 def register_data_asset_tools(mcp: FastMCP):
     """Register DataAsset tools with the MCP server."""
+    mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def import_datatable_from_csv(

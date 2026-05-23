@@ -8,11 +8,14 @@ import logging
 from typing import Dict, List, Any
 from mcp.server.fastmcp import FastMCP, Context
 
+from tools._envelope import wrap_with_envelope
+
 # Get logger
 logger = logging.getLogger("UnrealMCP")
 
 def register_umg_tools(mcp: FastMCP):
     """Register UMG tools with the MCP server."""
+    mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
     def create_umg_widget_blueprint(
@@ -570,7 +573,7 @@ def register_umg_tools(mcp: FastMCP):
                   "name": "UniqueWidgetName",            # required
                   "type": "CanvasPanel",                 # required; one of:
                       # CanvasPanel, VerticalBox, HorizontalBox, ScrollBox,
-                      # Overlay, Border, SizeBox, UniformGridPanel, WrapBox,
+                      # Overlay, Border, SizeBox, UniformGridPanel, WrapBox, WidgetSwitcher,
                       # TextBlock, Button, Image, ProgressBar, Spacer, SpinBox
                   "is_variable": true,                   # optional, default true
                   "properties": {                        # optional

@@ -216,17 +216,20 @@ register_umg_tools(mcp)
 
 from tools import project_config as _project_config
 from tools import recipe_framework as _recipe_framework
+from tools._envelope import wrap_with_envelope as _wrap_with_envelope
 
 _recipe_framework.init_registry(mcp)
 
+_server_mcp = _wrap_with_envelope(mcp)
 
-@mcp.tool()
+
+@_server_mcp.tool()
 def reload_config() -> Dict[str, Any]:
     """Reload <ProjectRoot>/mcp-project.json from disk."""
     return _project_config.reload_config()
 
 
-@mcp.tool()
+@_server_mcp.tool()
 def reload_recipes() -> Dict[str, Any]:
     """Rediscover and re-register all recipes under the configured recipesDir."""
     return _recipe_framework.reload_recipes_impl()

@@ -207,7 +207,13 @@ class UnrealConnection:
 _unreal_connection: UnrealConnection = None
 
 def get_unreal_connection() -> Optional[UnrealConnection]:
-    """Get the connection to Unreal Engine."""
+    """Return the cached UnrealConnection, lazily constructed on first call.
+
+    No liveness probe — `send_command` already reopens the socket on every
+    call (the bridge closes it server-side after each response), so any
+    cached socket here is just a handle. A previous ping(\x00) check forced
+    a double-reconnect and was dead code; removed.
+    """
     global _unreal_connection
     try:
         if _unreal_connection is None:
@@ -215,24 +221,6 @@ def get_unreal_connection() -> Optional[UnrealConnection]:
             if not _unreal_connection.connect():
                 logger.warning("Could not connect to Unreal Engine")
                 _unreal_connection = None
-        else:
-            # Verify connection is still valid with a ping-like test
-            try:
-                # Simple test by sending an empty buffer to check if socket is still connected
-                _unreal_connection.socket.sendall(b'\x00')
-                logger.debug("Connection verified with ping test")
-            except Exception as e:
-                logger.warning(f"Existing connection failed: {e}")
-                _unreal_connection.disconnect()
-                _unreal_connection = None
-                # Try to reconnect
-                _unreal_connection = UnrealConnection()
-                if not _unreal_connection.connect():
-                    logger.warning("Could not reconnect to Unreal Engine")
-                    _unreal_connection = None
-                else:
-                    logger.info("Successfully reconnected to Unreal Engine")
-        
         return _unreal_connection
     except Exception as e:
         logger.error(f"Error getting Unreal connection: {e}")
@@ -301,15 +289,18 @@ register_niagara_tools(mcp)
 # --- MCP Content Pipeline (MCP-CONTENT-001): config + recipe framework ---
 from tools import project_config as _project_config
 from tools import recipe_framework as _recipe_framework
+from tools._envelope import wrap_with_envelope as _wrap_with_envelope
 
 _recipe_framework.init_registry(mcp)
 
-@mcp.tool()
+_server_mcp = _wrap_with_envelope(mcp)
+
+@_server_mcp.tool()
 def reload_config() -> Dict[str, Any]:
     """Reload <ProjectRoot>/mcp-project.json from disk."""
     return _project_config.reload_config()
 
-@mcp.tool()
+@_server_mcp.tool()
 def reload_recipes() -> Dict[str, Any]:
     """Rediscover and re-register all recipes under the configured recipesDir."""
     return _recipe_framework.reload_recipes_impl()

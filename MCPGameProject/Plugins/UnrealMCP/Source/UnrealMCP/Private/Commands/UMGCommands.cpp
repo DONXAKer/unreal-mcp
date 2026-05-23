@@ -34,6 +34,8 @@
 #include "Components/UniformGridSlot.h"
 #include "Components/WrapBox.h"
 #include "Components/WrapBoxSlot.h"
+#include "Components/WidgetSwitcher.h"
+#include "Components/WidgetSwitcherSlot.h"
 
 // Blueprint editor utils
 #include "Kismet2/BlueprintEditorUtils.h"
@@ -287,6 +289,7 @@ UClass* FUnrealMCPUMGCommands::GetWidgetClassByType(const FString& WidgetType)
         { TEXT("Overlay"),        UOverlay::StaticClass()        },
         { TEXT("Border"),         UBorder::StaticClass()         },
         { TEXT("ProgressBar"),    UProgressBar::StaticClass()   },
+        { TEXT("WidgetSwitcher"), UWidgetSwitcher::StaticClass() },
     };
 
     UClass* const* Found = TypeMap.Find(WidgetType);
@@ -334,7 +337,7 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddWidgetToUMG(const TShare
     if (!WidgetClass)
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
             FString::Printf(TEXT("Unknown widget type: '%s'. Supported: CanvasPanel, TextBlock, Button, "
-                "VerticalBox, HorizontalBox, ScrollBox, SizeBox, Spacer, SpinBox, Image, Overlay, Border, ProgressBar"),
+                "VerticalBox, HorizontalBox, ScrollBox, SizeBox, Spacer, SpinBox, Image, Overlay, Border, ProgressBar, WidgetSwitcher"),
                 *WidgetType));
 
     // ── Check name uniqueness ─────────────────────────────────────────────────

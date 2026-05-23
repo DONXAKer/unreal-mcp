@@ -15,9 +15,10 @@ import importlib.util
 import inspect
 import logging
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
@@ -41,8 +42,8 @@ class RecipeSpec:
     name: str
     description: str
     func: Callable[..., Any]
-    args: List[RecipeArg] = field(default_factory=list)
-    produces: List[str] = field(default_factory=list)
+    args: list[RecipeArg] = field(default_factory=list)
+    produces: list[str] = field(default_factory=list)
 
     def qualified_name(self, namespace: str) -> str:
         return f"{namespace}.{self.name}"
@@ -58,8 +59,8 @@ def recipe(
     *,
     name: str,
     desc: str = "",
-    produces: Optional[List[str]] = None,
-) -> Callable:
+    produces: list[str] | None = None,
+) -> Callable[..., Any]:
     """Mark a function as a content recipe discoverable by the framework.
 
     Args:
@@ -69,8 +70,8 @@ def recipe(
                   (e.g. ["{paths.textures}/T_CardArt_{card_id}"]). Consumed
                   by the contract-validator in MCP-CONTENT-006.
     """
-    def deco(fn: Callable) -> Callable:
-        staged_args: List[RecipeArg] = list(getattr(fn, _STAGED_ARGS_ATTR, []))
+    def deco(fn: Callable[..., Any]) -> Callable[..., Any]:
+        staged_args: list[RecipeArg] = list(getattr(fn, _STAGED_ARGS_ATTR, []))
         if desc:
             description = desc
         elif fn.__doc__:
@@ -97,14 +98,14 @@ def arg(
     required: bool = True,
     default: Any = None,
     description: str = "",
-) -> Callable:
+) -> Callable[..., Any]:
     """Declare one typed argument for a @recipe-decorated function.
 
     Stack multiple @arg(...) above @recipe(...) — evaluation order means
     decorators closest to the function run first; the framework reverses
     the accumulated list so the declared order is preserved.
     """
-    def deco(fn: Callable) -> Callable:
+    def deco(fn: Callable[..., Any]) -> Callable[..., Any]:
         staged = list(getattr(fn, _STAGED_ARGS_ATTR, []))
         staged.insert(0, RecipeArg(
             name=name,
@@ -128,7 +129,7 @@ class RecipeRegistry:
 
     def __init__(self, mcp: FastMCP):
         self.mcp = mcp
-        self.registered: Dict[str, RecipeSpec] = {}
+        self.registered: dict[str, RecipeSpec] = {}
 
     def clear(self) -> None:
         for qualified_name in list(self.registered.keys()):
@@ -139,7 +140,7 @@ class RecipeRegistry:
         tool_manager = getattr(self.mcp, "_tool_manager", None)
         if tool_manager is None:
             return
-        tools: Dict[str, Any] = getattr(tool_manager, "_tools", {})
+        tools: dict[str, Any] = getattr(tool_manager, "_tools", {})
         tools.pop(qualified_name, None)
 
     def register(self, spec: RecipeSpec, namespace: str) -> str:
@@ -151,9 +152,9 @@ class RecipeRegistry:
     def _wire_tool(self, qualified: str, spec: RecipeSpec) -> None:
         arg_defs = spec.args
 
-        def tool_impl(**kwargs: Any) -> Dict[str, Any]:
+        def tool_impl(**kwargs: Any) -> dict[str, Any]:
             try:
-                call_kwargs: Dict[str, Any] = {}
+                call_kwargs: dict[str, Any] = {}
                 for a in arg_defs:
                     if a.name in kwargs:
                         call_kwargs[a.name] = kwargs[a.name]
@@ -169,7 +170,7 @@ class RecipeRegistry:
                 if not isinstance(result, dict):
                     return ok("created", "", raw=result)
                 return result
-            except Exception as e:  # noqa: BLE001 — surface anything to the caller.
+            except Exception as e:
                 logger.exception("Recipe %s failed", qualified)
                 return fail(
                     "ue_internal",
@@ -181,8 +182,8 @@ class RecipeRegistry:
         # FastMCP derives the tool schema from inspect.signature(fn), so we
         # must synthesize a real signature that matches the recipe's @arg
         # declarations — otherwise MCP clients see a tool with no arguments.
-        params: List[inspect.Parameter] = []
-        annotations: Dict[str, Any] = {}
+        params: list[inspect.Parameter] = []
+        annotations: dict[str, Any] = {}
         for a in arg_defs:
             if a.required:
                 params.append(
@@ -221,7 +222,7 @@ class RecipeRegistry:
         self.mcp.tool(name=qualified, description=spec.description)(tool_impl)
 
 
-_registry: Optional[RecipeRegistry] = None
+_registry: RecipeRegistry | None = None
 
 
 def init_registry(mcp: FastMCP) -> RecipeRegistry:
@@ -231,17 +232,17 @@ def init_registry(mcp: FastMCP) -> RecipeRegistry:
     return _registry
 
 
-def get_registry() -> Optional[RecipeRegistry]:
+def get_registry() -> RecipeRegistry | None:
     return _registry
 
 
-def discover_recipes(recipes_dir: Path) -> List[RecipeSpec]:
+def discover_recipes(recipes_dir: Path) -> list[RecipeSpec]:
     """Import every *.py under `recipes_dir` and collect @recipe specs."""
     if not recipes_dir.is_dir():
         logger.warning("Recipes dir does not exist: %s", recipes_dir)
         return []
 
-    specs: List[RecipeSpec] = []
+    specs: list[RecipeSpec] = []
     for py_file in sorted(recipes_dir.glob("*.py")):
         if py_file.name.startswith("_"):
             continue
@@ -254,17 +255,17 @@ def discover_recipes(recipes_dir: Path) -> List[RecipeSpec]:
         sys.modules[module_name] = mod
         try:
             spec.loader.exec_module(mod)
-        except Exception:  # noqa: BLE001
+        except Exception:
             logger.exception("Failed importing recipes from %s", py_file)
             continue
         for _, member in inspect.getmembers(mod):
-            rs: Optional[RecipeSpec] = getattr(member, _RECIPE_SPEC_ATTR, None)
+            rs: RecipeSpec | None = getattr(member, _RECIPE_SPEC_ATTR, None)
             if rs is not None:
                 specs.append(rs)
     return specs
 
 
-def register_all_recipes() -> Tuple[int, List[str], List[str]]:
+def register_all_recipes() -> tuple[int, list[str], list[str]]:
     """Discover and register every recipe under the configured recipesDir.
 
     Returns: (count_registered, registered_names, errors).
@@ -283,19 +284,19 @@ def register_all_recipes() -> Tuple[int, List[str], List[str]]:
     recipes_dir = (root / cfg.recipes_dir).resolve()
     _registry.clear()
     specs = discover_recipes(recipes_dir)
-    registered: List[str] = []
-    errors: List[str] = []
+    registered: list[str] = []
+    errors: list[str] = []
     for s in specs:
         try:
             qualified = _registry.register(s, cfg.namespace)
             registered.append(qualified)
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             logger.exception("Failed to register recipe %s", s.name)
             errors.append(f"{s.name}: {e}")
     return len(registered), registered, errors
 
 
-def reload_recipes_impl() -> Dict[str, Any]:
+def reload_recipes_impl() -> dict[str, Any]:
     """MCP-exposed hot reload of recipes. Returns unified-format result."""
     count, names, errors = register_all_recipes()
     if errors and count == 0:

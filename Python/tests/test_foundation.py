@@ -20,6 +20,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from tools import project_config, recipe_framework, result_format  # noqa: E402
@@ -128,6 +130,7 @@ def _call_bridge(command: str, params: Dict[str, Any]) -> Dict[str, Any]:
     return conn.send_command(command, params) or {}
 
 
+@pytest.mark.bridge
 def test_asset_exists_bridge() -> None:
     # Expects WarCard editor running with rebuilt UnrealMCP 1.3.0.
     resp = _call_bridge("asset_exists", {"assetPath": "/Game/UI/WBP_GameResult"})
@@ -136,6 +139,7 @@ def test_asset_exists_bridge() -> None:
     assert "exists" in inner.get("meta", {}), inner
 
 
+@pytest.mark.bridge
 def test_asset_exists_negative_bridge() -> None:
     resp = _call_bridge("asset_exists", {"assetPath": "/Game/__Definitely_Not_Here__"})
     inner = resp.get("result", resp)

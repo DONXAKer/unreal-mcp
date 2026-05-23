@@ -246,6 +246,11 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             {
                 ResultJson = MakeShareable(new FJsonObject);
                 ResultJson->SetStringField(TEXT("message"), TEXT("pong"));
+                // Plugin build version. Pipeline guards (check_unreal) require
+                // this field's presence to confirm the editor loaded a fresh
+                // plugin binary — a stale pre-1.19.1 plugin answers "pong"
+                // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("1.19.1"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
