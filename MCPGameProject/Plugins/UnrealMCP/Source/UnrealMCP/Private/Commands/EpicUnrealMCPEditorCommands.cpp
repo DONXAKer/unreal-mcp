@@ -70,6 +70,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleCommand(const FStrin
     {
         return HandleFocusViewport(Params);
     }
+    else if (CommandType == TEXT("take_screenshot") || CommandType == TEXT("viewport_take_screenshot"))
+    {
+        return HandleTakeScreenshot(Params);
+    }
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Unknown editor command: %s"), *CommandType));
 }
@@ -517,5 +521,70 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleFocusViewport(const 
     LocationArr.Add(MakeShared<FJsonValueNumber>(Center.Z));
     ResultObj->SetArrayField(TEXT("focused_location"), LocationArr);
     ResultObj->SetNumberField(TEXT("distance"), Distance);
+    return ResultObj;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleTakeScreenshot(const TSharedPtr<FJsonObject>& Params)
+{
+    // Параметры:
+    //   filename       — относительное имя файла (по умолчанию "MCPScreenshot.png").
+    //                    Полный path = <ProjectSaved>/Screenshots/<filename>.
+    //   show_ui        — bool, по умолчанию false. true = захватить UI overlays.
+    //   resolution_x   — int, опционально. Если задан вместе с resolution_y —
+    //                    использует hi-res путь FHighResScreenshotConfig.
+    //   resolution_y   — int, опционально.
+    //
+    // Захват асинхронный: FScreenshotRequest триггерится в Tick, файл появится
+    // в течение 1-2 кадров. Возвращаем планируемый path сразу.
+    FString Filename = TEXT("MCPScreenshot.png");
+    Params->TryGetStringField(TEXT("filename"), Filename);
+    if (!Filename.EndsWith(TEXT(".png"), ESearchCase::IgnoreCase))
+    {
+        Filename += TEXT(".png");
+    }
+
+    bool bShowUI = false;
+    Params->TryGetBoolField(TEXT("show_ui"), bShowUI);
+
+    int32 ResolutionX = 0;
+    int32 ResolutionY = 0;
+    Params->TryGetNumberField(TEXT("resolution_x"), ResolutionX);
+    Params->TryGetNumberField(TEXT("resolution_y"), ResolutionY);
+
+    const FString ScreenshotDir = FPaths::ProjectSavedDir() / TEXT("Screenshots");
+    IFileManager::Get().MakeDirectory(*ScreenshotDir, /*Tree=*/true);
+    const FString FullPath = ScreenshotDir / Filename;
+
+    // Если уже есть файл с таким именем — удаляем, чтобы вызывающий мог
+    // надёжно poll'ить mtime/exists и не путать со старым кадром.
+    if (IFileManager::Get().FileExists(*FullPath))
+    {
+        IFileManager::Get().Delete(*FullPath, /*RequireExists=*/false, /*EvenReadOnly=*/true);
+    }
+
+    if (ResolutionX > 0 && ResolutionY > 0)
+    {
+        // Hi-res путь — FHighResScreenshotConfig.
+        FHighResScreenshotConfig& Config = GetHighResScreenshotConfig();
+        Config.SetResolution(ResolutionX, ResolutionY, /*ResMult=*/1.0f);
+        Config.bCaptureHDR = false;
+        Config.FilenameOverride = FullPath;
+    }
+
+    FScreenshotRequest::RequestScreenshot(FullPath, bShowUI, /*bAddFilenameSuffix=*/false);
+
+    TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+    ResultObj->SetStringField(TEXT("status"), TEXT("created"));
+    ResultObj->SetStringField(TEXT("assetPath"), FullPath);
+    ResultObj->SetStringField(TEXT("filename"), Filename);
+    ResultObj->SetBoolField(TEXT("show_ui"), bShowUI);
+    if (ResolutionX > 0 && ResolutionY > 0)
+    {
+        ResultObj->SetNumberField(TEXT("resolution_x"), ResolutionX);
+        ResultObj->SetNumberField(TEXT("resolution_y"), ResolutionY);
+    }
+    ResultObj->SetStringField(
+        TEXT("note"),
+        TEXT("Screenshot queued asynchronously; file will appear within 1-2 ticks"));
     return ResultObj;
 }

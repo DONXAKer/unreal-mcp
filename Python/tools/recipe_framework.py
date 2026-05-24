@@ -17,6 +17,7 @@ import logging
 import re
 import sys
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,73 @@ from mcp.server.fastmcp import FastMCP
 
 from tools.project_config import ProjectConfig, get_config, resolve_project_root
 from tools.result_format import fail, ok
+
+# --- rollback journal -------------------------------------------------------
+
+# When a recipe with rollback_on_failure=True is active, this contextvar holds
+# a mutable list to which every successful asset-creating primitive call
+# appends `{command, assetPath, status}`. On recipe failure the framework
+# walks the journal in reverse and deletes `created` entries.
+_rollback_journal: ContextVar[list[dict[str, Any]] | None] = ContextVar(
+    "_mcp_rollback_journal", default=None
+)
+
+
+def _journal_record(command: str, response: dict[str, Any]) -> None:
+    """Append the call to the active rollback journal if one is open.
+
+    Safe to call from primitives.* unconditionally — exits cheaply when no
+    rollback scope is active. Only records `status` in (created, overwritten);
+    callers that already report `skipped` are no-ops to rollback.
+    """
+    journal = _rollback_journal.get()
+    if journal is None:
+        return
+    if not isinstance(response, dict):
+        return
+    status = response.get("status")
+    if status not in ("created", "overwritten"):
+        return
+    asset_path = response.get("assetPath")
+    if not asset_path:
+        meta = response.get("meta")
+        if isinstance(meta, dict):
+            asset_path = meta.get("assetPath")
+    if not asset_path:
+        return
+    journal.append({"command": command, "assetPath": asset_path, "status": status})
+
+
+def _perform_rollback(journal: list[dict[str, Any]]) -> dict[str, Any]:
+    """Walk journal in reverse and delete every newly-created asset.
+
+    Overwrites can't be undone (we don't take backups before write) — surfaced
+    in `skipped` rather than silently dropped. Failures during delete are
+    collected into `errors` and don't stop the loop.
+    """
+    try:
+        from tools.primitives import delete_asset
+    except Exception:
+        return {"deleted": [], "skipped": [], "errors": [{"error": "primitives.delete_asset import failed"}]}
+
+    deleted: list[str] = []
+    skipped: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    for entry in reversed(journal):
+        if entry["status"] == "overwritten":
+            skipped.append(entry)
+            continue
+        try:
+            r = delete_asset(assetPath=entry["assetPath"], ifMissing="skip")
+        except Exception as e:
+            errors.append({"asset": entry["assetPath"], "error": f"{type(e).__name__}: {e}"})
+            continue
+        if r.get("ok"):
+            deleted.append(entry["assetPath"])
+        else:
+            err = r.get("error") if isinstance(r, dict) else None
+            errors.append({"asset": entry["assetPath"], "error": err})
+    return {"deleted": deleted, "skipped": skipped, "errors": errors}
 
 logger = logging.getLogger("UnrealMCP")
 
@@ -45,6 +113,7 @@ class RecipeSpec:
     func: Callable[..., Any]
     args: list[RecipeArg] = field(default_factory=list)
     produces: list[str] = field(default_factory=list)
+    rollback_on_failure: bool = False
 
     def qualified_name(self, namespace: str) -> str:
         return f"{namespace}.{self.name}"
@@ -61,6 +130,7 @@ def recipe(
     name: str,
     desc: str = "",
     produces: list[str] | None = None,
+    rollback_on_failure: bool = False,
 ) -> Callable[..., Any]:
     """Mark a function as a content recipe discoverable by the framework.
 
@@ -68,8 +138,14 @@ def recipe(
         name: Short tool name (namespaced at registration time).
         desc: One-line description surfaced to MCP clients.
         produces: Optional list of asset path templates this recipe creates
-                  (e.g. ["{paths.textures}/T_CardArt_{card_id}"]). Consumed
-                  by the contract-validator in MCP-CONTENT-006.
+                  (e.g. ["{paths.textures}/T_CardArt_{card_id}"]). Used by
+                  the post-call produces validator.
+        rollback_on_failure: When True, every primitive that creates a fresh
+                  asset within the recipe scope is journaled. If the recipe
+                  raises or returns ok=False, the framework walks the
+                  journal in reverse and calls delete_asset for each created
+                  entry. Overwrites are NOT reverted (we don't keep backups).
+                  Surfaced under meta.rollback / error.details.rollback.
     """
     def deco(fn: Callable[..., Any]) -> Callable[..., Any]:
         staged_args: list[RecipeArg] = list(getattr(fn, _STAGED_ARGS_ATTR, []))
@@ -86,6 +162,7 @@ def recipe(
             func=fn,
             args=staged_args,
             produces=list(produces or getattr(fn, _STAGED_PRODUCES_ATTR, []) or []),
+            rollback_on_failure=rollback_on_failure,
         )
         setattr(fn, _RECIPE_SPEC_ATTR, spec)
         return fn
@@ -154,6 +231,13 @@ class RecipeRegistry:
         arg_defs = spec.args
 
         def tool_impl(**kwargs: Any) -> dict[str, Any]:
+            # Open a rollback journal when the recipe opts in. ContextVars
+            # are coroutine-safe so concurrent MCP calls each see their own
+            # journal, never cross-contaminate.
+            journal: list[dict[str, Any]] | None = (
+                [] if spec.rollback_on_failure else None
+            )
+            token = _rollback_journal.set(journal)
             try:
                 call_kwargs: dict[str, Any] = {}
                 for a in arg_defs:
@@ -178,15 +262,35 @@ class RecipeRegistry:
                         meta = result.setdefault("meta", {})
                         if isinstance(meta, dict):
                             meta["produces_check"] = check
+                # Recipe reported failure → rollback what we journaled.
+                if (
+                    journal is not None
+                    and journal
+                    and result.get("ok") is False
+                ):
+                    summary = _perform_rollback(journal)
+                    err = result.get("error")
+                    if isinstance(err, dict):
+                        err.setdefault("details", {})
+                        if isinstance(err["details"], dict):
+                            err["details"]["rollback"] = summary
                 return result
             except Exception as e:
                 logger.exception("Recipe %s failed", qualified)
-                return fail(
+                fail_resp = fail(
                     "ue_internal",
                     "RECIPE_EXCEPTION",
                     f"{type(e).__name__}: {e}",
                     recipe=qualified,
                 )
+                if journal is not None and journal:
+                    summary = _perform_rollback(journal)
+                    details = fail_resp["error"]["details"]
+                    if isinstance(details, dict):
+                        details["rollback"] = summary
+                return fail_resp
+            finally:
+                _rollback_journal.reset(token)
 
         # FastMCP derives the tool schema from inspect.signature(fn), so we
         # must synthesize a real signature that matches the recipe's @arg

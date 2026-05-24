@@ -217,3 +217,177 @@ def test_validate_produces_bridge_unreachable_returns_none() -> None:
         check = recipe_framework._validate_produces(["/Game/X"], {})
     assert check is None
     project_config._cached_config = None
+
+
+# --- rollback ---------------------------------------------------------------
+
+def test_journal_record_outside_recipe_is_noop() -> None:
+    """No active scope → calling _journal_record never touches global state."""
+    recipe_framework._rollback_journal.set(None)
+    recipe_framework._journal_record("create_blueprint", {"status": "created", "assetPath": "/Game/X"})
+    assert recipe_framework._rollback_journal.get() is None
+
+
+def test_journal_record_captures_created_and_overwritten() -> None:
+    """Only created/overwritten with assetPath land in the journal."""
+    journal: list[dict[str, Any]] = []
+    token = recipe_framework._rollback_journal.set(journal)
+    try:
+        recipe_framework._journal_record("a", {"status": "created", "assetPath": "/Game/A"})
+        recipe_framework._journal_record("b", {"status": "overwritten", "assetPath": "/Game/B"})
+        recipe_framework._journal_record("c", {"status": "skipped", "assetPath": "/Game/C"})
+        recipe_framework._journal_record("d", {"status": "created"})  # no assetPath
+        recipe_framework._journal_record("e", "not-a-dict")  # type: ignore[arg-type]
+    finally:
+        recipe_framework._rollback_journal.reset(token)
+    assert journal == [
+        {"command": "a", "assetPath": "/Game/A", "status": "created"},
+        {"command": "b", "assetPath": "/Game/B", "status": "overwritten"},
+    ]
+
+
+def test_perform_rollback_deletes_created_skips_overwritten() -> None:
+    """Walk journal in reverse: delete created assets, skip overwritten ones."""
+    journal = [
+        {"command": "create_blueprint", "assetPath": "/Game/A", "status": "created"},
+        {"command": "set_datatable_row", "assetPath": "/Game/B", "status": "overwritten"},
+        {"command": "create_material_instance", "assetPath": "/Game/C", "status": "created"},
+    ]
+    deleted_order: list[str] = []
+
+    def fake_delete(*, assetPath: str, ifMissing: str = "fail") -> dict[str, Any]:
+        deleted_order.append(assetPath)
+        return ok("updated", assetPath)
+
+    with patch("tools.primitives.delete_asset", side_effect=fake_delete):
+        summary = recipe_framework._perform_rollback(journal)
+
+    # Reverse order: C first, then A. B (overwritten) skipped.
+    assert deleted_order == ["/Game/C", "/Game/A"]
+    assert summary["deleted"] == ["/Game/C", "/Game/A"]
+    assert summary["errors"] == []
+    assert [s["assetPath"] for s in summary["skipped"]] == ["/Game/B"]
+
+
+def test_perform_rollback_collects_errors() -> None:
+    """delete_asset raising / returning fail goes into errors[], loop continues."""
+    journal = [
+        {"command": "x", "assetPath": "/Game/Good", "status": "created"},
+        {"command": "y", "assetPath": "/Game/Bad", "status": "created"},
+    ]
+
+    def fake_delete(*, assetPath: str, ifMissing: str = "fail") -> dict[str, Any]:
+        if assetPath == "/Game/Bad":
+            raise RuntimeError("boom")
+        return ok("updated", assetPath)
+
+    with patch("tools.primitives.delete_asset", side_effect=fake_delete):
+        summary = recipe_framework._perform_rollback(journal)
+
+    assert summary["deleted"] == ["/Game/Good"]
+    assert len(summary["errors"]) == 1
+    assert summary["errors"][0]["asset"] == "/Game/Bad"
+    assert "boom" in summary["errors"][0]["error"]
+
+
+def test_recipe_rollback_on_exception_triggers_journal_walk() -> None:
+    """Recipe with rollback_on_failure=True raises → rollback runs, summary in
+    error.details.rollback."""
+    server = _fresh_registry()
+
+    @recipe_framework.recipe(name="bad_recipe", desc="will fail", rollback_on_failure=True)
+    def bad_recipe() -> dict[str, Any]:
+        # Simulate two successful primitive calls before the recipe blows up.
+        recipe_framework._journal_record(
+            "create_blueprint",
+            {"status": "created", "assetPath": "/Game/Half_BP"},
+        )
+        recipe_framework._journal_record(
+            "create_material_instance",
+            {"status": "created", "assetPath": "/Game/Half_MI"},
+        )
+        raise RuntimeError("midway crash")
+
+    spec = getattr(bad_recipe, recipe_framework._RECIPE_SPEC_ATTR)
+    recipe_framework._registry.register(spec, namespace="wc")  # type: ignore[union-attr]
+    tool = server._tool_manager._tools["wc.bad_recipe"]
+
+    deleted: list[str] = []
+
+    def fake_delete(*, assetPath: str, ifMissing: str = "fail") -> dict[str, Any]:
+        deleted.append(assetPath)
+        return ok("updated", assetPath)
+
+    with patch("tools.primitives.delete_asset", side_effect=fake_delete):
+        out = tool.fn()
+
+    assert out["ok"] is False
+    assert out["error"]["code"] == "RECIPE_EXCEPTION"
+    assert "midway crash" in out["error"]["message"]
+    rb = out["error"]["details"]["rollback"]
+    # Reverse: MI deleted first, then BP.
+    assert deleted == ["/Game/Half_MI", "/Game/Half_BP"]
+    assert rb["deleted"] == ["/Game/Half_MI", "/Game/Half_BP"]
+
+
+def test_recipe_rollback_skipped_when_opt_out() -> None:
+    """rollback_on_failure=False (default) → recipe failure leaves journal empty."""
+    _fresh_registry()
+
+    @recipe_framework.recipe(name="bad_no_rollback", desc="no opt-in")
+    def bad_no_rollback() -> dict[str, Any]:
+        recipe_framework._journal_record(
+            "create_blueprint",
+            {"status": "created", "assetPath": "/Game/Leaked"},
+        )
+        raise RuntimeError("crash")
+
+    spec = getattr(bad_no_rollback, recipe_framework._RECIPE_SPEC_ATTR)
+    recipe_framework._registry.register(spec, namespace="wc")  # type: ignore[union-attr]
+
+    delete_called = False
+
+    def fake_delete(*, assetPath: str, ifMissing: str = "fail") -> dict[str, Any]:
+        nonlocal delete_called
+        delete_called = True
+        return ok("updated", assetPath)
+
+    with patch("tools.primitives.delete_asset", side_effect=fake_delete):
+        # _journal_record was a no-op because journal contextvar was None
+        # (rollback_on_failure default). So delete_asset is never invoked.
+        server_mcp = recipe_framework._registry.mcp  # type: ignore[union-attr]
+        wrapped = server_mcp._tool_manager._tools["wc.bad_no_rollback"].fn
+        out = wrapped()
+    assert out["ok"] is False
+    assert delete_called is False
+    assert "rollback" not in out.get("error", {}).get("details", {})
+
+
+def test_recipe_rollback_on_ok_false_result() -> None:
+    """Recipe returns ok=False (no exception) → rollback still runs."""
+    server = _fresh_registry()
+
+    @recipe_framework.recipe(name="soft_fail", desc="ok=false path", rollback_on_failure=True)
+    def soft_fail() -> dict[str, Any]:
+        recipe_framework._journal_record(
+            "create_blueprint",
+            {"status": "created", "assetPath": "/Game/SF_BP"},
+        )
+        return {"ok": False, "error": {"category": "ue_internal", "code": "X", "message": "soft", "details": {}}}
+
+    spec = getattr(soft_fail, recipe_framework._RECIPE_SPEC_ATTR)
+    recipe_framework._registry.register(spec, namespace="wc")  # type: ignore[union-attr]
+    tool = server._tool_manager._tools["wc.soft_fail"]
+
+    deleted: list[str] = []
+
+    def fake_delete(*, assetPath: str, ifMissing: str = "fail") -> dict[str, Any]:
+        deleted.append(assetPath)
+        return ok("updated", assetPath)
+
+    with patch("tools.primitives.delete_asset", side_effect=fake_delete):
+        out = tool.fn()
+
+    assert out["ok"] is False
+    assert deleted == ["/Game/SF_BP"]
+    assert out["error"]["details"]["rollback"]["deleted"] == ["/Game/SF_BP"]

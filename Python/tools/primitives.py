@@ -35,8 +35,18 @@ def _call(command: str, params: dict[str, Any]) -> dict[str, Any]:
     # Bridge wraps results in {"status":"success","result":{...}}; primitives
     # live in result. Everything else (error envelopes) is returned as-is.
     if isinstance(raw, dict) and "result" in raw and isinstance(raw["result"], dict):
-        return raw["result"]
-    return raw
+        result: dict[str, Any] = raw["result"]
+    else:
+        result = raw
+    # If a recipe is active with rollback_on_failure=True, record this call
+    # in its journal. Soft-imported to avoid recipe_framework dependency at
+    # module load time (cycle with init_registry).
+    try:
+        from tools.recipe_framework import _journal_record
+        _journal_record(command, result)
+    except Exception:
+        pass
+    return result
 
 
 def import_texture(

@@ -312,6 +312,52 @@ def register_editor_tools(mcp: FastMCP) -> None:
             return {"status": "error", "message": str(e)}
 
     @mcp.tool()
+    def take_screenshot(
+        ctx: Context[Any, Any, Any],
+        filename: str = "MCPScreenshot.png",
+        show_ui: bool = False,
+        resolution_x: int = 0,
+        resolution_y: int = 0,
+    ) -> dict[str, Any]:
+        """Queue a viewport screenshot via FScreenshotRequest.
+
+        Args:
+            filename: relative PNG name; the engine writes to
+                <ProjectSaved>/Screenshots/<filename>. ".png" is appended
+                automatically when missing.
+            show_ui: include UI overlays in the capture (default False).
+            resolution_x: optional hi-res capture width. When both
+                resolution_x and resolution_y are >0 the engine takes a
+                hi-res shot via FHighResScreenshotConfig.
+            resolution_y: optional hi-res capture height.
+
+        The C++ side queues the screenshot asynchronously; the response
+        returns the planned filesystem path before the file actually
+        appears on disk (usually within 1-2 ticks).
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {
+                "filename": filename,
+                "show_ui": show_ui,
+            }
+            if resolution_x > 0 and resolution_y > 0:
+                params["resolution_x"] = resolution_x
+                params["resolution_y"] = resolution_y
+            response = unreal.send_command("take_screenshot", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error taking screenshot: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
     def spawn_blueprint_actor(
         ctx: Context[Any, Any, Any],
         blueprint_name: str,
