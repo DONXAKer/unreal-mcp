@@ -25,14 +25,11 @@ namespace
 		FString TargetClassPath;
 		if (Params->TryGetStringField(TEXT("target_class"), TargetClassPath) && !TargetClassPath.IsEmpty())
 		{
-			UClass* Found = FindObject<UClass>(nullptr, *TargetClassPath);
+			// UE 5.7: FindObject<UClass>(nullptr, ...) deprecated — для full path
+			// используем LoadObject, для short name — FindFirstObject.
+			UClass* Found = LoadObject<UClass>(nullptr, *TargetClassPath);
 			if (!Found)
 			{
-				Found = LoadObject<UClass>(nullptr, *TargetClassPath);
-			}
-			if (!Found)
-			{
-				// Короткое имя через FindFirstObject
 				int32 DotIdx;
 				if (TargetClassPath.FindLastChar(TEXT('.'), DotIdx))
 				{

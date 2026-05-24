@@ -394,17 +394,13 @@ UK2Node* FSpecializedNodeCreator::CreateGetWorldSubsystemNode(UEdGraph* Graph, c
 		return nullptr;
 	}
 
-	// Разрешаем класс сабсистема — пробуем FindObject, LoadObject и FindFirstObject
-	UClass* SubsystemClass = FindObject<UClass>(nullptr, *SubsystemClassPath);
+	// Разрешаем класс сабсистема. UE 5.7: FindObject<UClass>(nullptr, ...)
+	// deprecated — LoadObject (полный path) + FindFirstObject (short name).
+	// Поддерживаем оба варианта входа: "/Script/Engine.GameInstanceSubsystem"
+	// и короткое имя "GameInstanceSubsystem".
+	UClass* SubsystemClass = LoadObject<UClass>(nullptr, *SubsystemClassPath);
 	if (!SubsystemClass)
 	{
-		SubsystemClass = LoadObject<UClass>(nullptr, *SubsystemClassPath);
-	}
-	if (!SubsystemClass)
-	{
-		// UE 5.7: FindObject(nullptr, ShortName) сломан без ANY_PACKAGE — fallback на FindFirstObject.
-		// Поддерживаем оба варианта входа: полный path "/Script/Engine.GameInstanceSubsystem"
-		// и короткое имя "GameInstanceSubsystem".
 		FString ShortName = SubsystemClassPath;
 		int32 DotIdx;
 		if (SubsystemClassPath.FindLastChar(TEXT('.'), DotIdx))

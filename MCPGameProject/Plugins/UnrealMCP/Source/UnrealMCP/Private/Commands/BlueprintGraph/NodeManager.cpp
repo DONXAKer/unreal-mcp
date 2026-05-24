@@ -581,13 +581,10 @@ UK2Node* FBlueprintNodeManager::CreateCallFunctionNode(UEdGraph* Graph, const TS
 	}
 	else if (Params->TryGetStringField(TEXT("target_class"), TargetClassPath) && !TargetClassPath.IsEmpty())
 	{
-		// UE 5.7: FindObject(nullptr, ShortName) сломан без ANY_PACKAGE — fallback на FindFirstObject + LoadObject.
-		OwnerClass = FindObject<UClass>(nullptr, *TargetClassPath);
-		if (!OwnerClass)
-		{
-			OwnerClass = FindFirstObject<UClass>(*TargetClassPath, EFindFirstObjectOptions::None,
-				ELogVerbosity::Warning, TEXT("MCP NodeManager"));
-		}
+		// UE 5.7: FindObject(nullptr, ShortName) deprecated, всегда возвращает null.
+		// FindFirstObject разрешает короткие имена; LoadObject — полные path'ы.
+		OwnerClass = FindFirstObject<UClass>(*TargetClassPath, EFindFirstObjectOptions::None,
+			ELogVerbosity::Warning, TEXT("MCP NodeManager"));
 		if (!OwnerClass)
 		{
 			OwnerClass = LoadObject<UClass>(nullptr, *TargetClassPath);
