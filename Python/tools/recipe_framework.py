@@ -14,6 +14,7 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import logging
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -22,7 +23,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from tools.project_config import get_config, resolve_project_root
+from tools.project_config import ProjectConfig, get_config, resolve_project_root
 from tools.result_format import fail, ok
 
 logger = logging.getLogger("UnrealMCP")
@@ -169,6 +170,14 @@ class RecipeRegistry:
                 result = spec.func(**call_kwargs)
                 if not isinstance(result, dict):
                     return ok("created", "", raw=result)
+                # Best-effort produces validation — only on success, never fails
+                # the recipe call. Result is surfaced under meta.produces_check.
+                if spec.produces and result.get("ok") is not False:
+                    check = _validate_produces(spec.produces, call_kwargs)
+                    if check is not None:
+                        meta = result.setdefault("meta", {})
+                        if isinstance(meta, dict):
+                            meta["produces_check"] = check
                 return result
             except Exception as e:
                 logger.exception("Recipe %s failed", qualified)
@@ -220,6 +229,97 @@ class RecipeRegistry:
                 store.pop(qualified, None)
 
         self.mcp.tool(name=qualified, description=spec.description)(tool_impl)
+
+
+# --- produces[] template resolution + asset-existence validation ------------
+
+class _SafeDict(dict[str, Any]):
+    """str.format_map() helper: leaves `{unknown}` placeholders intact instead of
+    raising KeyError so partially-resolved templates survive."""
+
+    def __missing__(self, key: str) -> str:
+        return "{" + key + "}"
+
+
+def _resolve_template(template: str, cfg: ProjectConfig, args: dict[str, Any]) -> str:
+    """Expand {paths.X} / {naming.X} / {assetRoot} / {arg_name} placeholders.
+
+    Unknown placeholders survive unchanged — they're a soft contract, not a
+    hard one, so a partially-resolved template still gives a meaningful
+    diagnostic in produces_check.missing.
+    """
+
+    def _paths(m: re.Match[str]) -> str:
+        return str(getattr(cfg.paths, m.group(1), m.group(0)))
+
+    def _naming(m: re.Match[str]) -> str:
+        return str(getattr(cfg.naming, m.group(1), m.group(0)))
+
+    template = re.sub(r"\{paths\.(\w+)\}", _paths, template)
+    template = re.sub(r"\{naming\.(\w+)\}", _naming, template)
+    template = template.replace("{assetRoot}", cfg.asset_root)
+    try:
+        template = template.format_map(_SafeDict(**args))
+    except Exception:
+        # Unrecoverable format error — return what we have so far so the
+        # missing[] entry still points to *something* the caller can act on.
+        pass
+    return template
+
+
+def _validate_produces(
+    produces: list[str],
+    call_kwargs: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Best-effort check: each produces template must resolve to an asset that
+    exists in the registry after the recipe finishes.
+
+    Returns `{checked, missing, resolved, status}` for surfacing under
+    `meta.produces_check`, or None if validation must be skipped (no config,
+    bridge unreachable, etc.) — never raises, never fails the recipe.
+    """
+    cfg = get_config()
+    if cfg is None:
+        return None
+
+    try:
+        from tools.primitives import asset_exists
+    except Exception:
+        logger.warning("produces_check skipped: primitives.asset_exists import failed")
+        return None
+
+    resolved: list[str] = []
+    missing: list[str] = []
+    for template in produces:
+        try:
+            path = _resolve_template(template, cfg, call_kwargs)
+        except Exception:
+            logger.exception("produces_check: failed to resolve template %s", template)
+            continue
+        resolved.append(path)
+        # `{...}` left in path → template unresolved; treat as missing.
+        if "{" in path or "}" in path:
+            missing.append(path)
+            continue
+        try:
+            r = asset_exists(assetPath=path)
+        except Exception:
+            logger.warning("produces_check: bridge unreachable for %s", path)
+            return None
+        if r.get("ok") is False:
+            # Bridge errored on this check; surface as missing rather than
+            # silently swallowing.
+            missing.append(path)
+            continue
+        if not r.get("meta", {}).get("exists", False):
+            missing.append(path)
+
+    return {
+        "status": "ok" if not missing else "missing",
+        "checked": len(resolved),
+        "resolved": resolved,
+        "missing": missing,
+    }
 
 
 _registry: RecipeRegistry | None = None
@@ -308,3 +408,36 @@ def reload_recipes_impl() -> dict[str, Any]:
         registered=names,
         errors=errors,
     )
+
+
+def list_recipes_impl() -> dict[str, Any]:
+    """MCP-exposed introspection: full metadata for every registered recipe.
+
+    Returns each recipe's qualified name, description, declared args (with
+    type + required flag + default), and `produces[]` templates. Used by
+    MCP clients (and contract-validators) to discover the recipe surface
+    without re-running discovery.
+    """
+    if _registry is None:
+        return fail("config", "REGISTRY_NOT_INITIALIZED", "Recipe registry not initialized")
+
+    recipes: list[dict[str, Any]] = []
+    for qualified, spec in sorted(_registry.registered.items()):
+        recipes.append(
+            {
+                "name": qualified,
+                "description": spec.description,
+                "args": [
+                    {
+                        "name": a.name,
+                        "type": a.type_.__name__,
+                        "required": a.required,
+                        "default": a.default,
+                        "description": a.description,
+                    }
+                    for a in spec.args
+                ],
+                "produces": list(spec.produces),
+            }
+        )
+    return ok("updated", "", count=len(recipes), recipes=recipes)

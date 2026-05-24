@@ -315,6 +315,11 @@ def reload_recipes() -> dict[str, Any]:
     """Rediscover and re-register all recipes under the configured recipesDir."""
     return _recipe_framework.reload_recipes_impl()
 
+@_server_mcp.tool()
+def list_recipes() -> dict[str, Any]:
+    """Return metadata (name, description, args, produces) for every registered recipe."""
+    return _recipe_framework.list_recipes_impl()
+
 try:
     if _project_config.load_config() is not None:
         _count, _names, _errors = _recipe_framework.register_all_recipes()

@@ -210,11 +210,19 @@ mcp = FastMCP(
     ),
 )
 
-# Register the same tools as the stdio server
+# Register the same tools as the stdio server (full 13-module surface).
+from tools.animation_tools import register_animation_tools
+from tools.asset_tools import register_asset_tools
 from tools.blueprint_tools import register_blueprint_tools
+from tools.data_asset_tools import register_data_asset_tools
 from tools.editor_tools import register_editor_tools
+from tools.level_tools import register_level_tools
+from tools.material_tools import register_material_tools
+from tools.mesh_tools import register_mesh_tools
+from tools.niagara_tools import register_niagara_tools
 from tools.node_tools import register_blueprint_node_tools
 from tools.project_tools import register_project_tools
+from tools.texture_tools import register_texture_tools
 from tools.umg_tools import register_umg_tools
 
 register_editor_tools(mcp)
@@ -222,6 +230,14 @@ register_blueprint_tools(mcp)
 register_blueprint_node_tools(mcp)
 register_project_tools(mcp)
 register_umg_tools(mcp)
+register_animation_tools(mcp)
+register_level_tools(mcp)
+register_material_tools(mcp)
+register_asset_tools(mcp)
+register_texture_tools(mcp)
+register_mesh_tools(mcp)
+register_data_asset_tools(mcp)
+register_niagara_tools(mcp)
 
 from tools import project_config as _project_config
 from tools import recipe_framework as _recipe_framework
@@ -242,6 +258,12 @@ def reload_config() -> dict[str, Any]:
 def reload_recipes() -> dict[str, Any]:
     """Rediscover and re-register all recipes under the configured recipesDir."""
     return _recipe_framework.reload_recipes_impl()
+
+
+@_server_mcp.tool()
+def list_recipes() -> dict[str, Any]:
+    """Return metadata (name, description, args, produces) for every registered recipe."""
+    return _recipe_framework.list_recipes_impl()
 
 
 try:
