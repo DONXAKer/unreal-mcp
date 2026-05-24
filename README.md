@@ -228,6 +228,48 @@ Optional list of asset path templates that this recipe creates. Used by the cont
 
 Template variables `{paths.*}`, `{naming.*}`, `{assetRoot}` are resolved from `mcp-project.json` at validation time. Argument names (e.g. `{card_id}`) are matched to `@arg` declarations — the validator treats them as wildcards for expected-asset checks.
 
+After every successful recipe call, the framework expands each `produces[]`
+template using the recipe's actual arguments and verifies the resulting
+paths exist via `asset_exists`. The summary lands in `meta.produces_check`:
+
+```json
+"produces_check": {
+  "status": "ok",
+  "checked": 3,
+  "resolved": ["/Game/Cards/T_CardArt_1", "/Game/Cards/MI_Card_1", "/Game/Cards/BP_Card_1"],
+  "missing": []
+}
+```
+
+If anything's missing (or a template can't be resolved — e.g. you forgot to
+declare an `@arg`), it appears in `missing[]` and the recipe response stays
+otherwise successful. The validator never fails the recipe — it just signals.
+
+### `rollback_on_failure` parameter (v2.0.0)
+
+Opt-in: when set, the framework journals every primitive call that creates
+or overwrites an asset within the recipe scope. If the recipe raises or
+returns `ok=false`, the journal is walked in reverse and `delete_asset` is
+called for every newly-created entry. Overwrites are NOT reverted (we keep
+no backup) — those land in `skipped[]`.
+
+```python
+@recipe(
+    name="create_card",
+    desc="...",
+    produces=["..."],
+    rollback_on_failure=True,
+)
+@arg("card_id", int, required=True)
+def create_card(card_id):
+    ...
+```
+
+The rollback summary appears under `error.details.rollback` for the failure
+path: `{deleted: [...], skipped: [...], errors: [...]}`.
+
+Recipes that don't opt-in behave exactly as before — no journaling cost.
+
 ### Namespace rules
 
 - Tool name registered = `<namespace>.<name>` (e.g. `wc.create_card`)
@@ -250,17 +292,15 @@ After editing `primitives.py` or other Python tools — restart the server.
 
 After editing C++ commands — rebuild the UE plugin, restart the Editor.
 
-## Available Commands (v1.18.1)
+## Available Commands (v2.0.0)
 
-The Python MCP server exposes **117 `@mcp.tool()` commands** across 13 domain
+The Python MCP server exposes **118 `@mcp.tool()` commands** across 13 domain
 modules in `Python/tools/` (each registered by a `register_*_tools(mcp)` call),
-plus the `reload_config` / `reload_recipes` server tools. Recipes add
-higher-level project workflows on top — see the Recipes Cookbook.
+plus the `reload_config` / `reload_recipes` / `list_recipes` server tools.
+Recipes add higher-level project workflows on top — see the Recipes Cookbook.
 
-> **Server coverage differs.** The stdio server (`unreal_mcp_server.py`)
-> registers all 13 modules. The Docker / HTTP server (`unreal_mcp_server_http.py`)
-> currently registers the 5 core modules — `editor`, `blueprint`, `node`,
-> `project`, `umg` (84 tools) — plus the server tools.
+> **Stdio and HTTP servers are at parity since v2.0.0** — both register all
+> 13 tool modules (was: HTTP exposed only 5 modules before v2.0.0).
 
 ### Naming convention (adopted v1.17.0)
 
@@ -291,8 +331,8 @@ explicitly notes they are needed for an existing caller in `tasks/active/`.
 
 Counts are `@mcp.tool()` entries per file in `Python/tools/`.
 
-#### Editor — `editor_tools.py` (10)
-`get_actors_in_level`, `find_actors_by_name`, `spawn_actor`, `spawn_blueprint_actor`, `delete_actor`, `set_actor_transform`, `get_actor_properties`, `set_actor_property`, `focus_viewport`, `ping`
+#### Editor — `editor_tools.py` (11)
+`get_actors_in_level`, `find_actors_by_name`, `spawn_actor`, `spawn_blueprint_actor`, `delete_actor`, `set_actor_transform`, `get_actor_properties`, `set_actor_property`, `focus_viewport`, `take_screenshot`, `ping`
 
 #### Level — `level_tools.py` (7)
 `create_level`, `load_level`, `save_level`, `spawn_actor_in_level`, `remove_actor_from_level`, `set_actor_transform_in_level`, `list_actors_in_level`
@@ -339,7 +379,9 @@ Counts are `@mcp.tool()` entries per file in `Python/tools/`.
 `asset_exists`, `delete_asset`
 
 #### Server tools (always registered)
-`reload_config` — reload `mcp-project.json` from disk · `reload_recipes` — hot-reload recipes without restarting the server
+- `reload_config` — reload `mcp-project.json` from disk
+- `reload_recipes` — hot-reload recipes without restarting the server
+- `list_recipes` (v2.0.0) — return full metadata for every registered recipe (qualified name, description, args[], produces[]) — useful for AI introspection without re-running discovery
 
 ## Primitives Reference
 
@@ -372,7 +414,9 @@ All primitives are in `Python/tools/primitives.py`. Each wraps one C++ command.
 
 ## Error Format
 
-All responses follow this shape:
+All responses follow this **dual-key envelope** (since v2.0.0). Every result
+carries both the unified `ok`/`status`/`assetPath`/`meta` keys *and* the
+legacy `success`/`message` keys so old and new consumers can coexist.
 
 **Success:**
 ```json
@@ -380,7 +424,9 @@ All responses follow this shape:
   "ok": true,
   "status": "created",
   "assetPath": "/Game/Cards/T_CardArt_1",
-  "meta": { "...": "..." }
+  "meta": { "...": "..." },
+  "success": true,
+  "message": "created"
 }
 ```
 
@@ -393,9 +439,23 @@ All responses follow this shape:
     "code": "MASTER_MATERIAL_MISSING",
     "message": "No master material configured",
     "details": { "card_id": 1 }
-  }
+  },
+  "success": false,
+  "message": "No master material configured"
 }
 ```
+
+`ok == success` is an invariant. Inside the envelope:
+
+- `status` ∈ `created` · `skipped` · `overwritten` · `updated` · `ok`
+- `meta` contains primitive-specific payload **and** any of:
+  - `meta.produces_check` — recipe `produces[...]` validator output (v2.0.0)
+    `{status: "ok"|"missing", checked, resolved, missing}`
+  - `meta.rollback` — half-finished-recipe revert summary if a recipe with
+    `rollback_on_failure=True` succeeded after partial work was reverted
+- `error.details.rollback` — rollback summary when a recipe with
+  `rollback_on_failure=True` raised or returned `ok=false`
+  `{deleted, skipped, errors}`
 
 Error categories:
 
@@ -405,6 +465,8 @@ Error categories:
 | `user` | Missing required arg, invalid value |
 | `ue_internal` | UE Editor-side failure (factory error, save failed) |
 | `not_found` | Referenced asset does not exist |
+| `validation` | Schema / contract validation failed |
+| `io` | Filesystem / network IO error |
 | `test` | Test recipe assertion failure |
 
 ## Dev Workflow
