@@ -30,7 +30,9 @@ TSharedPtr<FJsonObject> FEventManager::AddEventNode(const TSharedPtr<FJsonObject
 		return CreateErrorResponse(TEXT("Missing 'event_name' parameter"));
 	}
 
-	// Get optional position parameters
+	// Get optional position parameters — поддерживаем оба формата:
+	//  - pos_x / pos_y (legacy, плоские числа)
+	//  - node_position: [X, Y] (Python tool как раз шлёт массивом)
 	FVector2D Position(0.0f, 0.0f);
 	double PosX = 0.0, PosY = 0.0;
 	if (Params->TryGetNumberField(TEXT("pos_x"), PosX))
@@ -41,6 +43,21 @@ TSharedPtr<FJsonObject> FEventManager::AddEventNode(const TSharedPtr<FJsonObject
 	{
 		Position.Y = static_cast<float>(PosY);
 	}
+	if (Params->HasField(TEXT("node_position")))
+	{
+		const TArray<TSharedPtr<FJsonValue>>* PosArr = nullptr;
+		if (Params->TryGetArrayField(TEXT("node_position"), PosArr) && PosArr && PosArr->Num() >= 2)
+		{
+			Position.X = static_cast<float>((*PosArr)[0]->AsNumber());
+			Position.Y = static_cast<float>((*PosArr)[1]->AsNumber());
+		}
+	}
+
+	// Опциональный флаг "as_override": создать именно override BlueprintImplementableEvent /
+	// BlueprintNativeEvent из ParentClass (с bOverrideFunction=true и EventReference на parent).
+	// Без этого C++ VM не маршрутизирует вызов BIE в Blueprint — нужна именно Override-нода.
+	bool bAsOverride = false;
+	Params->TryGetBoolField(TEXT("as_override"), bAsOverride);
 
 	// Load the Blueprint
 	UBlueprint* Blueprint = LoadBlueprint(BlueprintName);
@@ -61,18 +78,113 @@ TSharedPtr<FJsonObject> FEventManager::AddEventNode(const TSharedPtr<FJsonObject
 		return CreateErrorResponse(TEXT("Failed to get Blueprint event graph"));
 	}
 
-	// Create the event node
-	UK2Node_Event* EventNode = CreateEventNode(Graph, EventName, Position);
-	if (!EventNode)
+	FString FallbackWarning;
+	UK2Node_Event* EventNode = nullptr;
+
+	if (bAsOverride)
 	{
-		return CreateErrorResponse(FString::Printf(TEXT("Failed to create event node: %s"), *EventName));
+		// Явный путь: найти UFunction в ParentClass и создать настоящий override.
+		EventNode = CreateOverrideEventNode(Graph, EventName, Position, FallbackWarning);
+		if (!EventNode)
+		{
+			return CreateErrorResponse(FString::Printf(
+				TEXT("Failed to create override event node: %s"), *EventName));
+		}
+	}
+	else
+	{
+		// Legacy путь — старое поведение (через GeneratedClass + GetSuperClass), оставляем как было.
+		EventNode = CreateEventNode(Graph, EventName, Position);
+		if (!EventNode)
+		{
+			return CreateErrorResponse(FString::Printf(TEXT("Failed to create event node: %s"), *EventName));
+		}
 	}
 
 	// Notify changes
 	Graph->NotifyGraphChanged();
-	FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+	FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(Blueprint);
 
-	return CreateSuccessResponse(EventNode);
+	TSharedPtr<FJsonObject> Response = CreateSuccessResponse(EventNode);
+	Response->SetBoolField(TEXT("is_override"), EventNode->bOverrideFunction);
+	if (!FallbackWarning.IsEmpty())
+	{
+		Response->SetStringField(TEXT("warning"), FallbackWarning);
+	}
+	return Response;
+}
+
+UK2Node_Event* FEventManager::CreateOverrideEventNode(UEdGraph* Graph, const FString& EventName, const FVector2D& Position, FString& OutWarning)
+{
+	if (!Graph)
+	{
+		return nullptr;
+	}
+
+	UBlueprint* Blueprint = FBlueprintEditorUtils::FindBlueprintForGraph(Graph);
+	if (!Blueprint)
+	{
+		return nullptr;
+	}
+
+	// Дубликат-guard — повторный override той же функции даст BP-ошибку компиляции.
+	if (UK2Node_Event* Existing = FindExistingEventNode(Graph, EventName))
+	{
+		UE_LOG(LogTemp, Display, TEXT("FEventManager::CreateOverrideEventNode: Existing event node '%s' reused (ID: %s)"),
+			*EventName, *Existing->NodeGuid.ToString());
+		return Existing;
+	}
+
+	const FName EventFName(*EventName);
+
+	// Ищем UFunction строго в ParentClass и выше — это и есть критерий "override".
+	UClass* ParentClass = Blueprint->ParentClass;
+	UFunction* OverriddenFunc = nullptr;
+	UClass* DeclaringClass = nullptr;
+	for (UClass* Class = ParentClass; Class; Class = Class->GetSuperClass())
+	{
+		if (UFunction* Func = Class->FindFunctionByName(EventFName, EIncludeSuperFlag::ExcludeSuper))
+		{
+			OverriddenFunc = Func;
+			DeclaringClass = Class;
+			break;
+		}
+	}
+
+	if (!OverriddenFunc || !DeclaringClass)
+	{
+		// Fallback на старое поведение — создаём как раньше, но с понятным предупреждением.
+		OutWarning = FString::Printf(
+			TEXT("Function '%s' not found in parent class — created as custom/event node (NOT a true override)"),
+			*EventName);
+		UE_LOG(LogTemp, Warning, TEXT("FEventManager::CreateOverrideEventNode: %s"), *OutWarning);
+		return CreateEventNode(Graph, EventName, Position);
+	}
+
+	UK2Node_Event* EventNode = NewObject<UK2Node_Event>(Graph);
+	if (!EventNode)
+	{
+		return nullptr;
+	}
+
+	// Каноничный набор флагов K2Node_Event для override-узла.
+	EventNode->EventReference.SetExternalMember(EventFName, DeclaringClass);
+	EventNode->bOverrideFunction = true;
+	EventNode->bInternalEvent = false;
+	EventNode->NodePosX = static_cast<int32>(Position.X);
+	EventNode->NodePosY = static_cast<int32>(Position.Y);
+	EventNode->SetFlags(RF_Transactional);
+
+	Graph->Modify();
+	Graph->AddNode(EventNode, /*bFromUI*/ true, /*bSelectNewNode*/ false);
+	EventNode->CreateNewGuid();
+	EventNode->PostPlacedNewNode();
+	EventNode->AllocateDefaultPins();
+
+	UE_LOG(LogTemp, Display, TEXT("FEventManager::CreateOverrideEventNode: Override event '%s' from class '%s' created (ID: %s)"),
+		*EventName, *DeclaringClass->GetName(), *EventNode->NodeGuid.ToString());
+
+	return EventNode;
 }
 
 UK2Node_Event* FEventManager::CreateEventNode(UEdGraph* Graph, const FString& EventName, const FVector2D& Position)

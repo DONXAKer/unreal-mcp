@@ -23,11 +23,12 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
         ctx: Context[Any, Any, Any],
         blueprint_name: str,
         event_name: str,
-        node_position: list[float] | None = None
+        node_position: list[float] | None = None,
+        as_override: bool = False
     ) -> dict[str, Any]:
         """
         Add an event node to a Blueprint's event graph.
-        
+
         Args:
             blueprint_name: Name of the target Blueprint
             event_name: Name of the event. Use 'Receive' prefix for standard events:
@@ -35,29 +36,39 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
                        - 'ReceiveTick' for Tick
                        - etc.
             node_position: Optional [X, Y] position in the graph
-            
+            as_override: When True, creates an override of a BlueprintImplementableEvent
+                         / BlueprintNativeEvent declared in the parent C++ class.
+                         REQUIRED for events that C++ invokes via the VM (e.g.
+                         UFUNCTION(BlueprintImplementableEvent)) — without this the
+                         native call will NOT route into a plain Custom Event node.
+                         Default: False (legacy behaviour, creates a non-override node).
+
         Returns:
-            Response containing the node ID and success status
+            Response containing the node ID and success status. Includes
+            ``is_override`` flag and (when applicable) a ``warning`` string when
+            the requested function could not be located in the parent class and
+            the call silently fell back to custom-event creation.
         """
         from unreal_mcp_server import get_unreal_connection
-        
+
         try:
             # Handle default value within the method body
             if node_position is None:
                 node_position = [0, 0]
-            
+
             params = {
                 "blueprint_name": blueprint_name,
                 "event_name": event_name,
-                "node_position": node_position
+                "node_position": node_position,
+                "as_override": as_override,
             }
-            
+
             unreal = get_unreal_connection()
             if not unreal:
                 logger.error("Failed to connect to Unreal Engine")
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            
-            logger.info(f"Adding event node '{event_name}' to blueprint '{blueprint_name}'")
+
+            logger.info(f"Adding event node '{event_name}' to blueprint '{blueprint_name}' (as_override={as_override})")
             response = unreal.send_command("add_event_node", params)
             
             if not response:

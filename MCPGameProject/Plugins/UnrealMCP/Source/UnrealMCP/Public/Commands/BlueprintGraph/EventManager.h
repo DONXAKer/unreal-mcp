@@ -79,6 +79,17 @@ private:
 	static UK2Node_Event* CreateEventNode(UEdGraph* Graph, const FString& EventName, const FVector2D& Position);
 
 	/**
+	 * Создать настоящий Override-узел K2Node_Event для BlueprintImplementableEvent /
+	 * BlueprintNativeEvent, объявленного в ParentClass. В отличие от CreateEventNode,
+	 * проставляет bOverrideFunction=true и EventReference на parent class — это
+	 * единственная форма, которую C++ VM маршрутизирует при вызове BIE из натива.
+	 *
+	 * Если функция не нашлась в ParentClass — заполняет OutWarning и делегирует в
+	 * CreateEventNode (fallback, чтобы не сломать старых вызывающих).
+	 */
+	static UK2Node_Event* CreateOverrideEventNode(UEdGraph* Graph, const FString& EventName, const FVector2D& Position, FString& OutWarning);
+
+	/**
 	 * Find existing event node with the same name (to avoid duplicates)
 	 * @param Graph The Blueprint event graph
 	 * @param EventName Name of the event to find
