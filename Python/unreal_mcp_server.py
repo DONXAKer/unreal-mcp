@@ -276,6 +276,7 @@ from tools.level_tools import register_level_tools
 from tools.material_tools import register_material_tools
 from tools.mesh_tools import register_mesh_tools
 from tools.niagara_tools import register_niagara_tools
+from tools.graph_builder import register_graph_builder_tool
 from tools.node_tools import register_blueprint_node_tools
 from tools.project_tools import register_project_tools
 from tools.texture_tools import register_texture_tools
@@ -285,6 +286,7 @@ from tools.umg_tools import register_umg_tools
 register_editor_tools(mcp)
 register_blueprint_tools(mcp)
 register_blueprint_node_tools(mcp)
+register_graph_builder_tool(mcp)  # v2.1: declarative EventGraph builder
 register_project_tools(mcp)
 register_umg_tools(mcp)
 register_animation_tools(mcp)

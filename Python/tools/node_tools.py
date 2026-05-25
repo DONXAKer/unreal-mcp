@@ -130,30 +130,32 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
         target: str,
         function_name: str,
         params: dict[str, Any] | None = None,
-        node_position: list[float] | None = None
+        node_position: list[float] | None = None,
+        target_graph: str = "",
     ) -> dict[str, Any]:
         """
-        Add a function call node to a Blueprint's event graph.
-        
+        Add a function call node to a Blueprint's event graph or function graph.
+
         Args:
             blueprint_name: Name of the target Blueprint
             target: Target object for the function (component name or self)
             function_name: Name of the function to call
             params: Optional parameters to set on the function node
             node_position: Optional [X, Y] position in the graph
-            
+            target_graph: If set, add node to this function graph instead of EventGraph.
+
         Returns:
             Response containing the node ID and success status
         """
         from unreal_mcp_server import get_unreal_connection
-        
+
         try:
             # Handle default values within the method body
             if params is None:
                 params = {}
             if node_position is None:
                 node_position = [0, 0]
-            
+
             command_params = {
                 "blueprint_name": blueprint_name,
                 "node_type": "CallFunction",
@@ -162,6 +164,8 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
                 "params": params,
                 "node_position": node_position
             }
+            if target_graph:
+                command_params["function_name"] = target_graph
 
             unreal = get_unreal_connection()
             if not unreal:
@@ -190,31 +194,36 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
         source_node_id: str,
         source_pin: str,
         target_node_id: str,
-        target_pin: str
+        target_pin: str,
+        function_name: str = "",
     ) -> dict[str, Any]:
         """
-        Connect two nodes in a Blueprint's event graph.
-        
+        Connect two nodes in a Blueprint graph (EventGraph or function graph).
+
         Args:
-            blueprint_name: Name of the target Blueprint
-            source_node_id: ID of the source node
-            source_pin: Name of the output pin on the source node
-            target_node_id: ID of the target node
-            target_pin: Name of the input pin on the target node
-            
+            blueprint_name: Name or full /Game/... path of the Blueprint.
+            source_node_id: ID/name of the source node.
+            source_pin: Name of the output pin on the source node.
+            target_node_id: ID/name of the target node.
+            target_pin: Name of the input pin on the target node.
+            function_name: Optional function graph name (e.g. "SetSelectedVisual").
+                When omitted, the EventGraph is searched.
+
         Returns:
             Response indicating success or failure
         """
         from unreal_mcp_server import get_unreal_connection
-        
+
         try:
             params = {
                 "blueprint_name": blueprint_name,
                 "source_node_id": source_node_id,
                 "source_pin_name": source_pin,
                 "target_node_id": target_node_id,
-                "target_pin_name": target_pin
+                "target_pin_name": target_pin,
             }
+            if function_name:
+                params["function_name"] = function_name
 
             unreal = get_unreal_connection()
             if not unreal:
@@ -223,14 +232,14 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
 
             logger.info(f"Connecting nodes in blueprint '{blueprint_name}'")
             response = unreal.send_command("connect_nodes", params)
-            
+
             if not response:
                 logger.error("No response from Unreal Engine")
                 return {"success": False, "message": "No response from Unreal Engine"}
-            
+
             logger.info(f"Node connection response: {response}")
             return response
-            
+
         except Exception as e:
             error_msg = f"Error connecting nodes: {e}"
             logger.error(error_msg)
@@ -1415,13 +1424,15 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
         blueprint_name: str,
         pos_x: float = 0.0,
         pos_y: float = 0.0,
+        function_name: str = "",
     ) -> dict[str, Any]:
         """
-        Add a Branch (If-Then-Else) node to a Blueprint's EventGraph.
+        Add a Branch (If-Then-Else) node to a Blueprint's EventGraph or function graph.
 
         Args:
             blueprint_name: Target Blueprint.
             pos_x, pos_y: Optional graph position.
+            function_name: If set, add node to this function graph instead of EventGraph.
         """
         from unreal_mcp_server import get_unreal_connection
         try:
@@ -1434,6 +1445,8 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
                 "pos_x": pos_x,
                 "pos_y": pos_y,
             }
+            if function_name:
+                params["function_name"] = function_name
             logger.info(f"Adding Branch node to blueprint '{blueprint_name}'")
             response = unreal.send_command("add_blueprint_node", params)
             if not response:
@@ -1451,14 +1464,16 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
         variable_name: str,
         pos_x: float = 0.0,
         pos_y: float = 0.0,
+        function_name: str = "",
     ) -> dict[str, Any]:
         """
-        Add a VariableGet node (self member getter) to a Blueprint's EventGraph.
+        Add a VariableGet node (self member getter) to a Blueprint's EventGraph or function graph.
 
         Args:
             blueprint_name: Target Blueprint.
             variable_name: Name of the Blueprint variable to read.
             pos_x, pos_y: Optional graph position.
+            function_name: If set, add node to this function graph instead of EventGraph.
         """
         from unreal_mcp_server import get_unreal_connection
         try:
@@ -1472,6 +1487,8 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
                 "pos_x": pos_x,
                 "pos_y": pos_y,
             }
+            if function_name:
+                params["function_name"] = function_name
             logger.info(f"Adding VariableGet node for '{variable_name}' in blueprint '{blueprint_name}'")
             response = unreal.send_command("add_blueprint_node", params)
             if not response:
@@ -1517,6 +1534,100 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
             return response
         except Exception as e:
             error_msg = f"Error adding variable set node: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def add_blueprint_foreach_loop_node(
+        ctx: Context[Any, Any, Any],
+        blueprint_name: str,
+        pos_x: float = 0.0,
+        pos_y: float = 0.0,
+        function_name: str = "",
+    ) -> dict[str, Any]:
+        """
+        Add a ForEachLoop macro node to a Blueprint's EventGraph (or function graph).
+
+        Creates a K2Node_MacroInstance for the standard ForEachLoop macro.
+        Pins: Array (input), exec (input), LoopBody (exec out), ArrayElement (out),
+        ArrayIndex (int out), Completed (exec out).
+
+        Args:
+            blueprint_name: Target Blueprint (short name or /Game/... path).
+            pos_x, pos_y: Optional graph position.
+            function_name: If set, add node to this function graph instead of EventGraph.
+
+        Example: blueprint_name="/Game/UI/Mulligan/WBP_Mulligan", pos_x=700, pos_y=0
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {
+                "blueprint_name": blueprint_name,
+                "node_type": "ForEachLoop",
+                "pos_x": pos_x,
+                "pos_y": pos_y,
+            }
+            if function_name:
+                params["function_name"] = function_name
+            logger.info(f"Adding ForEachLoop node to blueprint '{blueprint_name}'")
+            response = unreal.send_command("add_blueprint_node", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error adding ForEachLoop node: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def add_blueprint_dynamic_cast_node(
+        ctx: Context[Any, Any, Any],
+        blueprint_name: str,
+        target_class: str,
+        pos_x: float = 0.0,
+        pos_y: float = 0.0,
+        function_name: str = "",
+    ) -> dict[str, Any]:
+        """
+        Add a CastTo (DynamicCast) node to a Blueprint's EventGraph.
+
+        Creates a K2Node_DynamicCast with Cast Succeeded / Cast Failed exec outputs
+        and a typed 'As <ClassName>' output pin.
+
+        Args:
+            blueprint_name: Target Blueprint (short name or /Game/... path).
+            target_class: Class to cast to. Accepts short name ("WBP_MulliganCard_C")
+                or full asset class path ("/Game/UI/Mulligan/WBP_MulliganCard.WBP_MulliganCard_C").
+            pos_x, pos_y: Optional graph position.
+            function_name: If set, add node to this function graph instead of EventGraph.
+
+        Example: blueprint_name="/Game/UI/Mulligan/WBP_Mulligan",
+                 target_class="WBP_MulliganCard_C"
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {
+                "blueprint_name": blueprint_name,
+                "node_type": "DynamicCast",
+                "target_class": target_class,
+                "pos_x": pos_x,
+                "pos_y": pos_y,
+            }
+            if function_name:
+                params["function_name"] = function_name
+            logger.info(f"Adding DynamicCast→'{target_class}' node to blueprint '{blueprint_name}'")
+            response = unreal.send_command("add_blueprint_node", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error adding DynamicCast node: {e}"
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 

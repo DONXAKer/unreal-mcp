@@ -407,37 +407,52 @@ FEdGraphPinType FBPVariables::GetPinTypeFromString(const FString& TypeString)
         PinType.ContainerType = EPinContainerType::Array;
     }
 
-    if (InnerType == TEXT("bool"))
+    // Accept both lowercase (internal) and title-case (Python tool) names.
+    // Python sends "Integer", "Float", "Boolean", "String", "Name", "Text",
+    // "Vector", "Rotator".  The old lowercase-only check caused "Integer" to
+    // fall into the default branch and produce a real/float pin instead.
+    const FString InnerTypeLower = InnerType.ToLower();
+
+    if (InnerTypeLower == TEXT("bool") || InnerTypeLower == TEXT("boolean"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Boolean;
     }
-    else if (InnerType == TEXT("int"))
+    else if (InnerTypeLower == TEXT("int") || InnerTypeLower == TEXT("integer"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Int;
     }
-    else if (InnerType == TEXT("float"))
+    else if (InnerTypeLower == TEXT("int64"))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Int64;
+    }
+    else if (InnerTypeLower == TEXT("float"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Real;
         PinType.PinSubCategory = UEdGraphSchema_K2::PC_Float;
     }
-    else if (InnerType == TEXT("string"))
+    else if (InnerTypeLower == TEXT("double"))
+    {
+        PinType.PinCategory = UEdGraphSchema_K2::PC_Real;
+        PinType.PinSubCategory = UEdGraphSchema_K2::PC_Double;
+    }
+    else if (InnerTypeLower == TEXT("string"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_String;
     }
-    else if (InnerType == TEXT("text"))
+    else if (InnerTypeLower == TEXT("text"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Text;
     }
-    else if (InnerType == TEXT("name"))
+    else if (InnerTypeLower == TEXT("name"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Name;
     }
-    else if (InnerType == TEXT("vector"))
+    else if (InnerTypeLower == TEXT("vector"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
         PinType.PinSubCategoryObject = TBaseStructure<FVector>::Get();
     }
-    else if (InnerType == TEXT("rotator"))
+    else if (InnerTypeLower == TEXT("rotator"))
     {
         PinType.PinCategory = UEdGraphSchema_K2::PC_Struct;
         PinType.PinSubCategoryObject = TBaseStructure<FRotator>::Get();

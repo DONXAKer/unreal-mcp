@@ -137,16 +137,27 @@ TSharedPtr<FJsonObject> FBPConnector::ConnectNodes(const TSharedPtr<FJsonObject>
         return Result;
     }
 
-    // Validate compatibility
-    if (!ArePinsCompatible(SourcePin, TargetPin))
+    // Delegate compatibility check AND connection to the K2 schema so that
+    // UE5's automatic type-coercion nodes (float→int, int→float, etc.) are
+    // inserted exactly as the Blueprint editor would.  The old pre-validation
+    // was too strict: it rejected numeric promotions that the engine allows.
+    const UEdGraphSchema_K2* Schema = Cast<UEdGraphSchema_K2>(Graph->GetSchema());
+    if (Schema)
     {
-        Result->SetBoolField("success", false);
-        Result->SetStringField("error", "Pins not compatible");
-        return Result;
+        FPinConnectionResponse Response = Schema->CanCreateConnection(SourcePin, TargetPin);
+        if (Response.Response == CONNECT_RESPONSE_DISALLOW)
+        {
+            Result->SetBoolField("success", false);
+            Result->SetStringField("error", FString::Printf(TEXT("Pins not compatible: %s"), *Response.Message.ToString()));
+            return Result;
+        }
+        Schema->TryCreateConnection(SourcePin, TargetPin);
     }
-
-    // Create connection
-    SourcePin->MakeLinkTo(TargetPin);
+    else
+    {
+        // Fallback for non-K2 graphs: direct link without coercion nodes
+        SourcePin->MakeLinkTo(TargetPin);
+    }
 
     // Recompile
     Blueprint->MarkPackageDirty();

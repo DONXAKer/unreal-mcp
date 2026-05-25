@@ -20,8 +20,11 @@ UK2Node *FCastingNodeCreator::CreateDynamicCastNode(
   // Set target class BEFORE initialization
   FString TargetClass;
   if (Params->TryGetStringField(TEXT("target_class"), TargetClass)) {
-    UClass *CastClass = Cast<UClass>(
-        StaticFindObject(UClass::StaticClass(), nullptr, *TargetClass));
+    UClass *CastClass = FindFirstObject<UClass>(*TargetClass, EFindFirstObjectOptions::None,
+        ELogVerbosity::Warning, TEXT("MCP CastingNodes"));
+    if (!CastClass) {
+      CastClass = LoadObject<UClass>(nullptr, *TargetClass);
+    }
     if (CastClass) {
       DynamicCastNode->TargetType = CastClass;
     }
@@ -53,8 +56,11 @@ UK2Node *FCastingNodeCreator::CreateClassDynamicCastNode(
   // Set target class BEFORE initialization
   FString TargetClass;
   if (Params->TryGetStringField(TEXT("target_class"), TargetClass)) {
-    UClass *CastClass = Cast<UClass>(
-        StaticFindObject(UClass::StaticClass(), nullptr, *TargetClass));
+    UClass *CastClass = FindFirstObject<UClass>(*TargetClass, EFindFirstObjectOptions::None,
+        ELogVerbosity::Warning, TEXT("MCP CastingNodes"));
+    if (!CastClass) {
+      CastClass = LoadObject<UClass>(nullptr, *TargetClass);
+    }
     if (CastClass) {
       ClassDynamicCastNode->TargetType = CastClass;
     }
