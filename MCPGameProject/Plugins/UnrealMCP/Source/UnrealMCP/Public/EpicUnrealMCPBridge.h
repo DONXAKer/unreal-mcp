@@ -21,6 +21,8 @@
 #include "Commands/NiagaraCommands.h"
 #include "Commands/InputCommands.h"
 #include "Commands/AnimationBPCommands.h"
+#include "Commands/PIECommands.h"
+#include "Commands/UMGTestCommands.h"
 #include "EpicUnrealMCPBridge.generated.h"
 
 class FMCPServerRunnable;
@@ -77,4 +79,6 @@ private:
 	TSharedPtr<FNiagaraCommands> NiagaraCommands;
 	TSharedPtr<FInputCommands> InputCommands;
 	TSharedPtr<FAnimationBPCommands> AnimationBPCommands;
+	TSharedPtr<FPIECommands> PIECommands;
+	TSharedPtr<FUMGTestCommands> UMGTestCommands;
 };

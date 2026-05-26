@@ -65,6 +65,8 @@
 #include "Commands/NiagaraCommands.h"
 #include "Commands/InputCommands.h"
 #include "Commands/AnimationBPCommands.h"
+#include "Commands/PIECommands.h"
+#include "Commands/UMGTestCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -85,6 +87,8 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     NiagaraCommands = MakeShared<FNiagaraCommands>();
     InputCommands = MakeShared<FInputCommands>();
     AnimationBPCommands = MakeShared<FAnimationBPCommands>();
+    PIECommands = MakeShared<FPIECommands>();
+    UMGTestCommands = MakeShared<FUMGTestCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -102,6 +106,8 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     NiagaraCommands.Reset();
     InputCommands.Reset();
     AnimationBPCommands.Reset();
+    PIECommands.Reset();
+    UMGTestCommands.Reset();
 }
 
 // Initialize subsystem
@@ -250,7 +256,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("2.0.0"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("2.4.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -372,6 +378,23 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("set_niagara_parameters"))
             {
                 ResultJson = NiagaraCommands->HandleCommand(CommandType, Params);
+            }
+            // PIE lifecycle + automation (v2.4.0 — Playwright-like e2e)
+            else if (CommandType == TEXT("pie_start") ||
+                     CommandType == TEXT("pie_stop") ||
+                     CommandType == TEXT("pie_status") ||
+                     CommandType == TEXT("pie_screenshot") ||
+                     CommandType == TEXT("simulate_key"))
+            {
+                ResultJson = PIECommands->HandleCommand(CommandType, Params);
+            }
+            // UMG runtime test / input simulation (v2.4.0)
+            else if (CommandType == TEXT("find_widget") ||
+                     CommandType == TEXT("wait_for_widget") ||
+                     CommandType == TEXT("click_widget_by_name") ||
+                     CommandType == TEXT("get_widget_tree"))
+            {
+                ResultJson = UMGTestCommands->HandleCommand(CommandType, Params);
             }
             // Phase 3B (v1.16.0) — Animation Blueprint Commands
             else if (CommandType == TEXT("create_animation_blueprint") ||
