@@ -84,4 +84,15 @@ private:
      * Returns: { sent, key, controller_name }
      */
     TSharedPtr<FJsonObject> HandleSimulateKey(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * Manually advance the PIE world simulation by N synchronous ticks.
+     * Useful for deterministic e2e tests that should not depend on wall-clock time.
+     *
+     * Params:
+     *   num_ticks     (opt, default 1, clamped 1..1000) — how many World->Tick calls.
+     *   delta_seconds (opt, default 1/60) — fake DeltaTime per tick (seconds).
+     * Returns: { ticked, delta_seconds, total_delta, world_time_before, world_time_after }
+     */
+    TSharedPtr<FJsonObject> HandleTickWorld(const TSharedPtr<FJsonObject>& Params);
 };

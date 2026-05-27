@@ -10,7 +10,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -375,11 +375,6 @@ def test_mulligan_visual_highlight_chain() -> None:
     }
 
     def _create_resp(cmd, params):
-        node_map = {
-            "add_event_node":     "guid-ev",
-            "add_blueprint_node": None,  # dynamic
-            "connect_nodes":      {"success": True},
-        }
         if cmd == "add_event_node":
             return {"success": True, "node_id": "guid-ev"}
         if cmd == "add_blueprint_node":

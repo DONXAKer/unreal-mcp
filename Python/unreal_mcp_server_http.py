@@ -216,11 +216,11 @@ from tools.asset_tools import register_asset_tools
 from tools.blueprint_tools import register_blueprint_tools
 from tools.data_asset_tools import register_data_asset_tools
 from tools.editor_tools import register_editor_tools
+from tools.graph_builder import register_graph_builder_tool
 from tools.level_tools import register_level_tools
 from tools.material_tools import register_material_tools
 from tools.mesh_tools import register_mesh_tools
 from tools.niagara_tools import register_niagara_tools
-from tools.graph_builder import register_graph_builder_tool
 from tools.node_tools import register_blueprint_node_tools
 from tools.project_tools import register_project_tools
 from tools.texture_tools import register_texture_tools

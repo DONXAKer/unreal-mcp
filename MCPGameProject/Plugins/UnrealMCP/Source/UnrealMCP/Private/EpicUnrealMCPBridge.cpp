@@ -507,6 +507,16 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // Set error status and include the error message
                 ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
                 ResponseJson->SetStringField(TEXT("error"), ErrorMessage);
+                // MCP-PLUGIN-001: пробросить details (availablePins и пр.) если
+                // handler вернул их через FUnrealMCPPinResolver::MakeErrorResponse.
+                // Без этого критерий "details.availablePins на failed pin resolve"
+                // не работает — bridge ранее отбрасывал поле.
+                const TSharedPtr<FJsonObject>* DetailsObj = nullptr;
+                if (ResultJson->TryGetObjectField(TEXT("details"), DetailsObj)
+                    && DetailsObj != nullptr && (*DetailsObj).IsValid())
+                {
+                    ResponseJson->SetObjectField(TEXT("details"), *DetailsObj);
+                }
             }
         }
         catch (const std::exception& e)

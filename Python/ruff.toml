@@ -23,6 +23,13 @@ ignore = [
   # E501 (line too long) is noisy on legacy log-format strings and long
   # FastMCP-tool docstrings. Treat as cosmetic — clean up opportunistically.
   "E501",
+  # RUF001/002/003: ambiguous Unicode character (Cyrillic vs Latin look-alikes).
+  # The project is bilingual (Russian comments + docstrings); Cyrillic letters
+  # in Russian text are valid by design, not "ambiguous". Replacing them with
+  # Latin look-alikes would break the words.
+  "RUF001",
+  "RUF002",
+  "RUF003",
 ]
 
 [lint.per-file-ignores]

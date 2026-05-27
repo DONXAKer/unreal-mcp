@@ -27,7 +27,7 @@ from typing import Any
 
 sys.path.insert(0, str(__file__.rsplit("\\tests", 1)[0]))
 
-from unreal_mcp_server import UnrealConnection  # noqa: E402
+from unreal_mcp_server import UnrealConnection
 
 
 def _send(conn: UnrealConnection, cmd: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -97,7 +97,7 @@ def main() -> int:
     })
 
     # 6) Создать BP_Pawn и event node.
-    bp_resp = _send(conn, "create_blueprint", {
+    _send(conn, "create_blueprint", {
         "name": "BP_TestEnhancedPawn",
         "parent_class": "Pawn",
     })

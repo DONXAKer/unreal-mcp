@@ -55,7 +55,7 @@ TArray<FPinDescriptor> FUnrealMCPPinResolver::CollectPins(UEdGraphNode* Node)
         Desc.PinCategory = Pin->PinType.PinCategory.ToString();
         Desc.bIsSplit = (Pin->SubPins.Num() > 0);
         Desc.bIsSubPin = (Pin->ParentPin != nullptr);
-        Result.Add(MakeMoveTemp(Desc));
+        Result.Add(MoveTemp(Desc));
     }
     return Result;
 }

@@ -141,6 +141,11 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStatus(const TSharedPtr<FJsonObje
         Result->SetStringField(TEXT("world_name"), TEXT(""));
         Result->SetNumberField(TEXT("elapsed_seconds"), 0.0);
         Result->SetBoolField(TEXT("has_player_controller"), false);
+        // MCP-PLUGIN-003: consistent shape — клиентский массив всегда присутствует,
+        // даже когда PIE неактивен, чтобы тесты и обёртки не делали разный парсинг
+        // is_running=true/false случаев.
+        Result->SetNumberField(TEXT("num_clients"), 0);
+        Result->SetArrayField(TEXT("clients"), TArray<TSharedPtr<FJsonValue>>());
         return Result;
     }
 
@@ -220,7 +225,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieScreenshot(const TSharedPtr<FJson
     // MCP-PLUGIN-003: для multi-PIE — выбираем world нужного клиента.
     UWorld* PlayWorld = bHasControllerIdx
         ? FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex)
-        : GEditor->PlayWorld;
+        : ToRawPtr(GEditor->PlayWorld);
     UGameViewportClient* GameViewport = PlayWorld ? PlayWorld->GetGameViewport() : nullptr;
 
     if (GameViewport && GameViewport->Viewport)

@@ -1265,9 +1265,11 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::BuildWidgetJson(UWidget* Widget)
     }
     else if (USpacer* Sp = Cast<USpacer>(Widget))
     {
+        // UE5.7+: USpacer::Size прямой доступ помечен deprecated — используем getter.
         TSharedPtr<FJsonObject> SizeObj = MakeShared<FJsonObject>();
-        SizeObj->SetNumberField(TEXT("x"), Sp->Size.X);
-        SizeObj->SetNumberField(TEXT("y"), Sp->Size.Y);
+        const FVector2D SpSize = Sp->GetSize();
+        SizeObj->SetNumberField(TEXT("x"), SpSize.X);
+        SizeObj->SetNumberField(TEXT("y"), SpSize.Y);
         Obj->SetObjectField(TEXT("size"), SizeObj);
     }
 

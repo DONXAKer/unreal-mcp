@@ -494,7 +494,7 @@ def register_graph_builder_tool(mcp: Any) -> None:
 
     @mcp.tool()
     def build_blueprint_graph(
-        ctx: Context[Any, Any, Any],  # noqa: ARG001
+        ctx: Context[Any, Any, Any],
         blueprint_path: str,
         spec: dict[str, Any],
         graph: str = "EventGraph",
