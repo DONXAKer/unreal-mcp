@@ -17,6 +17,22 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [2.16.1] — 2026-05-28
+
+Critical patch: UE краш при вызове void-функций без параметров через `InvokeFunction`.
+
+### Fixed
+
+- `WarCardGameCommands.cpp:InvokeFunction` теперь корректно обрабатывает функции с `ParmsSize == 0` (например, `SendCompositionToServer()`, `ConfirmDeployment()`). Раньше `Buffer.SetNumZeroed(0)` возвращал `nullptr`, и `InitializeStruct(nullptr)` валился на assertion `Dest` (`Class.cpp:1189`), роняя весь UE Editor. Теперь буфер создаётся только когда `ParmsSize > 0`; `ProcessEvent` корректно принимает `nullptr` для void-функций.
+
+### Why
+
+E2e smoke: `wc_confirm_selection` крашил UE сразу после AddUnitToComposition × 5
+("Состав готов!"). Stage 6 (UnitSelection → Deployment) был полностью
+заблокирован — без этого фикса дальше пройти невозможно.
+
+---
+
 ## [2.16.0] — 2026-05-27
 
 Adds `text` field to widget tree dump — тест может видеть содержимое

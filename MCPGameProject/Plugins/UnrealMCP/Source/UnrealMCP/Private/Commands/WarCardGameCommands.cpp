@@ -112,46 +112,57 @@ namespace
                     *FunctionName, *Target->GetClass()->GetName()));
         }
 
-        // Аллоцируем буфер параметров и инициализируем default-значениями.
+        // Аллоцируем буфер параметров. Для void-функций без аргументов
+        // ParmsSize == 0 и Buffer.GetData() == nullptr — InitializeStruct/
+        // DestroyStruct/ProcessEvent на nullptr роняют UE по assertion в
+        // Class.cpp:1189 (Dest required). Обрабатываем void-кейс отдельно.
         TArray<uint8> Buffer;
-        Buffer.SetNumZeroed(Func->ParmsSize);
-        Func->InitializeStruct(Buffer.GetData());
-
-        FString SetErr;
-        for (TFieldIterator<FProperty> It(Func); It && (It->PropertyFlags & CPF_Parm); ++It)
+        void* ParamsPtr = nullptr;
+        if (Func->ParmsSize > 0)
         {
-            FProperty* P = *It;
-            if (P->PropertyFlags & CPF_ReturnParm) continue;
+            Buffer.SetNumZeroed(Func->ParmsSize);
+            ParamsPtr = Buffer.GetData();
+            Func->InitializeStruct(ParamsPtr);
 
-            const TSharedPtr<FJsonValue>* JsonVal = JsonArgs.Find(P->GetName());
-            if (!JsonVal)
+            FString SetErr;
+            for (TFieldIterator<FProperty> It(Func); It && (It->PropertyFlags & CPF_Parm); ++It)
             {
-                // Параметр отсутствует — оставляем default (InitializeStruct).
-                continue;
-            }
+                FProperty* P = *It;
+                if (P->PropertyFlags & CPF_ReturnParm) continue;
 
-            void* PropAddr = P->ContainerPtrToValuePtr<void>(Buffer.GetData());
-            if (!SetPropertyFromJson(P, PropAddr, *JsonVal, SetErr))
-            {
-                Func->DestroyStruct(Buffer.GetData());
-                return FEpicUnrealMCPCommonUtils::CreateErrorResponse(SetErr);
+                const TSharedPtr<FJsonValue>* JsonVal = JsonArgs.Find(P->GetName());
+                if (!JsonVal)
+                {
+                    // Параметр отсутствует — оставляем default (InitializeStruct).
+                    continue;
+                }
+
+                void* PropAddr = P->ContainerPtrToValuePtr<void>(ParamsPtr);
+                if (!SetPropertyFromJson(P, PropAddr, *JsonVal, SetErr))
+                {
+                    Func->DestroyStruct(ParamsPtr);
+                    return FEpicUnrealMCPCommonUtils::CreateErrorResponse(SetErr);
+                }
             }
         }
 
-        // Вызов
-        Target->ProcessEvent(Func, Buffer.GetData());
+        // Вызов — ProcessEvent OK с nullptr Params для функций без аргументов.
+        Target->ProcessEvent(Func, ParamsPtr);
 
         TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
         Result->SetBoolField(TEXT("ok"), true);
         Result->SetStringField(TEXT("function"), FunctionName);
         Result->SetStringField(TEXT("target_class"), Target->GetClass()->GetName());
 
-        if (FProperty* RetProp = Func->GetReturnProperty())
+        if (FProperty* RetProp = Func->GetReturnProperty(); RetProp && ParamsPtr)
         {
-            Result->SetField(TEXT("return"), ReadReturnProperty(RetProp, Buffer.GetData()));
+            Result->SetField(TEXT("return"), ReadReturnProperty(RetProp, ParamsPtr));
         }
 
-        Func->DestroyStruct(Buffer.GetData());
+        if (ParamsPtr)
+        {
+            Func->DestroyStruct(ParamsPtr);
+        }
         return Result;
     }
 }
