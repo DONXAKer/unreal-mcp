@@ -145,18 +145,26 @@ def _select_5_units(conn, ctrl: int) -> int:
 
 
 def _deploy_5_units(conn, ctrl: int) -> int:
-    """Деплоит 5 unit'ов на свободные координаты (i, 0). Возвращает количество успешных."""
+    """Деплоит 5 unit'ов. PlayerZone определяет валидные X:
+       Player1 → X∈[0,2], Player2 → X∈[5,7]. Пробуем оба набора координат
+       для каждого roster — wc_deploy_unit вернёт ok=False на неверный side."""
+    # 5 уникальных (x,y) для каждой стороны.
+    COORDS_P1 = [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1)]
+    COORDS_P2 = [(5, 0), (6, 0), (7, 0), (5, 1), (6, 1)]
+
     deployed_count = 0
     for roster in [UNIT_ROSTER_BLUE, UNIT_ROSTER_RED]:
         if deployed_count >= UNITS_TO_PICK: break
-        for i, unit_id in enumerate(roster):
+        for coords in [COORDS_P1, COORDS_P2]:
             if deployed_count >= UNITS_TO_PICK: break
-            r = _send(conn, "wc_deploy_unit",
-                      {"unit_id": unit_id, "grid_x": i, "grid_y": 0,
-                       "controller_index": ctrl})
-            if r.get("deployed"):
-                deployed_count += 1
-                print(f"    + {unit_id} @ ({i},0) ({deployed_count}/{UNITS_TO_PICK})")
+            for i, (unit_id, (gx, gy)) in enumerate(zip(roster, coords)):
+                if deployed_count >= UNITS_TO_PICK: break
+                r = _send(conn, "wc_deploy_unit",
+                          {"unit_id": unit_id, "grid_x": gx, "grid_y": gy,
+                           "controller_index": ctrl})
+                if r.get("deployed"):
+                    deployed_count += 1
+                    print(f"    + {unit_id} @ ({gx},{gy}) ({deployed_count}/{UNITS_TO_PICK})")
     return deployed_count
 
 
@@ -175,18 +183,23 @@ def main() -> int:
     conn = UnrealConnection()
     conn.connect()
 
-    # 2. Fresh PIE n=2.
-    print("--- 1/9 fresh PIE n=2 ---")
-    _send(conn, "pie_stop", {})
-    time.sleep(3.0)  # дать UE доочиститься после stop.
-    r = _send(conn, "pie_start", {"num_clients": 2})
-    if not r.get("started"):
-        print(f"  pie_start failed: {r}")
-        return 1
-    if not _wait_pie_both_clients_ready(conn, "WBP_Login_C", timeout=30.0):
-        print("  PIE clients not ready in 30s")
-        return 1
-    print("  both clients on WBP_Login_C")
+    # 2. Fresh PIE n=2 — если уже идёт 2 клиента, переиспользуем.
+    print("--- 1/9 PIE n=2 setup ---")
+    st = _send(conn, "pie_status", {})
+    if st.get("is_running") and st.get("num_clients") == 2:
+        print("  PIE уже с 2 клиентами — переиспользую")
+    else:
+        if st.get("is_running"):
+            _send(conn, "pie_stop", {})
+            time.sleep(3.0)  # дать UE доочиститься после stop.
+        r = _send(conn, "pie_start", {"num_clients": 2})
+        if not r.get("started"):
+            print(f"  pie_start failed: {r}")
+            return 1
+    if not _wait_pie_both_clients_ready(conn, "WBP_Login_C", timeout=45.0):
+        print("  PIE clients not ready in 45s — попробую продолжить как есть")
+    else:
+        print("  both clients on WBP_Login_C")
 
     # 3. Login both — sequential, 4s pause между для async STOMP handshake.
     print("\n--- 2/9 login both clients (sequential) ---")
@@ -287,9 +300,21 @@ def main() -> int:
         if name:
             battle = (ctrl, name)
             break
+
+    # Если battle не найден — diagnostic dump всех активных widgets.
+    if battle is None:
+        print("\n--- diag: all user_widgets per client ---")
+        for ctrl in (0, 1):
+            tree = _send(conn, "get_widget_tree", {"controller_index": ctrl})
+            uws = tree.get("user_widgets") or []
+            print(f"  c{ctrl} ({len(uws)} widgets):")
+            for uw in uws:
+                print(f"    - {uw.get('name')} ({uw.get('class')}) viewport={uw.get('is_in_viewport')}")
+
     print(f"\n=== RESULT: battle={battle} ===")
 
-    _send(conn, "pie_stop", {})
+    # Оставляем PIE running для дальнейшей диагностики через MCP-tool.
+    # _send(conn, "pie_stop", {})
     return 0 if battle else 1
 
 
