@@ -279,6 +279,7 @@ from tools.niagara_tools import register_niagara_tools
 from tools.graph_builder import register_graph_builder_tool
 from tools.node_tools import register_blueprint_node_tools
 from tools.pie_tools import register_pie_tools
+from tools.console_tools import register_console_tools
 from tools.project_tools import register_project_tools
 from tools.texture_tools import register_texture_tools
 from tools.umg_tools import register_umg_tools
@@ -299,6 +300,7 @@ register_mesh_tools(mcp)
 register_data_asset_tools(mcp)
 register_niagara_tools(mcp)
 register_pie_tools(mcp)  # v2.4.0 — Playwright-like e2e: PIE lifecycle + UMG automation
+register_console_tools(mcp)  # v2.6.0 — arbitrary console-command execution (Automation RunTests, CVars, etc.)
 
 # --- MCP Content Pipeline (MCP-CONTENT-001): config + recipe framework ---
 from tools import project_config as _project_config

@@ -89,6 +89,7 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     AnimationBPCommands = MakeShared<FAnimationBPCommands>();
     PIECommands = MakeShared<FPIECommands>();
     UMGTestCommands = MakeShared<FUMGTestCommands>();
+    ConsoleCommands = MakeShared<FUnrealMCPConsoleCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -108,6 +109,7 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     AnimationBPCommands.Reset();
     PIECommands.Reset();
     UMGTestCommands.Reset();
+    ConsoleCommands.Reset();
 }
 
 // Initialize subsystem
@@ -256,7 +258,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("2.4.0"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("2.6.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -379,12 +381,13 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             {
                 ResultJson = NiagaraCommands->HandleCommand(CommandType, Params);
             }
-            // PIE lifecycle + automation (v2.4.0 — Playwright-like e2e)
+            // PIE lifecycle + automation (v2.4.0 — Playwright-like e2e; v2.5.0 — tick_world)
             else if (CommandType == TEXT("pie_start") ||
                      CommandType == TEXT("pie_stop") ||
                      CommandType == TEXT("pie_status") ||
                      CommandType == TEXT("pie_screenshot") ||
-                     CommandType == TEXT("simulate_key"))
+                     CommandType == TEXT("simulate_key") ||
+                     CommandType == TEXT("tick_world"))
             {
                 ResultJson = PIECommands->HandleCommand(CommandType, Params);
             }
@@ -395,6 +398,11 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("get_widget_tree"))
             {
                 ResultJson = UMGTestCommands->HandleCommand(CommandType, Params);
+            }
+            // Arbitrary console-command execution (v2.6.0 — engine Exec proxy)
+            else if (CommandType == TEXT("execute_console_command"))
+            {
+                ResultJson = ConsoleCommands->HandleCommand(CommandType, Params);
             }
             // Phase 3B (v1.16.0) — Animation Blueprint Commands
             else if (CommandType == TEXT("create_animation_blueprint") ||

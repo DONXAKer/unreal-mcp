@@ -11,6 +11,8 @@
 #include "HAL/FileManager.h"
 #include "UnrealClient.h"
 #include "InputCoreTypes.h"
+#include "InputKeyEventArgs.h"
+#include "Engine/EngineBaseTypes.h"
 
 FPIECommands::FPIECommands()
 {
@@ -23,6 +25,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandleCommand(const FString& CommandType, 
     if (CommandType == TEXT("pie_status"))      return HandlePieStatus(Params);
     if (CommandType == TEXT("pie_screenshot"))  return HandlePieScreenshot(Params);
     if (CommandType == TEXT("simulate_key"))    return HandleSimulateKey(Params);
+    if (CommandType == TEXT("tick_world"))      return HandleTickWorld(Params);
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown PIE command: %s"), *CommandType));
@@ -116,6 +119,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStatus(const TSharedPtr<FJsonObje
     Result->SetBoolField(TEXT("is_running"), true);
     Result->SetStringField(TEXT("world_name"), PlayWorld->GetName());
     Result->SetNumberField(TEXT("elapsed_seconds"), PlayWorld->GetTimeSeconds());
+    Result->SetStringField(TEXT("plugin_version"), TEXT("2.6.0"));
 
     APlayerController* PC = PlayWorld->GetFirstPlayerController();
     Result->SetBoolField(TEXT("has_player_controller"), PC != nullptr);
@@ -238,13 +242,61 @@ TSharedPtr<FJsonObject> FPIECommands::HandleSimulateKey(const TSharedPtr<FJsonOb
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No PlayerController in PIE world"));
     }
 
-    // Pressed + Released — синхронно, один и тот же tick.
-    PC->InputKey(FInputKeyParams(Key, IE_Pressed, /*Delta*/ 1.0, /*bGamepad*/ false));
-    PC->InputKey(FInputKeyParams(Key, IE_Released, /*Delta*/ 1.0, /*bGamepad*/ false));
+    // Pressed + Released — синхронно, один и тот же tick. UE5.6+ API:
+    // FInputKeyEventArgs::CreateSimulated — канонический способ для синтезированного ввода
+    // (старый FInputKeyParams помечен deprecated).
+    PC->InputKey(FInputKeyEventArgs::CreateSimulated(Key, IE_Pressed,  /*AmountDepressed*/ 1.0f));
+    PC->InputKey(FInputKeyEventArgs::CreateSimulated(Key, IE_Released, /*AmountDepressed*/ 1.0f));
 
     TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
     Result->SetBoolField(TEXT("sent"), true);
     Result->SetStringField(TEXT("key"), KeyName);
     Result->SetStringField(TEXT("controller_name"), PC->GetName());
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FPIECommands::HandleTickWorld(const TSharedPtr<FJsonObject>& Params)
+{
+    if (!GEditor)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("GEditor is null — not running in editor"));
+    }
+
+    UWorld* PlayWorld = GEditor->PlayWorld;
+    if (!PlayWorld)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No active PIE world — call pie_start first"));
+    }
+
+    // Кол-во тиков (default 1, минимум 1, верхний разумный лимит — 1000
+    // чтобы случайный 100000 не подвесил editor на полминуты).
+    int32 NumTicks = 1;
+    Params->TryGetNumberField(TEXT("num_ticks"), NumTicks);
+    if (NumTicks < 1)  NumTicks = 1;
+    if (NumTicks > 1000) NumTicks = 1000;
+
+    // Дельта (default 1/60 секунды). Допускаем явный 0 — пусть редкие
+    // тесты сами рулят временем (e.g. only-render-tick).
+    double DeltaSeconds = 1.0 / 60.0;
+    Params->TryGetNumberField(TEXT("delta_seconds"), DeltaSeconds);
+    if (DeltaSeconds < 0.0) DeltaSeconds = 0.0;
+
+    const float TimeBefore = PlayWorld->GetTimeSeconds();
+
+    // World->Tick — синхронный, прокручивает Actor::Tick, TimerManager,
+    // physics и т.п. В отличие от GEditor->Tick — не тикает редактор, только PIE world.
+    for (int32 i = 0; i < NumTicks; ++i)
+    {
+        PlayWorld->Tick(LEVELTICK_All, static_cast<float>(DeltaSeconds));
+    }
+
+    const float TimeAfter = PlayWorld->GetTimeSeconds();
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetNumberField(TEXT("ticked"), NumTicks);
+    Result->SetNumberField(TEXT("delta_seconds"), DeltaSeconds);
+    Result->SetNumberField(TEXT("total_delta"), DeltaSeconds * NumTicks);
+    Result->SetNumberField(TEXT("world_time_before"), TimeBefore);
+    Result->SetNumberField(TEXT("world_time_after"), TimeAfter);
     return Result;
 }

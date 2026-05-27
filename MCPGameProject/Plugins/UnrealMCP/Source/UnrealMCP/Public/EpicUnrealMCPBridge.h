@@ -23,6 +23,7 @@
 #include "Commands/AnimationBPCommands.h"
 #include "Commands/PIECommands.h"
 #include "Commands/UMGTestCommands.h"
+#include "Commands/ConsoleCommands.h"
 #include "EpicUnrealMCPBridge.generated.h"
 
 class FMCPServerRunnable;
@@ -81,4 +82,5 @@ private:
 	TSharedPtr<FAnimationBPCommands> AnimationBPCommands;
 	TSharedPtr<FPIECommands> PIECommands;
 	TSharedPtr<FUMGTestCommands> UMGTestCommands;
+	TSharedPtr<FUnrealMCPConsoleCommands> ConsoleCommands;
 };
