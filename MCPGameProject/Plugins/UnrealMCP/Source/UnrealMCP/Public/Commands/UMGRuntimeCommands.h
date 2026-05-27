@@ -57,11 +57,42 @@ private:
     TSharedPtr<FJsonObject> HandleSetTextOnWidget(const TSharedPtr<FJsonObject>& Params);
 
     /**
+     * invoke_button_click — напрямую broadcast'ит UButton::OnClicked, минуя
+     * Slate event injection. Зачем: click_widget_by_name шлёт mouse-event через
+     * FSlateApplication, но если PIE viewport не имеет focus (типичный случай
+     * для headless e2e через MCP), Slate route'ит событие в editor вместо игры,
+     * и Blueprint OnClicked не triggered. Этот хелпер гарантирует попадание
+     * в делегат, давая надёжный submit-flow для UI-тестов.
+     *
+     * Params:
+     *   widget_name      (required) — UButton::GetName() (case-insensitive).
+     *   controller_index (opt, default 0).
+     *
+     * Returns: { ok: bool, widget_name, owner_user_widget, controller_index }.
+     * Если виджет не UButton — error с details.actualClass.
+     */
+    TSharedPtr<FJsonObject> HandleInvokeButtonClick(const TSharedPtr<FJsonObject>& Params);
+
+    /**
      * Резолв PlayerController по индексу. На T002 — всегда GetFirstPlayerController.
      * T003 добавит реальный multi-client lookup через FUnrealMCPPIEUtils.
      */
     static APlayerController* ResolvePlayerController(int32 ControllerIndex);
 
-    /** Поиск виджета по имени в PIE мире (логика из UMGTestCommands::FindWidgetByName). */
-    static UWidget* FindWidgetByName(UWorld* PlayWorld, const FString& Target, UUserWidget*& OutOwner);
+    /**
+     * Поиск виджета по имени в PIE мире.
+     *
+     * @param PlayWorld   PIE world для фильтра (обязательно).
+     * @param Target      имя виджета (case-insensitive).
+     * @param OutOwner    [out] UUserWidget, которому принадлежит найденный UWidget.
+     * @param OwningPC    [opt] если задан — UUserWidget, у которого
+     *                    GetOwningPlayer() != OwningPC, пропускается.
+     *                    Критично для split-screen multi-client PIE
+     *                    (MCP-PLUGIN-005), где оба клиента живут в одном UWorld.
+     */
+    static UWidget* FindWidgetByName(
+        UWorld* PlayWorld,
+        const FString& Target,
+        UUserWidget*& OutOwner,
+        APlayerController* OwningPC = nullptr);
 };

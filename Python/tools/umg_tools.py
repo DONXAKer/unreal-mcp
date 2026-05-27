@@ -750,4 +750,52 @@ def register_umg_tools(mcp: FastMCP) -> None:
         response = unreal.send_command("set_text_on_widget", params)
         return response or {"status": "error", "error": "No response"}
 
+    @mcp.tool()
+    def invoke_button_click(
+        ctx: Context[Any, Any, Any],
+        widget_name: str,
+        controller_index: int = 0,
+    ) -> dict[str, Any]:
+        """Напрямую broadcast'ить UButton::OnClicked, минуя Slate event injection.
+
+        Зачем вместо `click_widget_by_name`: тот шлёт mouse-event через
+        FSlateApplication, но если PIE viewport не имеет focus (типичный случай
+        для headless e2e через MCP), Slate route'ит событие в editor вместо
+        игры — Blueprint OnClicked не triggered, submit-flow ломается.
+        Этот хелпер вызывает делегат напрямую: гарантированный submit для UI-тестов.
+
+        Args:
+            widget_name: UButton::GetName() (case-insensitive). Только UButton —
+                         для произвольных UWidget используйте click_widget_by_name.
+            controller_index: Какой PlayerController (поиск ограничен его PIE world).
+
+        Returns:
+            {
+              ok: bool,
+              widget_name: str,
+              owner_user_widget: str,
+              controller_index: int,
+              controller_name: str
+            }
+
+        Errors:
+            - "No active PIE world" — PIE не запущен.
+            - "Widget not found" — нет такого виджета.
+            - "Widget '<X>' is class '<Y>' — invoke_button_click supports only UButton" — class не UButton.
+            - "Button '<X>' is disabled — OnClicked won't fire" — кнопка disabled.
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"status": "error", "error": "No Unreal connection"}
+
+        params: dict[str, Any] = {
+            "widget_name": widget_name,
+            "controller_index": controller_index,
+        }
+        logger.info(f"invoke_button_click: widget='{widget_name}' ctrl={controller_index}")
+        response = unreal.send_command("invoke_button_click", params)
+        return response or {"status": "error", "error": "No response"}
+
     logger.info("UMG tools registered successfully")

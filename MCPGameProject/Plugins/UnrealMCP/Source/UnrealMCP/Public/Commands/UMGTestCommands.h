@@ -73,9 +73,17 @@ private:
      * Walk every UUserWidget currently constructed against the PlayWorld and
      * locate a widget whose GetName() matches Target (case-insensitive).
      * Searches both the UUserWidget itself and all UWidgets in its WidgetTree.
+     *
+     * @param OwningPC  [opt, MCP-PLUGIN-005] если задан — UUserWidget,
+     *                  у которого GetOwningPlayer() != OwningPC, пропускается.
+     *                  Критично для split-screen multi-client PIE.
      * @return The first match, or nullptr.
      */
-    static UWidget* FindWidgetByName(UWorld* PlayWorld, const FString& Target, UUserWidget*& OutOwner);
+    static UWidget* FindWidgetByName(
+        UWorld* PlayWorld,
+        const FString& Target,
+        UUserWidget*& OutOwner,
+        class APlayerController* OwningPC = nullptr);
 
     /** Recursively build a JSON object describing a widget and its named children (for get_widget_tree). */
     static TSharedPtr<FJsonObject> BuildWidgetJson(UWidget* Widget);

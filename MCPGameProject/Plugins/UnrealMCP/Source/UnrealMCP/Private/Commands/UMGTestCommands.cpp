@@ -9,6 +9,7 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/Widget.h"
 #include "Components/PanelWidget.h"
+#include "GameFramework/PlayerController.h"
 #include "UObject/UObjectIterator.h"
 
 #include "Framework/Application/SlateApplication.h"
@@ -37,7 +38,11 @@ TSharedPtr<FJsonObject> FUMGTestCommands::HandleCommand(const FString& CommandTy
 
 /* ────────────────────────────── helpers ────────────────────────────── */
 
-UWidget* FUMGTestCommands::FindWidgetByName(UWorld* PlayWorld, const FString& Target, UUserWidget*& OutOwner)
+UWidget* FUMGTestCommands::FindWidgetByName(
+    UWorld* PlayWorld,
+    const FString& Target,
+    UUserWidget*& OutOwner,
+    APlayerController* OwningPC)
 {
     OutOwner = nullptr;
     if (!PlayWorld || Target.IsEmpty())
@@ -45,11 +50,17 @@ UWidget* FUMGTestCommands::FindWidgetByName(UWorld* PlayWorld, const FString& Ta
         return nullptr;
     }
 
-    // Итерируем все живые UUserWidget'ы; фильтруем по World.
+    // Итерируем все живые UUserWidget'ы; фильтруем по World и (опционально) OwningPlayer.
     for (TObjectIterator<UUserWidget> It; It; ++It)
     {
         UUserWidget* UW = *It;
         if (!IsValid(UW) || UW->GetWorld() != PlayWorld)
+        {
+            continue;
+        }
+        // MCP-PLUGIN-005: split-screen multi-client — фильтр по PC.
+        // Виджеты без owner — глобальные, принимаем; режем только явный чужой owner.
+        if (OwningPC && UW->GetOwningPlayer() != nullptr && UW->GetOwningPlayer() != OwningPC)
         {
             continue;
         }
@@ -141,6 +152,7 @@ TSharedPtr<FJsonObject> FUMGTestCommands::HandleFindWidget(const TSharedPtr<FJso
     }
 
     // MCP-PLUGIN-003: controller_index — фильтруем по конкретному PIE world.
+    // MCP-PLUGIN-005: дополнительно фильтруем по OwningPlayer для split-screen.
     int32 ControllerIndex = 0;
     Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
     UWorld* SearchWorld = FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex);
@@ -148,9 +160,10 @@ TSharedPtr<FJsonObject> FUMGTestCommands::HandleFindWidget(const TSharedPtr<FJso
     {
         SearchWorld = GEditor->PlayWorld;
     }
+    APlayerController* OwningPC = FUnrealMCPPIEUtils::GetPlayerControllerByIndex(ControllerIndex);
 
     UUserWidget* Owner = nullptr;
-    UWidget* Found = FindWidgetByName(SearchWorld, WidgetName, Owner);
+    UWidget* Found = FindWidgetByName(SearchWorld, WidgetName, Owner, OwningPC);
 
     TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
     Result->SetBoolField(TEXT("found"), Found != nullptr);
@@ -178,6 +191,7 @@ TSharedPtr<FJsonObject> FUMGTestCommands::HandleClickWidgetByName(const TSharedP
     }
 
     // MCP-PLUGIN-003: controller_index — ищем в world выбранного клиента.
+    // MCP-PLUGIN-005: фильтр по OwningPlayer.
     int32 ControllerIndex = 0;
     Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
     UWorld* SearchWorld = FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex);
@@ -185,9 +199,10 @@ TSharedPtr<FJsonObject> FUMGTestCommands::HandleClickWidgetByName(const TSharedP
     {
         SearchWorld = GEditor->PlayWorld;
     }
+    APlayerController* OwningPC = FUnrealMCPPIEUtils::GetPlayerControllerByIndex(ControllerIndex);
 
     UUserWidget* Owner = nullptr;
-    UWidget* Target = FindWidgetByName(SearchWorld, WidgetName, Owner);
+    UWidget* Target = FindWidgetByName(SearchWorld, WidgetName, Owner, OwningPC);
     if (!Target)
     {
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
@@ -266,18 +281,31 @@ TSharedPtr<FJsonObject> FUMGTestCommands::HandleGetWidgetTree(const TSharedPtr<F
     }
 
     // MCP-PLUGIN-003: controller_index — фильтруем по нужному PIE world.
+    // MCP-PLUGIN-005: для split-screen — также фильтруем по OwningPlayer,
+    // чтобы tree содержал только виджеты целевого клиента.
     int32 ControllerIndex = 0;
-    Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+    const bool bHasControllerIdx = Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
     UWorld* PlayWorld = FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex);
     if (!PlayWorld)
     {
         PlayWorld = GEditor->PlayWorld;
+    }
+    // Применяем PC-фильтр только если controller_index явно задан или клиентов >1
+    // (single-client setup может иметь Owner=nullptr на ранних тиках — не отрезаем).
+    APlayerController* OwningPC = nullptr;
+    if (bHasControllerIdx || FUnrealMCPPIEUtils::GetNumPIEClients() > 1)
+    {
+        OwningPC = FUnrealMCPPIEUtils::GetPlayerControllerByIndex(ControllerIndex);
     }
 
     for (TObjectIterator<UUserWidget> It; It; ++It)
     {
         UUserWidget* UW = *It;
         if (!IsValid(UW) || UW->GetWorld() != PlayWorld)
+        {
+            continue;
+        }
+        if (OwningPC && UW->GetOwningPlayer() != nullptr && UW->GetOwningPlayer() != OwningPC)
         {
             continue;
         }

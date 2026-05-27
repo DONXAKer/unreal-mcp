@@ -12,6 +12,7 @@
 #include "Components/Widget.h"
 #include "UObject/UObjectIterator.h"
 
+#include "Components/Button.h"
 #include "Components/EditableText.h"
 #include "Components/EditableTextBox.h"
 #include "Components/MultiLineEditableText.h"
@@ -27,6 +28,10 @@ TSharedPtr<FJsonObject> FUMGRuntimeCommands::HandleCommand(const FString& Comman
     {
         return HandleSetTextOnWidget(Params);
     }
+    if (CommandType == TEXT("invoke_button_click"))
+    {
+        return HandleInvokeButtonClick(Params);
+    }
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown UMG-runtime command: %s"), *CommandType));
 }
@@ -39,7 +44,11 @@ APlayerController* FUMGRuntimeCommands::ResolvePlayerController(int32 Controller
     return FUnrealMCPPIEUtils::GetPlayerControllerByIndex(ControllerIndex);
 }
 
-UWidget* FUMGRuntimeCommands::FindWidgetByName(UWorld* PlayWorld, const FString& Target, UUserWidget*& OutOwner)
+UWidget* FUMGRuntimeCommands::FindWidgetByName(
+    UWorld* PlayWorld,
+    const FString& Target,
+    UUserWidget*& OutOwner,
+    APlayerController* OwningPC)
 {
     OutOwner = nullptr;
     if (!PlayWorld || Target.IsEmpty())
@@ -51,6 +60,14 @@ UWidget* FUMGRuntimeCommands::FindWidgetByName(UWorld* PlayWorld, const FString&
     {
         UUserWidget* UW = *It;
         if (!IsValid(UW) || UW->GetWorld() != PlayWorld)
+        {
+            continue;
+        }
+        // MCP-PLUGIN-005: для split-screen PIE фильтруем по OwningPlayer.
+        // Виджеты без явного owner (CreateWidget без указания PC) — принимаем
+        // как "глобальные" для текущего клиента; пропускаем только если widget
+        // явно принадлежит ДРУГОМУ PC (это и есть split-screen сценарий).
+        if (OwningPC && UW->GetOwningPlayer() != nullptr && UW->GetOwningPlayer() != OwningPC)
         {
             continue;
         }
@@ -130,9 +147,9 @@ TSharedPtr<FJsonObject> FUMGRuntimeCommands::HandleSetTextOnWidget(const TShared
         return Response;
     }
 
-    // Поиск виджета.
+    // Поиск виджета — фильтр по OwningPlayer для split-screen multi-client.
     UUserWidget* Owner = nullptr;
-    UWidget* Found = FindWidgetByName(PlayWorld, WidgetName, Owner);
+    UWidget* Found = FindWidgetByName(PlayWorld, WidgetName, Owner, PC);
     if (!Found)
     {
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
@@ -142,26 +159,48 @@ TSharedPtr<FJsonObject> FUMGRuntimeCommands::HandleSetTextOnWidget(const TShared
     const FText TextFromString = FText::FromString(TextValue);
     FString ResolvedClass = Found->GetClass() ? Found->GetClass()->GetName() : TEXT("Unknown");
 
-    // Запись в одну из 4 поддерживаемых UClass'ов.
+    // commit_method (опционально): "OnEnter" (default) / "Default" / "OnUserMovedFocus" / "OnCleared".
+    // Это то, что получает Blueprint в delegate OnTextCommitted. По умолчанию OnEnter — типичный
+    // flow логина / submit, чтобы Blueprint реагировал так же, как на реальный Enter.
+    FString CommitMethodStr = TEXT("OnEnter");
+    Params->TryGetStringField(TEXT("commit_method"), CommitMethodStr);
+    ETextCommit::Type CommitMethod = ETextCommit::OnEnter;
+    if (CommitMethodStr.Equals(TEXT("Default"), ESearchCase::IgnoreCase))               CommitMethod = ETextCommit::Default;
+    else if (CommitMethodStr.Equals(TEXT("OnUserMovedFocus"), ESearchCase::IgnoreCase)) CommitMethod = ETextCommit::OnUserMovedFocus;
+    else if (CommitMethodStr.Equals(TEXT("OnCleared"), ESearchCase::IgnoreCase))        CommitMethod = ETextCommit::OnCleared;
+
+    // Запись в одну из 4 поддерживаемых UClass'ов. ВАЖНО: SetText() сам по себе НЕ
+    // вызывает OnTextChanged / OnTextCommitted broadcast — Blueprint, который слушает
+    // эти события (типичный паттерн «сохранить введённое в переменную»), останется в
+    // неведении и при submit отправит старое/пустое значение. Поэтому после SetText
+    // мы вручную broadcast'им оба события, эмулируя реальный пользовательский ввод.
     bool bSetText = false;
     if (UEditableTextBox* ETB = Cast<UEditableTextBox>(Found))
     {
         ETB->SetText(TextFromString);
+        ETB->OnTextChanged.Broadcast(TextFromString);
+        ETB->OnTextCommitted.Broadcast(TextFromString, CommitMethod);
         bSetText = true;
     }
     else if (UEditableText* ET = Cast<UEditableText>(Found))
     {
         ET->SetText(TextFromString);
+        ET->OnTextChanged.Broadcast(TextFromString);
+        ET->OnTextCommitted.Broadcast(TextFromString, CommitMethod);
         bSetText = true;
     }
     else if (UMultiLineEditableTextBox* METB = Cast<UMultiLineEditableTextBox>(Found))
     {
         METB->SetText(TextFromString);
+        METB->OnTextChanged.Broadcast(TextFromString);
+        METB->OnTextCommitted.Broadcast(TextFromString, CommitMethod);
         bSetText = true;
     }
     else if (UMultiLineEditableText* MET = Cast<UMultiLineEditableText>(Found))
     {
         MET->SetText(TextFromString);
+        MET->OnTextChanged.Broadcast(TextFromString);
+        MET->OnTextCommitted.Broadcast(TextFromString, CommitMethod);
         bSetText = true;
     }
 
@@ -186,6 +225,81 @@ TSharedPtr<FJsonObject> FUMGRuntimeCommands::HandleSetTextOnWidget(const TShared
     Result->SetStringField(TEXT("widget_class"), ResolvedClass);
     Result->SetStringField(TEXT("owner_user_widget"), Owner ? Owner->GetName() : TEXT(""));
     Result->SetNumberField(TEXT("text_length"), TextValue.Len());
+    Result->SetNumberField(TEXT("controller_index"), ControllerIndex);
+    Result->SetStringField(TEXT("controller_name"), PC->GetName());
+    return Result;
+}
+
+// ────────────────────────────── invoke_button_click ──────────────────────────────
+
+TSharedPtr<FJsonObject> FUMGRuntimeCommands::HandleInvokeButtonClick(const TSharedPtr<FJsonObject>& Params)
+{
+    FString WidgetName;
+    if (!Params->TryGetStringField(TEXT("widget_name"), WidgetName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
+    }
+
+    int32 ControllerIndex = 0;
+    Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+
+    APlayerController* PC = ResolvePlayerController(ControllerIndex);
+    if (!PC)
+    {
+        TSharedPtr<FJsonObject> Resp = FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("PlayerController not found for controller_index=%d"), ControllerIndex));
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetNumberField(TEXT("requested_index"), ControllerIndex);
+        Details->SetNumberField(TEXT("numClients"), FUnrealMCPPIEUtils::GetNumPIEClients());
+        Resp->SetObjectField(TEXT("details"), Details);
+        return Resp;
+    }
+
+    UWorld* PlayWorld = FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex);
+    if (!PlayWorld)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No active PIE world"));
+    }
+
+    UUserWidget* Owner = nullptr;
+    UWidget* Found = FindWidgetByName(PlayWorld, WidgetName, Owner, PC);
+    if (!Found)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget '%s' not found in any UUserWidget on controller %d"),
+                *WidgetName, ControllerIndex));
+    }
+
+    UButton* Btn = Cast<UButton>(Found);
+    if (!Btn)
+    {
+        TSharedPtr<FJsonObject> Resp = MakeShared<FJsonObject>();
+        Resp->SetBoolField(TEXT("success"), false);
+        Resp->SetStringField(TEXT("error"),
+            FString::Printf(TEXT("Widget '%s' is class '%s' — invoke_button_click supports only UButton"),
+                *WidgetName, *Found->GetClass()->GetName()));
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetStringField(TEXT("actualClass"), Found->GetClass()->GetName());
+        Details->SetStringField(TEXT("widget_name"), WidgetName);
+        Resp->SetObjectField(TEXT("details"), Details);
+        return Resp;
+    }
+
+    if (!Btn->GetIsEnabled())
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Button '%s' is disabled — OnClicked won't fire"), *WidgetName));
+    }
+
+    // Прямой broadcast делегата. Это путь, который UButton::SlateHandleClicked
+    // вызывает после реального Slate-клика; здесь мы пропускаем Slate-слой,
+    // что критично для UI-тестов без фокусированного PIE viewport.
+    Btn->OnClicked.Broadcast();
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("ok"), true);
+    Result->SetStringField(TEXT("widget_name"), WidgetName);
+    Result->SetStringField(TEXT("owner_user_widget"), Owner ? Owner->GetName() : TEXT(""));
     Result->SetNumberField(TEXT("controller_index"), ControllerIndex);
     Result->SetStringField(TEXT("controller_name"), PC->GetName());
     return Result;

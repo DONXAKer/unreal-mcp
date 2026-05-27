@@ -264,7 +264,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("2.10.0"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("2.13.1"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -406,7 +406,8 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 ResultJson = UMGTestCommands->HandleCommand(CommandType, Params);
             }
             // UMG runtime mutations (v2.8.0 — MCP-PLUGIN-002: Unicode text input)
-            else if (CommandType == TEXT("set_text_on_widget"))
+            else if (CommandType == TEXT("set_text_on_widget")
+                  || CommandType == TEXT("invoke_button_click"))
             {
                 ResultJson = UMGRuntimeCommands->HandleCommand(CommandType, Params);
             }

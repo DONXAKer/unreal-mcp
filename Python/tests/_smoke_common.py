@@ -22,7 +22,14 @@ from typing import Any
 
 UNREAL_HOST = "127.0.0.1"
 UNREAL_PORT = 55557
-RECV_TIMEOUT_S = 10.0
+# UE может быть занят load level / multi-client init / screenshot queue —
+# дефолт повышен с 10s до 30s, чтобы тесты не падали из-за периодических
+# просадок ответа на pie_status / find_widget во время map transition.
+RECV_TIMEOUT_S = 30.0
+
+# Команды, заведомо долгие (multi-client startup, hi-res screenshot).
+LONG_COMMANDS = {"pie_start", "pie_stop", "pie_screenshot"}
+LONG_TIMEOUT_S = 60.0
 
 
 class SmokeFailure(RuntimeError):
@@ -43,7 +50,8 @@ def send_command(command: str, params: dict[str, Any] | None = None) -> dict[str
     """
     payload = json.dumps({"type": command, "params": params or {}})
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(RECV_TIMEOUT_S)
+    timeout = LONG_TIMEOUT_S if command in LONG_COMMANDS else RECV_TIMEOUT_S
+    sock.settimeout(timeout)
     try:
         sock.connect((UNREAL_HOST, UNREAL_PORT))
         sock.sendall(payload.encode("utf-8"))
