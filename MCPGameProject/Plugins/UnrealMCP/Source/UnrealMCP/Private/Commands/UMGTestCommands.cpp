@@ -9,6 +9,12 @@
 #include "Blueprint/WidgetTree.h"
 #include "Components/Widget.h"
 #include "Components/PanelWidget.h"
+#include "Components/TextBlock.h"
+#include "Components/RichTextBlock.h"
+#include "Components/EditableText.h"
+#include "Components/EditableTextBox.h"
+#include "Components/MultiLineEditableText.h"
+#include "Components/MultiLineEditableTextBox.h"
 #include "GameFramework/PlayerController.h"
 #include "UObject/UObjectIterator.h"
 
@@ -112,6 +118,35 @@ TSharedPtr<FJsonObject> FUMGTestCommands::BuildWidgetJson(UWidget* Widget)
     const FGeometry Geom = Widget->GetCachedGeometry();
     Json->SetNumberField(TEXT("local_size_x"), Geom.GetLocalSize().X);
     Json->SetNumberField(TEXT("local_size_y"), Geom.GetLocalSize().Y);
+
+    // Текстовое содержимое — для тестов, которые проверяют что в карточках/
+    // полях есть нужный текст (типично: WBP_UnitCatalogEntry → NameText/StatsText
+    // не должны быть пустыми после server response). Поле `text` присутствует
+    // **только** для виджетов с текстом, чтобы не раздувать JSON для контейнеров.
+    if (const UTextBlock* TB = Cast<UTextBlock>(Widget))
+    {
+        Json->SetStringField(TEXT("text"), TB->GetText().ToString());
+    }
+    else if (const URichTextBlock* RTB = Cast<URichTextBlock>(Widget))
+    {
+        Json->SetStringField(TEXT("text"), RTB->GetText().ToString());
+    }
+    else if (const UEditableTextBox* ETB = Cast<UEditableTextBox>(Widget))
+    {
+        Json->SetStringField(TEXT("text"), ETB->GetText().ToString());
+    }
+    else if (const UEditableText* ET = Cast<UEditableText>(Widget))
+    {
+        Json->SetStringField(TEXT("text"), ET->GetText().ToString());
+    }
+    else if (const UMultiLineEditableTextBox* METB = Cast<UMultiLineEditableTextBox>(Widget))
+    {
+        Json->SetStringField(TEXT("text"), METB->GetText().ToString());
+    }
+    else if (const UMultiLineEditableText* MET = Cast<UMultiLineEditableText>(Widget))
+    {
+        Json->SetStringField(TEXT("text"), MET->GetText().ToString());
+    }
 
     // Рекурсивно — дети, если это панель.
     if (UPanelWidget* Panel = Cast<UPanelWidget>(Widget))
@@ -290,10 +325,11 @@ TSharedPtr<FJsonObject> FUMGTestCommands::HandleGetWidgetTree(const TSharedPtr<F
     {
         PlayWorld = GEditor->PlayWorld;
     }
-    // Применяем PC-фильтр только если controller_index явно задан или клиентов >1
-    // (single-client setup может иметь Owner=nullptr на ранних тиках — не отрезаем).
+    // Применяем PC-фильтр только если controller_index ЯВНО задан.
+    // Случай "автоматически включить фильтр для multi-PIE" даёт пустой tree
+    // в момент когда widgets ещё не имеют owner (раннние тики после spawn).
     APlayerController* OwningPC = nullptr;
-    if (bHasControllerIdx || FUnrealMCPPIEUtils::GetNumPIEClients() > 1)
+    if (bHasControllerIdx)
     {
         OwningPC = FUnrealMCPPIEUtils::GetPlayerControllerByIndex(ControllerIndex);
     }

@@ -25,7 +25,6 @@ Requires:
 from __future__ import annotations
 
 import sys
-from typing import Any
 
 from tests._fixtures import FixtureError, ensure_test_user, test_credentials
 from tests._pie_common import (
@@ -40,13 +39,12 @@ from tests._smoke_common import SmokeFailure, run_steps
 
 def main(argv: list[str]) -> int:
     login, password, _ = test_credentials()
-    state: dict[str, Any] = {}
 
     def s_ensure_user():
         try:
             ensure_test_user(login, password)
         except FixtureError as exc:
-            raise SmokeFailure(1, "ensure_test_user", f"Сервер недоступен: {exc}", {})
+            raise SmokeFailure(1, "ensure_test_user", f"Сервер недоступен: {exc}", {}) from exc
 
     def s_ensure_pie():
         status = unwrap_result(pie_send("pie_status", {}), 2, "pie_status (pre)")

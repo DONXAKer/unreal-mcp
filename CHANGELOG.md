@@ -17,6 +17,230 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [2.16.0] — 2026-05-27
+
+Adds `text` field to widget tree dump — тест может видеть содержимое
+TextBlock/EditableText/RichTextBlock без отдельной команды.
+
+### Added
+
+- `BuildWidgetJson` (используется `get_widget_tree`) теперь добавляет поле `text` для виджетов с текстом: `UTextBlock`, `URichTextBlock`, `UEditableTextBox`, `UEditableText`, `UMultiLineEditableTextBox`, `UMultiLineEditableText`. Для контейнеров поле отсутствует (избегаем раздувания JSON).
+
+### Why
+
+E2e-тест UnitSelection не мог проверить, что карточки `WBP_UnitCatalogEntry`
+содержат `NameText/TypeText/StatsText/AbilityText` с правильным содержимым
+после server response. Раньше snapshot показывал только структуру, без
+текста — баг "карточка отрисована, но пустая" был невидим автоматизации.
+
+---
+
+## [2.15.0] — 2026-05-27
+
+Adds WarCard UnitSelection bridge — reflection-based MCP commands для
+`UUnitSelectionSubsystem` (выбор юнитов до Deployment).
+
+### Added
+
+- **`wc_select_unit(unit_id, controller_index)`** — `UUnitSelectionSubsystem::AddUnitToComposition(UnitId)` → `bool`.
+- **`wc_deselect_unit(unit_id, controller_index)`** — `RemoveUnitFromComposition(UnitId)`.
+- **`wc_confirm_selection(controller_index)`** — `SendCompositionToServer()` (переход в Deployment phase).
+- **`wc_get_selection_state(controller_index)`** — `{ selected_count, ready }`.
+- Class path: `/Script/Client.UnitSelectionSubsystem`.
+
+### Why
+
+После MATCH_FOUND игрок попадает не в Deployment, а в **UnitSelection** —
+выбрать 5 юнитов из roster (9 в каталоге). Без этих команд e2e flow не
+доходит до Deployment.
+
+---
+
+## [2.14.0] — 2026-05-27
+
+Adds WarCard Deployment bridge — первая project-specific категория команд
+через UE reflection. Плагин не include'ит клиентские заголовки —
+subsystem resolution через class path + `FindFunction` + `ProcessEvent`
+с FProperty iteration. См. MCP-PLUGIN-006.
+
+### Added
+
+- **`WarCardGameCommands.h/.cpp`** — новая категория команд.
+- **`wc_deploy_unit(unit_id, grid_x, grid_y, controller_index)`** — `UDeploymentSubsystem::DeployUnit(UnitId, GridX, GridY)` → `bool`. Минует UI-клики по GridCell.
+- **`wc_confirm_deployment(controller_index)`** — `ConfirmDeployment()` (переход в Battle).
+- **`wc_get_deployment_state(controller_index)`** — `{ deployed_count, ready }`.
+- **`InvokeFunction`** helper в плагине — generic UFunction reflection-вызов: упаковка параметров по `FProperty.GetName()` (устойчиво к перестановке), типы FString/int32/bool/float, return value через `GetReturnProperty()`.
+- Python tools: `unreal-mcp/Python/tools/warcard_tools.py` + регистрация в `unreal_mcp_server.py`.
+
+---
+
+## [2.13.2] — 2026-05-27
+
+Patch: `HandleGetWidgetTree` фильтр был слишком агрессивным.
+
+### Fixed
+
+- `HandleGetWidgetTree` теперь применяет PC-фильтр **только** при явно
+  заданном `controller_index` (раньше включался автоматически на
+  `NumPIEClients > 1` — это приводило к пустому tree, потому что виджеты
+  на ранних тиках могут иметь nullptr owner).
+
+---
+
+## [2.13.1] — 2026-05-27
+
+Patch: PC-фильтр сломал single-client backward compat.
+
+### Fixed
+
+- `FindWidgetByName` теперь пропускает widget **только** если `OwningPlayer != nullptr && != OwningPC`. Виджеты без явного owner (CreateWidget без указания PC — нормальный паттерн `WBP_MainMenu` после login) считаются "глобальными" и проходят фильтр для любого `controller_index`. Закрывает регрессию `smoke_pie_login` (single-client) после 2.13.0.
+
+---
+
+## [2.13.0] — 2026-05-27
+
+Adds OwningPlayer-фильтр для FindWidgetByName — изолирует UI клиентов в
+split-screen multi-PIE. См. MCP-PLUGIN-005.
+
+### Added
+
+- `FindWidgetByName` в `UMGRuntimeCommands` и `UMGTestCommands` теперь принимает опциональный `APlayerController* OwningPC`. Если задан, виджеты с другим owner отрезаются. Резолв PC через `FUnrealMCPPIEUtils::GetPlayerControllerByIndex(controller_index)` автоматически.
+
+### Why
+
+В split-screen multi-PIE (`num_clients=2` без dedicated server) оба клиента
+живут в одном UWorld. Фильтр только по World не разделяет — set_text для
+client 0 мог попасть в виджет client 1. С PC-фильтром каждый клиент видит
+только свои UI.
+
+---
+
+## [2.12.0] — 2026-05-27
+
+Adds `invoke_button_click` — прямой broadcast OnClicked, обход Slate event
+injection. Закрывает критическую дыру в e2e UI-тестировании.
+
+### Added
+
+- **`invoke_button_click(widget_name, controller_index)`** — вызывает `UButton::OnClicked.Broadcast()` напрямую через UMGRuntimeCommands. Минует `FSlateApplication`.
+
+### Why
+
+`click_widget_by_name` симулирует mouse event через FSlateApplication, но
+когда PIE viewport не focused (типичный случай headless e2e через MCP),
+Slate route'ит событие в editor, а не в game. Blueprint `OnClicked` не
+triggered → submit-flow ломается (LoginButton.click не запускал AuthSubsystem).
+Прямой broadcast гарантирует попадание в делегат.
+
+---
+
+## [2.11.0] — 2026-05-27
+
+Patch для T002: `SetText()` не broadcast'ит OnTextChanged.
+
+### Fixed
+
+- `HandleSetTextOnWidget` теперь после `SetText()` явно вызывает `OnTextChanged.Broadcast(Text)` + `OnTextCommitted.Broadcast(Text, CommitMethod)` на всех 4 поддерживаемых классах (EditableTextBox / EditableText / MultiLine варианты). Поддержан опциональный параметр `commit_method` (`"OnEnter"` по умолчанию). Без broadcast — Blueprint, слушающий OnTextChanged для сохранения значения в state, оставался в неведении, и submit отправлял пустые/устаревшие креды.
+
+---
+
+## [2.10.0] — 2026-05-27
+
+Adds UE5.7-native Enhanced Input через MCP. См. MCP-PLUGIN-004.
+
+### Added
+
+- **`create_input_action(name, value_type, path)`** — `UInputAction` (Bool/Axis1D/Axis2D/Axis3D).
+- **`create_input_mapping_context(name, path)`** — `UInputMappingContext`.
+- **`add_input_action_mapping(context_path, action_path, key, modifiers[], triggers[])`** — биндит key + модификаторы (Negate, Swizzle.YXZ).
+- **`add_enhanced_input_action_event_node(blueprint_path, action_path, trigger_event)`** — добавляет `K2Node_EnhancedInputAction` в Blueprint с 9 выходными пинами (5 exec: Triggered/Started/Ongoing/Canceled/Completed + ActionValue/ElapsedSeconds/TriggeredSeconds/InputAction).
+- Recipe `wc.bind_input_context_on_begin_play(blueprint_path, imc_path)` — собирает граф BeginPlay → GetPlayerController → GetEnhancedInputLocalPlayerSubsystem → AddMappingContext.
+- `UnrealMCP.Build.cs` — добавлен `EnhancedInput` модуль; `.uplugin` — plugin dependency.
+
+---
+
+## [2.9.0] — 2026-05-27
+
+Adds multi-client PIE — `num_clients` параметр, `controller_index` во всех PIE-командах. См. MCP-PLUGIN-003.
+
+### Added
+
+- **`pie_start(num_clients=N, dedicated_server=bool)`** — N клиентов через `ULevelEditorPlaySettings::SetPlayNumberOfClients`.
+- **`pie_status`** — теперь возвращает `num_clients` + `clients[]` массив (`controller_class`, `controller_name`, `world_name`, `current_level`, `current_widget`).
+- **`controller_index` параметр** в `simulate_key`, `click_widget_by_name`, `pie_screenshot`, `wait_for_widget`, `find_widget`, `get_widget_tree` (опционально, default 0).
+- **`pie_screenshot(controller_index=N)`** — суффикс `_client<N>.png` в filename.
+- **`PIEUtils.h/.cpp`** — `FUnrealMCPPIEUtils::GetPlayerControllerByIndex`, `GetNumPIEClients`, `GetPIEWorldForClient`, `DescribeClient`. Поддерживает multi-PIE (отдельный WorldContext per client) и split-screen (несколько PC в одном PIE world).
+- **`pie_status` early-return** в idle state теперь тоже возвращает `num_clients:0, clients:[]` — consistent shape.
+
+---
+
+## [2.8.0] — 2026-05-27
+
+Adds `set_text_on_widget` — Unicode-ввод в UMG поля без `simulate_key`. См. MCP-PLUGIN-002.
+
+### Added
+
+- **`UMGRuntimeCommands.h/.cpp`** — новая категория команд для runtime-state виджетов.
+- **`set_text_on_widget(widget_name, text, controller_index)`** — записывает любой Unicode в `UEditableTextBox` / `UEditableText` / `UMultiLineEditableTextBox` / `UMultiLineEditableText` через `SetText(FText::FromString)`. Закрывает TODO в `client/Documentation/TESTING_GUIDE.md:97`.
+- При неподдерживаемом классе error содержит `details.actualClass`.
+
+### Why
+
+`simulate_key` работает посимвольно и только для ASCII (нужен раскладочный
+маппинг). Логин/пароль с кириллицей или спецсимволами через `simulate_key`
+невозможны.
+
+---
+
+## [2.7.0] — 2026-05-27
+
+Hardening pin resolver для Blueprint-операций. См. MCP-PLUGIN-001.
+
+### Added
+
+- **`PinResolver.h/.cpp`** — `FUnrealMCPPinResolver` единый helper для `set_pin_default_value`, `get_pin_info`, `connect_blueprint_nodes`, `set_node_property`. Логика: exact `PinName` → fallback на `PinFriendlyName` → sub-pin lookup (через `.` или `_`) → `ReconstructNode` fallback для K2Node (материализует dynamic пины у CallFunction / CreateWidget / CastTo).
+- При неудачном резолве error содержит `details.availablePins[]` (массив `{name, friendlyName, direction, pinCategory, isSplit, isSubPin}`) — полная диагностика всех реальных пинов узла.
+- **`_pin_diagnostics.py`** — Levenshtein-based `enrich_pin_error` в Python: добавляет `did_you_mean` подсказку при typo.
+
+### Fixed
+
+- **`EpicUnrealMCPBridge.cpp`** — на error пути bridge ранее **отбрасывал** поле `details`, из-за чего `availablePins[]` от `PinResolver::MakeErrorResponse` не доходил до клиента. Теперь bridge пробрасывает `details` если handler его положил.
+
+### Why
+
+`set_node_property` / `get_pin_info` периодически валились с `Pin not found`
+на K2Node с optional/dynamic пинами (`Class` у `CreateWidget`), sub-pins
+после `split_struct_pin`, и узлах с `PinFriendlyName != PinName`. Это был
+самый частый источник ручных fallback'ов.
+
+---
+
+## [2.6.0] — 2026-05-26
+
+Adds console-command proxy для произвольного `GEngine->Exec()`.
+
+### Added
+
+- **`execute_console_command(cmd)`** — выполняет UE console команду через `GEngine->Exec()`. Возвращает `{ success, command, log_lines[], log_truncated, lines_captured }`. Подписывается на `GLog` через `FConsoleCaptureOutputDevice` (max 500 строк защита от log-flood).
+- World resolution: PIE world (если активен) → editor world fallback.
+
+---
+
+## [2.4.0] — 2026-05-25
+
+Adds PIE automation + UMG runtime тестирование (Playwright-style).
+
+### Added
+
+- **`PIECommands.h/.cpp`** — `pie_start`, `pie_stop`, `pie_status`, `pie_screenshot`, `simulate_key`, `tick_world`.
+- **`UMGTestCommands.h/.cpp`** — runtime операции над живыми `UUserWidget` в PIE-мире: `find_widget`, `wait_for_widget`, `click_widget_by_name`, `get_widget_tree`.
+- Python tools в `Python/tools/pie_tools.py` (стdio + http server обновлены).
+- `find_widget` находит виджет через все `UUserWidget` PIE-мира (root + всё в `WidgetTree`).
+- `click_widget_by_name` симулирует left-mouse event через `FSlateApplication` (центр cached geometry).
+- `get_widget_tree` — DOM-like snapshot (имя, класс, visible, size, children).
+
+---
+
 ## [2.1.0] — 2026-05-24
 
 Adds declarative graph builder; Python-only (no plugin rebuild needed for this release).

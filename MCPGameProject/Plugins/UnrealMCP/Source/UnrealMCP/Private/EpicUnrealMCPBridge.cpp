@@ -94,6 +94,7 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     UMGRuntimeCommands = MakeShared<FUMGRuntimeCommands>();
     EnhancedInputCommands = MakeShared<FEnhancedInputCommands>();
     ConsoleCommands = MakeShared<FUnrealMCPConsoleCommands>();
+    WarCardGameCommands = MakeShared<FWarCardGameCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -116,6 +117,7 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     UMGRuntimeCommands.Reset();
     EnhancedInputCommands.Reset();
     ConsoleCommands.Reset();
+    WarCardGameCommands.Reset();
 }
 
 // Initialize subsystem
@@ -264,7 +266,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("2.13.1"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("2.16.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -410,6 +412,17 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                   || CommandType == TEXT("invoke_button_click"))
             {
                 ResultJson = UMGRuntimeCommands->HandleCommand(CommandType, Params);
+            }
+            // WarCard project-specific (MCP-PLUGIN-006): selection + deployment + battle bridges.
+            else if (CommandType == TEXT("wc_select_unit")
+                  || CommandType == TEXT("wc_deselect_unit")
+                  || CommandType == TEXT("wc_confirm_selection")
+                  || CommandType == TEXT("wc_get_selection_state")
+                  || CommandType == TEXT("wc_deploy_unit")
+                  || CommandType == TEXT("wc_confirm_deployment")
+                  || CommandType == TEXT("wc_get_deployment_state"))
+            {
+                ResultJson = WarCardGameCommands->HandleCommand(CommandType, Params);
             }
             // Enhanced Input — UE5.7 native (v2.10.0 — MCP-PLUGIN-004)
             else if (CommandType == TEXT("create_input_action") ||

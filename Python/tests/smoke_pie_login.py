@@ -46,7 +46,7 @@ def main(argv: list[str]) -> int:
             result = ensure_test_user(login, password)
             print(f"    user '{login}' created={result.get('created')}")
         except FixtureError as exc:
-            raise SmokeFailure(1, "ensure_test_user", f"Сервер недоступен: {exc}", {})
+            raise SmokeFailure(1, "ensure_test_user", f"Сервер недоступен: {exc}", {}) from exc
 
     def s_ensure_pie():
         status = unwrap_result(pie_send("pie_status", {}), 2, "pie_status (pre)")

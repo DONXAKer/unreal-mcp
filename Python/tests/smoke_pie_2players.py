@@ -34,7 +34,7 @@ import sys
 import time
 
 from tests._fixtures import FixtureError, ensure_test_user
-from tests._pie_common import pie_send, stop_pie_safe, unwrap_result
+from tests._pie_common import pie_send, stop_pie_safe
 from tests._smoke_common import SmokeFailure, run_steps
 
 USER1 = ("warcard_test", "Test1234", "warcard_test@example.com")
@@ -48,15 +48,13 @@ def _send_raw(cmd, params, retries: int = 3, retry_delay: float = 0.5):
     login занимает до 13s end-to-end; find_widget при том может тайматься на
     промежуточных тиках). Retry создаёт новый socket — это снимает зависание
     на конкретной TCP-сессии без affecting bridge worker thread."""
-    last_resp = None
     for attempt in range(retries):
         try:
             resp = pie_send(cmd, params)
             if isinstance(resp, dict):
                 return resp.get("result", resp)
             return {}
-        except SmokeFailure as exc:
-            last_resp = exc
+        except SmokeFailure:
             if attempt < retries - 1:
                 time.sleep(retry_delay)
                 continue
@@ -133,13 +131,13 @@ def main(argv: list[str]) -> int:
             ensure_test_user(USER1[0], USER1[1], USER1[2])
             ensure_test_user(USER2[0], USER2[1], USER2[2])
         except FixtureError as exc:
-            raise SmokeFailure(1, "ensure_users", f"Сервер недоступен: {exc}", {})
+            raise SmokeFailure(1, "ensure_users", f"Сервер недоступен: {exc}", {}) from exc
 
     def s_pie_start_2():
         # Переиспользуем PIE если уже идёт 2 клиента; иначе stop + start заново.
         st = _send_raw("pie_status", {})
         if st.get("is_running") and st.get("num_clients") == 2:
-            print(f"    INFO: PIE уже с 2 клиентами — переиспользую")
+            print("    INFO: PIE уже с 2 клиентами — переиспользую")
             return
         if st.get("is_running"):
             _send_raw("pie_stop", {})
