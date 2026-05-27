@@ -1,7 +1,9 @@
 #include "Commands/PIECommands.h"
 #include "Commands/EpicUnrealMCPCommonUtils.h"
+#include "Commands/PIEUtils.h"
 #include "Editor.h"
 #include "Editor/EditorEngine.h"
+#include "Settings/LevelEditorPlaySettings.h"
 #include "Engine/World.h"
 #include "Engine/GameViewportClient.h"
 #include "GameFramework/PlayerController.h"
@@ -54,25 +56,51 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStart(const TSharedPtr<FJsonObjec
     FString Mode = TEXT("selected_viewport");
     Params->TryGetStringField(TEXT("mode"), Mode);
 
-    // Сборка параметров запуска PIE. Дефолтный конструктор уже выставляет
-    // WorldType = PlayInEditor и подтягивает текущие проектные Editor Play
-    // Settings (где задано Selected Viewport / New Editor Window).
-    FRequestPlaySessionParams SessionParams;
+    // MCP-PLUGIN-003: multi-client поддержка. Default 1 — старое поведение.
+    int32 NumClients = 1;
+    Params->TryGetNumberField(TEXT("num_clients"), NumClients);
+    if (NumClients < 1)  NumClients = 1;
+    if (NumClients > 8)  NumClients = 8;  // engine cap, listen-server обычно 2..4.
 
-    // Через EditorPlaySettings можно подкрутить запускаемый режим, но для
-    // простоты пускаем с дефолтами проекта — пользователь сам в Editor задаёт
-    // "Selected Viewport" / "New Editor Window" в UI. Параметр `mode` сейчас
-    // только пишется в ответ как hint и логируется.
+    bool bDedicatedServer = false;
+    Params->TryGetBoolField(TEXT("dedicated_server"), bDedicatedServer);
+
+    // Применяем NumberOfClients через ULevelEditorPlaySettings (только при изменении —
+    // не трогаем настройки если пользователь сам запустил с дефолтом 1).
+    if (NumClients != 1 || bDedicatedServer)
+    {
+        if (ULevelEditorPlaySettings* PlaySettings = GetMutableDefault<ULevelEditorPlaySettings>())
+        {
+            PlaySettings->SetPlayNumberOfClients(NumClients);
+            PlaySettings->bLaunchSeparateServer = bDedicatedServer;
+        }
+    }
+
+    FRequestPlaySessionParams SessionParams;
     GEditor->RequestPlaySession(SessionParams);
 
     TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
     Result->SetBoolField(TEXT("started"), true);
     Result->SetStringField(TEXT("mode"), Mode);
+    Result->SetNumberField(TEXT("num_clients"), NumClients);
+    Result->SetBoolField(TEXT("dedicated_server"), bDedicatedServer);
     if (!LevelName.IsEmpty())
     {
         Result->SetStringField(TEXT("level_name_hint"), LevelName);
     }
-    Result->SetStringField(TEXT("note"), TEXT("PIE start requested — world will be created on next tick. Poll pie_status to confirm."));
+
+    // Описания клиентов пока пустые — миры создаются на следующих тиках.
+    TArray<TSharedPtr<FJsonValue>> ClientsHint;
+    for (int32 i = 0; i < NumClients; ++i)
+    {
+        TSharedPtr<FJsonObject> ClientObj = MakeShared<FJsonObject>();
+        ClientObj->SetNumberField(TEXT("index"), i);
+        ClientObj->SetStringField(TEXT("status"), TEXT("requested"));
+        ClientsHint.Add(MakeShared<FJsonValueObject>(ClientObj));
+    }
+    Result->SetArrayField(TEXT("clients"), ClientsHint);
+
+    Result->SetStringField(TEXT("note"), TEXT("PIE start requested — worlds will be created on next tick(s). Poll pie_status to confirm."));
     return Result;
 }
 
@@ -119,7 +147,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStatus(const TSharedPtr<FJsonObje
     Result->SetBoolField(TEXT("is_running"), true);
     Result->SetStringField(TEXT("world_name"), PlayWorld->GetName());
     Result->SetNumberField(TEXT("elapsed_seconds"), PlayWorld->GetTimeSeconds());
-    Result->SetStringField(TEXT("plugin_version"), TEXT("2.6.0"));
+    Result->SetStringField(TEXT("plugin_version"), TEXT("2.10.0"));
 
     APlayerController* PC = PlayWorld->GetFirstPlayerController();
     Result->SetBoolField(TEXT("has_player_controller"), PC != nullptr);
@@ -131,14 +159,18 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStatus(const TSharedPtr<FJsonObje
     }
 
     // Имя GameViewportClient, если есть — для смок-тестов.
-    if (PlayWorld->GetGameViewport())
+    Result->SetBoolField(TEXT("has_game_viewport"), PlayWorld->GetGameViewport() != nullptr);
+
+    // MCP-PLUGIN-003: массив клиентов для multi-client PIE.
+    const int32 NumClients = FUnrealMCPPIEUtils::GetNumPIEClients();
+    Result->SetNumberField(TEXT("num_clients"), NumClients);
+
+    TArray<TSharedPtr<FJsonValue>> ClientsArr;
+    for (int32 i = 0; i < NumClients; ++i)
     {
-        Result->SetBoolField(TEXT("has_game_viewport"), true);
+        ClientsArr.Add(MakeShared<FJsonValueObject>(FUnrealMCPPIEUtils::DescribeClient(i)));
     }
-    else
-    {
-        Result->SetBoolField(TEXT("has_game_viewport"), false);
-    }
+    Result->SetArrayField(TEXT("clients"), ClientsArr);
 
     return Result;
 }
@@ -147,7 +179,23 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieScreenshot(const TSharedPtr<FJson
 {
     FString Filename = TEXT("PIEScreenshot.png");
     Params->TryGetStringField(TEXT("filename"), Filename);
-    if (!Filename.EndsWith(TEXT(".png"), ESearchCase::IgnoreCase))
+
+    // MCP-PLUGIN-003: controller_index → суффикс _client<N> в имени файла.
+    int32 ControllerIndex = 0;
+    const bool bHasControllerIdx = Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+
+    if (bHasControllerIdx)
+    {
+        // Вставляем суффикс _clientN перед расширением.
+        FString Base = Filename;
+        FString Ext = TEXT(".png");
+        if (Filename.EndsWith(TEXT(".png"), ESearchCase::IgnoreCase))
+        {
+            Base = Filename.LeftChop(4);
+        }
+        Filename = FString::Printf(TEXT("%s_client%d%s"), *Base, ControllerIndex, *Ext);
+    }
+    else if (!Filename.EndsWith(TEXT(".png"), ESearchCase::IgnoreCase))
     {
         Filename += TEXT(".png");
     }
@@ -169,7 +217,10 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieScreenshot(const TSharedPtr<FJson
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("GEditor is null"));
     }
 
-    UWorld* PlayWorld = GEditor->PlayWorld;
+    // MCP-PLUGIN-003: для multi-PIE — выбираем world нужного клиента.
+    UWorld* PlayWorld = bHasControllerIdx
+        ? FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex)
+        : GEditor->PlayWorld;
     UGameViewportClient* GameViewport = PlayWorld ? PlayWorld->GetGameViewport() : nullptr;
 
     if (GameViewport && GameViewport->Viewport)
@@ -236,21 +287,31 @@ TSharedPtr<FJsonObject> FPIECommands::HandleSimulateKey(const TSharedPtr<FJsonOb
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No active PIE world — call pie_start first"));
     }
 
-    APlayerController* PC = GEditor->PlayWorld->GetFirstPlayerController();
+    // MCP-PLUGIN-003: controller_index (default 0 — старое поведение).
+    int32 ControllerIndex = 0;
+    Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+
+    APlayerController* PC = FUnrealMCPPIEUtils::GetPlayerControllerByIndex(ControllerIndex);
     if (!PC)
     {
-        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No PlayerController in PIE world"));
+        TSharedPtr<FJsonObject> Response = MakeShared<FJsonObject>();
+        Response->SetBoolField(TEXT("success"), false);
+        Response->SetStringField(TEXT("error"),
+            FString::Printf(TEXT("No PlayerController for controller_index=%d"), ControllerIndex));
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetNumberField(TEXT("requested_index"), ControllerIndex);
+        Details->SetNumberField(TEXT("numClients"), FUnrealMCPPIEUtils::GetNumPIEClients());
+        Response->SetObjectField(TEXT("details"), Details);
+        return Response;
     }
 
-    // Pressed + Released — синхронно, один и тот же tick. UE5.6+ API:
-    // FInputKeyEventArgs::CreateSimulated — канонический способ для синтезированного ввода
-    // (старый FInputKeyParams помечен deprecated).
     PC->InputKey(FInputKeyEventArgs::CreateSimulated(Key, IE_Pressed,  /*AmountDepressed*/ 1.0f));
     PC->InputKey(FInputKeyEventArgs::CreateSimulated(Key, IE_Released, /*AmountDepressed*/ 1.0f));
 
     TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
     Result->SetBoolField(TEXT("sent"), true);
     Result->SetStringField(TEXT("key"), KeyName);
+    Result->SetNumberField(TEXT("controller_index"), ControllerIndex);
     Result->SetStringField(TEXT("controller_name"), PC->GetName());
     return Result;
 }

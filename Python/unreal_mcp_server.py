@@ -283,6 +283,7 @@ from tools.console_tools import register_console_tools
 from tools.project_tools import register_project_tools
 from tools.texture_tools import register_texture_tools
 from tools.umg_tools import register_umg_tools
+from tools.enhanced_input_tools import register_enhanced_input_tools
 
 # Register tools
 register_editor_tools(mcp)
@@ -301,6 +302,7 @@ register_data_asset_tools(mcp)
 register_niagara_tools(mcp)
 register_pie_tools(mcp)  # v2.4.0 — Playwright-like e2e: PIE lifecycle + UMG automation
 register_console_tools(mcp)  # v2.6.0 — arbitrary console-command execution (Automation RunTests, CVars, etc.)
+register_enhanced_input_tools(mcp)  # v2.10.0 — UE5.7 Enhanced Input (MCP-PLUGIN-004)
 
 # --- MCP Content Pipeline (MCP-CONTENT-001): config + recipe framework ---
 from tools import project_config as _project_config

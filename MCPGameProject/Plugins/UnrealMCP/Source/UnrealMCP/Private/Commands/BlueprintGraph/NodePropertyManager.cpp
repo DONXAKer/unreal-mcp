@@ -2,6 +2,7 @@
 #include "Commands/BlueprintGraph/Nodes/SwitchEnumEditor.h"
 #include "Commands/BlueprintGraph/Nodes/ExecutionSequenceEditor.h"
 #include "Commands/BlueprintGraph/Nodes/MakeArrayEditor.h"
+#include "Commands/BlueprintGraph/PinResolver.h"
 #include "Engine/Blueprint.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
@@ -359,13 +360,14 @@ bool FNodePropertyManager::SetPrintNodeProperty(
 		return false;
 	}
 
-	// Handle "message" property
+	// Handle "message" property — резолвим через PinResolver (sub-pins, friendly names).
 	if (PropertyName.Equals(TEXT("message"), ESearchCase::IgnoreCase))
 	{
 		FString MessageValue;
 		if (Value->TryGetString(MessageValue))
 		{
-			UEdGraphPin* InStringPin = PrintNode->FindPin(TEXT("InString"));
+			FPinResolutionError Err;
+			UEdGraphPin* InStringPin = FUnrealMCPPinResolver::ResolvePin(PrintNode, TEXT("InString"), EGPD_Input, Err);
 			if (InStringPin)
 			{
 				InStringPin->DefaultValue = MessageValue;
@@ -380,7 +382,8 @@ bool FNodePropertyManager::SetPrintNodeProperty(
 		double DurationValue;
 		if (Value->TryGetNumber(DurationValue))
 		{
-			UEdGraphPin* DurationPin = PrintNode->FindPin(TEXT("Duration"));
+			FPinResolutionError Err;
+			UEdGraphPin* DurationPin = FUnrealMCPPinResolver::ResolvePin(PrintNode, TEXT("Duration"), EGPD_Input, Err);
 			if (DurationPin)
 			{
 				DurationPin->DefaultValue = FString::SanitizeFloat(DurationValue);
@@ -472,12 +475,14 @@ bool FNodePropertyManager::SetGenericNodeProperty(
 		}
 	}
 
-	// Generic fallback: try to set pin default value by pin name
+	// Generic fallback: try to set pin default value by pin name.
+	// PinResolver (MCP-PLUGIN-001): fuzzy match, sub-pins, friendly names.
 	{
 		FString DefaultVal;
 		if (Value->TryGetString(DefaultVal))
 		{
-			UEdGraphPin* Pin = Node->FindPin(*PropertyName);
+			FPinResolutionError Err;
+			UEdGraphPin* Pin = FUnrealMCPPinResolver::ResolvePinAny(Node, PropertyName, Err);
 			if (Pin)
 			{
 				Pin->DefaultValue = DefaultVal;

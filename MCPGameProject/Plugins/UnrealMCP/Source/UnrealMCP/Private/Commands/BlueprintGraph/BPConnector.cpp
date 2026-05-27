@@ -1,4 +1,5 @@
 #include "Commands/BlueprintGraph/BPConnector.h"
+#include "Commands/BlueprintGraph/PinResolver.h"
 #include "Commands/EpicUnrealMCPCommonUtils.h"
 #include "Engine/Blueprint.h"
 #include "K2Node.h"
@@ -126,15 +127,22 @@ TSharedPtr<FJsonObject> FBPConnector::ConnectNodes(const TSharedPtr<FJsonObject>
         return Result;
     }
 
-    // Trouver pins
-    UEdGraphPin* SourcePin = FindPinByName(SourceNode, SourcePinName, EGPD_Output);
-    UEdGraphPin* TargetPin = FindPinByName(TargetNode, TargetPinName, EGPD_Input);
+    // Pins — через PinResolver (MCP-PLUGIN-001): fuzzy, sub-pins, auto-expand.
+    FPinResolutionError SourceErr, TargetErr;
+    UEdGraphPin* SourcePin = FUnrealMCPPinResolver::ResolvePin(SourceNode, SourcePinName, EGPD_Output, SourceErr);
+    UEdGraphPin* TargetPin = FUnrealMCPPinResolver::ResolvePin(TargetNode, TargetPinName, EGPD_Input, TargetErr);
 
-    if (!SourcePin || !TargetPin)
+    if (!SourcePin)
     {
-        Result->SetBoolField("success", false);
-        Result->SetStringField("error", "Pin not found");
-        return Result;
+        return FUnrealMCPPinResolver::MakeErrorResponse(
+            FString::Printf(TEXT("Source pin '%s' not found on node '%s'"), *SourcePinName, *SourceNodeId),
+            SourceErr);
+    }
+    if (!TargetPin)
+    {
+        return FUnrealMCPPinResolver::MakeErrorResponse(
+            FString::Printf(TEXT("Target pin '%s' not found on node '%s'"), *TargetPinName, *TargetNodeId),
+            TargetErr);
     }
 
     // Delegate compatibility check AND connection to the K2 schema so that

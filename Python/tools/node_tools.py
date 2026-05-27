@@ -10,6 +10,7 @@ from typing import Any
 from mcp.server.fastmcp import Context, FastMCP
 
 from tools._envelope import wrap_with_envelope
+from tools._pin_diagnostics import enrich_pin_error
 
 # Get logger
 logger = logging.getLogger("UnrealMCP")
@@ -247,6 +248,11 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
             if not response:
                 logger.error("No response from Unreal Engine")
                 return {"success": False, "message": "No response from Unreal Engine"}
+
+            # MCP-PLUGIN-001: при ошибке пина — пытаемся подсказать did_you_mean.
+            # Используем оба запроса (source_pin, target_pin) — какой совпадёт с availablePins.
+            enrich_pin_error(response, source_pin)
+            enrich_pin_error(response, target_pin)
 
             logger.info(f"Node connection response: {response}")
             return response
@@ -969,6 +975,8 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
             response = unreal.send_command("set_pin_default_value", params)
             if not response:
                 return {"success": False, "message": "No response from Unreal Engine"}
+            # MCP-PLUGIN-001: добавить did_you_mean при ошибке резолва пина.
+            enrich_pin_error(response, pin_name)
             return response
         except Exception as e:
             error_msg = f"Error setting pin default value: {e}"
@@ -1007,6 +1015,9 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
             response = unreal.send_command("get_pin_info", params)
             if not response:
                 return {"success": False, "message": "No response from Unreal Engine"}
+            # MCP-PLUGIN-001: did_you_mean только если пользователь запросил конкретный pin.
+            if pin_name:
+                enrich_pin_error(response, pin_name)
             return response
         except Exception as e:
             error_msg = f"Error getting pin info: {e}"
@@ -1323,6 +1334,10 @@ def register_blueprint_node_tools(mcp: FastMCP) -> None:
             response = unreal.send_command("set_node_property", params)
             if not response:
                 return {"success": False, "message": "No response from Unreal Engine"}
+            # MCP-PLUGIN-001: property_name часто совпадает с PinName — обогащаем
+            # ответ did_you_mean если резолв пина не удался.
+            if property_name:
+                enrich_pin_error(response, property_name)
             return response
         except Exception as e:
             error_msg = f"Error setting node property: {e}"

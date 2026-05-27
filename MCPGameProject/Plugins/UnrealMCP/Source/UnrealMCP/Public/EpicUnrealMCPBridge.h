@@ -23,6 +23,8 @@
 #include "Commands/AnimationBPCommands.h"
 #include "Commands/PIECommands.h"
 #include "Commands/UMGTestCommands.h"
+#include "Commands/UMGRuntimeCommands.h"
+#include "Commands/EnhancedInputCommands.h"
 #include "Commands/ConsoleCommands.h"
 #include "EpicUnrealMCPBridge.generated.h"
 
@@ -82,5 +84,7 @@ private:
 	TSharedPtr<FAnimationBPCommands> AnimationBPCommands;
 	TSharedPtr<FPIECommands> PIECommands;
 	TSharedPtr<FUMGTestCommands> UMGTestCommands;
+	TSharedPtr<FUMGRuntimeCommands> UMGRuntimeCommands;
+	TSharedPtr<FEnhancedInputCommands> EnhancedInputCommands;
 	TSharedPtr<FUnrealMCPConsoleCommands> ConsoleCommands;
 };

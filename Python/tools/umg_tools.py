@@ -681,4 +681,73 @@ def register_umg_tools(mcp: FastMCP) -> None:
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    # ─────────────────────────────────────────────────────────────────
+    # MCP-PLUGIN-002 — runtime UMG mutations (Unicode text input)
+    # ─────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def set_text_on_widget(
+        ctx: Context[Any, Any, Any],
+        widget_name: str,
+        text: str,
+        controller_index: int = 0,
+    ) -> dict[str, Any]:
+        """Записать Unicode-текст в edit-поле UMG-виджета в активном PIE.
+
+        Работает с runtime-state (живой UUserWidget в PIE), а не с design-time
+        WidgetBlueprint. Требует активного PIE — call `pie_start` first.
+
+        Поддерживаемые UClass'ы (по C++ касту):
+          - UEditableTextBox
+          - UEditableText
+          - UMultiLineEditableTextBox
+          - UMultiLineEditableText
+
+        Отличие от `simulate_key`: тот посимвольно симулирует key events
+        (упирается в раскладку для не-ASCII символов), а здесь — прямой
+        SetText(FText::FromString(text)), любой Unicode (кириллица,
+        emoji, спецсимволы).
+
+        Args:
+            widget_name: UWidget::GetName() искомого поля (case-insensitive).
+                         Имя BindWidget переменной — самый частый источник
+                         (`LoginEditableTextBox`).
+            text: Любой Unicode. Может быть пустой строкой (очистка поля).
+            controller_index: Какой PlayerController используется для
+                              ограничения поиска. В T002 — заглушка
+                              (всегда первый PC), реальный multi-client
+                              lookup появится в T003.
+
+        Returns:
+            {
+              ok: bool,
+              widget_name: str,
+              widget_class: str,
+              owner_user_widget: str,
+              text_length: int,
+              controller_index: int,
+              controller_name: str
+            }
+
+        Errors:
+            - "No active PIE world" — PIE не запущен.
+            - "Widget not found" — нет такого виджета в любом UUserWidget.
+            - "Widget '<X>' is class '<Y>' — set_text_on_widget supports only..."
+              — class виджета не поддержан; details.actualClass содержит реальный класс.
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"status": "error", "error": "No Unreal connection"}
+
+        params: dict[str, Any] = {
+            "widget_name": widget_name,
+            "text": text,
+            "controller_index": controller_index,
+        }
+        logger.info(f"set_text_on_widget: widget='{widget_name}' len={len(text)} ctrl={controller_index}")
+        response = unreal.send_command("set_text_on_widget", params)
+        return response or {"status": "error", "error": "No response"}
+
     logger.info("UMG tools registered successfully")

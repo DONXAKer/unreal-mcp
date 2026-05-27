@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 37,
-	"VersionName": "2.6.0",
+	"Version": 41,
+	"VersionName": "2.10.0",
 	"FriendlyName": "UnrealMCP",
 	"Description": "Model Context Protocol implementation for Unreal Engine",
 	"Category": "Editor",
@@ -35,6 +35,10 @@
 			"Name": "Niagara",
 			"Enabled": true,
 			"Optional": true
+		},
+		{
+			"Name": "EnhancedInput",
+			"Enabled": true
 		}
 	]
-} 
+}

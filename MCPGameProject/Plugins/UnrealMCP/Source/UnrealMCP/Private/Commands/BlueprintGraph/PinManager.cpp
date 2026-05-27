@@ -1,6 +1,7 @@
 // Pin-level operations for Blueprint graphs (Phase 3C — v1.15.0)
 
 #include "Commands/BlueprintGraph/PinManager.h"
+#include "Commands/BlueprintGraph/PinResolver.h"
 #include "Commands/EpicUnrealMCPCommonUtils.h"
 #include "Engine/Blueprint.h"
 #include "EdGraph/EdGraph.h"
@@ -260,9 +261,15 @@ TSharedPtr<FJsonObject> FPinManager::SetPinDefaultValue(const TSharedPtr<FJsonOb
     if (!Node)
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Node not found: %s"), *NodeId));
 
-    UEdGraphPin* Pin = FindPin(Node, PinName);
+    // PinResolver (MCP-PLUGIN-001) — fuzzy match, sub-pins, auto-expand.
+    FPinResolutionError ResolveErr;
+    UEdGraphPin* Pin = FUnrealMCPPinResolver::ResolvePinAny(Node, PinName, ResolveErr);
     if (!Pin)
-        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Pin '%s' not found on node '%s'"), *PinName, *NodeId));
+    {
+        return FUnrealMCPPinResolver::MakeErrorResponse(
+            FString::Printf(TEXT("Pin '%s' not found on node '%s'"), *PinName, *NodeId),
+            ResolveErr);
+    }
 
     // For Object pins, try to resolve the value as a UObject path.
     if (Pin->PinType.PinCategory == UEdGraphSchema_K2::PC_Object ||
@@ -351,10 +358,15 @@ TSharedPtr<FJsonObject> FPinManager::GetPinInfo(const TSharedPtr<FJsonObject>& P
 
     if (bSinglePin)
     {
-        UEdGraphPin* Pin = FindPin(Node, TargetPinName);
+        // PinResolver (MCP-PLUGIN-001).
+        FPinResolutionError ResolveErr;
+        UEdGraphPin* Pin = FUnrealMCPPinResolver::ResolvePinAny(Node, TargetPinName, ResolveErr);
         if (!Pin)
-            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
-                FString::Printf(TEXT("Pin '%s' not found on node '%s'"), *TargetPinName, *NodeId));
+        {
+            return FUnrealMCPPinResolver::MakeErrorResponse(
+                FString::Printf(TEXT("Pin '%s' not found on node '%s'"), *TargetPinName, *NodeId),
+                ResolveErr);
+        }
         Result->SetObjectField(TEXT("pin"), PinToJson(Pin));
     }
     else
@@ -395,9 +407,15 @@ TSharedPtr<FJsonObject> FPinManager::DisconnectPin(const TSharedPtr<FJsonObject>
     if (!Node)
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Node not found: %s"), *NodeId));
 
-    UEdGraphPin* Pin = FindPin(Node, PinName);
+    // PinResolver (MCP-PLUGIN-001).
+    FPinResolutionError ResolveErr;
+    UEdGraphPin* Pin = FUnrealMCPPinResolver::ResolvePinAny(Node, PinName, ResolveErr);
     if (!Pin)
-        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Pin '%s' not found on node '%s'"), *PinName, *NodeId));
+    {
+        return FUnrealMCPPinResolver::MakeErrorResponse(
+            FString::Printf(TEXT("Pin '%s' not found on node '%s'"), *PinName, *NodeId),
+            ResolveErr);
+    }
 
     const int32 NumLinksBefore = Pin->LinkedTo.Num();
 

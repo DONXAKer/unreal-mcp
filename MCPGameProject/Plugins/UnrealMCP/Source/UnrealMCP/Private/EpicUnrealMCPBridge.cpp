@@ -67,6 +67,8 @@
 #include "Commands/AnimationBPCommands.h"
 #include "Commands/PIECommands.h"
 #include "Commands/UMGTestCommands.h"
+#include "Commands/UMGRuntimeCommands.h"
+#include "Commands/EnhancedInputCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -89,6 +91,8 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     AnimationBPCommands = MakeShared<FAnimationBPCommands>();
     PIECommands = MakeShared<FPIECommands>();
     UMGTestCommands = MakeShared<FUMGTestCommands>();
+    UMGRuntimeCommands = MakeShared<FUMGRuntimeCommands>();
+    EnhancedInputCommands = MakeShared<FEnhancedInputCommands>();
     ConsoleCommands = MakeShared<FUnrealMCPConsoleCommands>();
 }
 
@@ -109,6 +113,8 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     AnimationBPCommands.Reset();
     PIECommands.Reset();
     UMGTestCommands.Reset();
+    UMGRuntimeCommands.Reset();
+    EnhancedInputCommands.Reset();
     ConsoleCommands.Reset();
 }
 
@@ -258,7 +264,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("2.6.0"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("2.10.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -398,6 +404,19 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("get_widget_tree"))
             {
                 ResultJson = UMGTestCommands->HandleCommand(CommandType, Params);
+            }
+            // UMG runtime mutations (v2.8.0 — MCP-PLUGIN-002: Unicode text input)
+            else if (CommandType == TEXT("set_text_on_widget"))
+            {
+                ResultJson = UMGRuntimeCommands->HandleCommand(CommandType, Params);
+            }
+            // Enhanced Input — UE5.7 native (v2.10.0 — MCP-PLUGIN-004)
+            else if (CommandType == TEXT("create_input_action") ||
+                     CommandType == TEXT("create_input_mapping_context") ||
+                     CommandType == TEXT("add_input_action_mapping") ||
+                     CommandType == TEXT("add_enhanced_input_action_event_node"))
+            {
+                ResultJson = EnhancedInputCommands->HandleCommand(CommandType, Params);
             }
             // Arbitrary console-command execution (v2.6.0 — engine Exec proxy)
             else if (CommandType == TEXT("execute_console_command"))

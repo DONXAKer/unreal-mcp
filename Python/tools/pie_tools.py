@@ -34,6 +34,8 @@ def register_pie_tools(mcp: FastMCP) -> None:
         ctx: Context[Any, Any, Any],
         level_name: str = "",
         mode: str = "selected_viewport",
+        num_clients: int = 1,
+        dedicated_server: bool = False,
     ) -> dict[str, Any]:
         """Start a Play-In-Editor session.
 
@@ -44,13 +46,19 @@ def register_pie_tools(mcp: FastMCP) -> None:
             mode: "selected_viewport" (default) or "new_window". The mode is
                   advisory in the current implementation; PIE uses the project's
                   configured Editor Play Settings.
+            num_clients: MCP-PLUGIN-003 — number of PIE clients to spawn
+                         (1..8). Default 1 (legacy behaviour). Each client gets
+                         its own UWorld / PlayerController. Use `controller_index`
+                         in subsequent commands to target a specific one.
+            dedicated_server: If True, spawn a separate dedicated server in
+                              addition to the clients. Default False (listen-server).
 
         Returns:
-            { started: bool, mode: str, note: str }
+            { started, mode, num_clients, dedicated_server, clients: [...], note }
 
         Note:
             PIE startup is async. Poll `pie_status` until `is_running == true`
-            and `has_player_controller == true` before issuing input commands.
+            and `num_clients` clients actually appear in the `clients[]` array.
         """
         from unreal_mcp_server import get_unreal_connection
 
@@ -58,7 +66,11 @@ def register_pie_tools(mcp: FastMCP) -> None:
         if not unreal:
             return {"status": "error", "error": "No Unreal connection"}
 
-        params: dict[str, Any] = {"mode": mode}
+        params: dict[str, Any] = {
+            "mode": mode,
+            "num_clients": num_clients,
+            "dedicated_server": dedicated_server,
+        }
         if level_name:
             params["level_name"] = level_name
 
@@ -111,7 +123,11 @@ def register_pie_tools(mcp: FastMCP) -> None:
     # ─────────────────────────────────────────────────────────────────
 
     @mcp.tool()
-    def find_widget(ctx: Context[Any, Any, Any], widget_name: str) -> dict[str, Any]:
+    def find_widget(
+        ctx: Context[Any, Any, Any],
+        widget_name: str,
+        controller_index: int = 0,
+    ) -> dict[str, Any]:
         """One-shot probe: is a UMG widget with this name currently alive in PIE?
 
         Searches every active UUserWidget in the PIE world (both the root
@@ -121,6 +137,9 @@ def register_pie_tools(mcp: FastMCP) -> None:
         Args:
             widget_name: Name of the widget to look for (e.g. "LoginButton",
                          "WBP_GameResult_C_0").
+            controller_index: MCP-PLUGIN-003 — which PIE client to search.
+                              Default 0. Multi-client PIE has one UWorld per
+                              client; setting this filters the iteration.
 
         Returns:
             { found: bool, widget_name, widget_class, owner_user_widget, visible }
@@ -131,7 +150,10 @@ def register_pie_tools(mcp: FastMCP) -> None:
         if not unreal:
             return {"status": "error", "error": "No Unreal connection"}
 
-        response = unreal.send_command("find_widget", {"widget_name": widget_name})
+        response = unreal.send_command(
+            "find_widget",
+            {"widget_name": widget_name, "controller_index": controller_index},
+        )
         return response or {"status": "error", "error": "No response"}
 
     @mcp.tool()
@@ -140,6 +162,7 @@ def register_pie_tools(mcp: FastMCP) -> None:
         widget_name: str,
         timeout_ms: int = 5000,
         poll_interval_ms: int = 200,
+        controller_index: int = 0,
     ) -> dict[str, Any]:
         """Poll until a UMG widget appears, or until timeout.
 
@@ -168,7 +191,10 @@ def register_pie_tools(mcp: FastMCP) -> None:
 
         while True:
             attempts += 1
-            response = unreal.send_command("find_widget", {"widget_name": widget_name}) or {}
+            response = unreal.send_command(
+                "find_widget",
+                {"widget_name": widget_name, "controller_index": controller_index},
+            ) or {}
             last = response
 
             # Plugin returns {"status":"success","result":{...,"found":bool}} or
@@ -200,7 +226,11 @@ def register_pie_tools(mcp: FastMCP) -> None:
             await asyncio.sleep(poll_interval_ms / 1000.0)
 
     @mcp.tool()
-    def click_widget_by_name(ctx: Context[Any, Any, Any], widget_name: str) -> dict[str, Any]:
+    def click_widget_by_name(
+        ctx: Context[Any, Any, Any],
+        widget_name: str,
+        controller_index: int = 0,
+    ) -> dict[str, Any]:
         """Simulate a left-mouse click on a named UMG widget in PIE.
 
         The plugin locates the widget by GetName(), reads its cached Slate
@@ -209,6 +239,8 @@ def register_pie_tools(mcp: FastMCP) -> None:
 
         Args:
             widget_name: Name of the widget to click.
+            controller_index: MCP-PLUGIN-003 — restrict widget search to the
+                              UWorld of the N-th PIE client. Default 0.
 
         Returns:
             { clicked: bool, widget_name, widget_class, screen_x, screen_y,
@@ -220,12 +252,22 @@ def register_pie_tools(mcp: FastMCP) -> None:
         if not unreal:
             return {"status": "error", "error": "No Unreal connection"}
 
-        response = unreal.send_command("click_widget_by_name", {"widget_name": widget_name})
+        response = unreal.send_command(
+            "click_widget_by_name",
+            {"widget_name": widget_name, "controller_index": controller_index},
+        )
         return response or {"status": "error", "error": "No response"}
 
     @mcp.tool()
-    def get_widget_tree(ctx: Context[Any, Any, Any]) -> dict[str, Any]:
+    def get_widget_tree(
+        ctx: Context[Any, Any, Any],
+        controller_index: int = 0,
+    ) -> dict[str, Any]:
         """DOM-like snapshot of every active UUserWidget in the PIE world.
+
+        Args:
+            controller_index: MCP-PLUGIN-003 — restrict to the UWorld of the
+                              N-th PIE client. Default 0.
 
         Returns:
             {
@@ -245,7 +287,10 @@ def register_pie_tools(mcp: FastMCP) -> None:
         if not unreal:
             return {"status": "error", "error": "No Unreal connection"}
 
-        response = unreal.send_command("get_widget_tree", {})
+        response = unreal.send_command(
+            "get_widget_tree",
+            {"controller_index": controller_index},
+        )
         return response or {"status": "error", "error": "No response"}
 
     # ─────────────────────────────────────────────────────────────────
@@ -257,6 +302,7 @@ def register_pie_tools(mcp: FastMCP) -> None:
         ctx: Context[Any, Any, Any],
         filename: str = "PIEScreenshot.png",
         show_ui: bool = True,
+        controller_index: int | None = None,
     ) -> dict[str, Any]:
         """Capture the PIE game viewport (NOT the editor viewport) to a PNG.
 
@@ -267,6 +313,11 @@ def register_pie_tools(mcp: FastMCP) -> None:
             filename: Output filename (".png" appended if missing). Default
                       "PIEScreenshot.png".
             show_ui:  Include UMG overlays in the capture. Default True.
+            controller_index: MCP-PLUGIN-003 — which PIE client's viewport to
+                              capture. When set, suffix `_clientN` is inserted
+                              before extension (foo.png → foo_client1.png).
+                              Default None (legacy: capture first PIE world,
+                              no suffix).
 
         Returns:
             { status, assetPath, filename, show_ui, source, note }
@@ -279,15 +330,138 @@ def register_pie_tools(mcp: FastMCP) -> None:
         if not unreal:
             return {"status": "error", "error": "No Unreal connection"}
 
+        params: dict[str, Any] = {"filename": filename, "show_ui": show_ui}
+        if controller_index is not None:
+            params["controller_index"] = controller_index
+
+        response = unreal.send_command("pie_screenshot", params)
+        return response or {"status": "error", "error": "No response"}
+
+    @mcp.tool()
+    def tick_world(
+        ctx: Context[Any, Any, Any],
+        num_ticks: int = 1,
+        delta_seconds: float = 1.0 / 60.0,
+    ) -> dict[str, Any]:
+        """Advance the PIE world simulation by N synchronous ticks.
+
+        Useful for deterministic e2e tests that should not depend on real
+        wall-clock time — e.g. step-by-step state machines, animation
+        progression, timer expiration. Calls World->Tick(LEVELTICK_All,
+        delta_seconds) on `GEditor->PlayWorld` for `num_ticks` iterations
+        (plugin clamps to 1..1000).
+
+        Args:
+            num_ticks: How many ticks to advance. Default 1.
+            delta_seconds: Fake DeltaTime per tick (seconds). Default 1/60.
+
+        Returns:
+            { ticked, delta_seconds, total_delta, world_time_before, world_time_after }
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"status": "error", "error": "No Unreal connection"}
+
         response = unreal.send_command(
-            "pie_screenshot",
-            {"filename": filename, "show_ui": show_ui},
+            "tick_world",
+            {"num_ticks": num_ticks, "delta_seconds": delta_seconds},
         )
         return response or {"status": "error", "error": "No response"}
 
     @mcp.tool()
-    def simulate_key(ctx: Context[Any, Any, Any], key: str) -> dict[str, Any]:
-        """Simulate a key press+release on the first PIE PlayerController.
+    async def wait_for_condition(
+        ctx: Context[Any, Any, Any],
+        command: str,
+        params: dict[str, Any] | None = None,
+        predicate_path: str = "found",
+        timeout_ms: int = 5000,
+        poll_interval_ms: int = 200,
+    ) -> dict[str, Any]:
+        """Generic poller — call any MCP command in a loop until a field becomes truthy.
+
+        Sends `command` with `params` repeatedly, sleeping `poll_interval_ms`
+        between attempts. Returns as soon as the value at `predicate_path`
+        evaluates truthy (or once total elapsed exceeds `timeout_ms`).
+
+        `predicate_path` is a dotted path into the response — e.g. "found",
+        "is_running", "result.has_player_controller". The poller looks both
+        in the raw response and inside a "result" wrapper (envelope).
+
+        Args:
+            command: MCP command name to invoke each poll, e.g. "pie_status".
+            params: Params dict for the command. Default {}.
+            predicate_path: Dotted path that must become truthy. Default "found".
+            timeout_ms: Maximum total wait, in milliseconds. Default 5000.
+            poll_interval_ms: Sleep between probes. Default 200ms.
+
+        Returns:
+            { satisfied: bool, elapsed_ms: int, attempts: int,
+              last_response: dict, predicate_path: str }
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"status": "error", "error": "No Unreal connection"}
+
+        params = params or {}
+        path_parts = [p for p in predicate_path.split(".") if p]
+
+        def _resolve(obj: Any, parts: list[str]) -> Any:
+            cur: Any = obj
+            for part in parts:
+                if isinstance(cur, dict) and part in cur:
+                    cur = cur[part]
+                else:
+                    return None
+            return cur
+
+        def _is_truthy(resp: Any) -> bool:
+            # Try raw response first, then unwrapped envelope under "result".
+            val = _resolve(resp, path_parts)
+            if val is None and isinstance(resp, dict) and "result" in resp:
+                val = _resolve(resp.get("result"), path_parts)
+            return bool(val)
+
+        deadline = time.monotonic() + (timeout_ms / 1000.0)
+        start = time.monotonic()
+        attempts = 0
+        last: dict[str, Any] = {}
+
+        while True:
+            attempts += 1
+            response = unreal.send_command(command, params) or {}
+            last = response
+
+            if _is_truthy(response):
+                return {
+                    "satisfied": True,
+                    "elapsed_ms": int((time.monotonic() - start) * 1000),
+                    "attempts": attempts,
+                    "last_response": last,
+                    "predicate_path": predicate_path,
+                }
+
+            if time.monotonic() >= deadline:
+                return {
+                    "satisfied": False,
+                    "elapsed_ms": int((time.monotonic() - start) * 1000),
+                    "attempts": attempts,
+                    "last_response": last,
+                    "predicate_path": predicate_path,
+                }
+
+            await asyncio.sleep(poll_interval_ms / 1000.0)
+
+    @mcp.tool()
+    def simulate_key(
+        ctx: Context[Any, Any, Any],
+        key: str,
+        controller_index: int = 0,
+    ) -> dict[str, Any]:
+        """Simulate a key press+release on a PIE PlayerController.
 
         Uses APlayerController::InputKey under the hood (Pressed then Released
         in the same call, single tick). For mouse buttons prefer
@@ -296,9 +470,11 @@ def register_pie_tools(mcp: FastMCP) -> None:
         Args:
             key: Engine key name — e.g. "SpaceBar", "E", "Enter",
                  "LeftMouseButton" (see EKeys::* identifiers in UE source).
+            controller_index: MCP-PLUGIN-003 — which PIE client receives the
+                              key. Default 0 (legacy behaviour: first PC).
 
         Returns:
-            { sent: bool, key: str, controller_name: str }
+            { sent: bool, key: str, controller_index: int, controller_name: str }
         """
         from unreal_mcp_server import get_unreal_connection
 
@@ -306,7 +482,10 @@ def register_pie_tools(mcp: FastMCP) -> None:
         if not unreal:
             return {"status": "error", "error": "No Unreal connection"}
 
-        response = unreal.send_command("simulate_key", {"key": key})
+        response = unreal.send_command(
+            "simulate_key",
+            {"key": key, "controller_index": controller_index},
+        )
         return response or {"status": "error", "error": "No response"}
 
-    logger.info("Registered PIE / UMG automation tools (pie_*, find_widget, wait_for_widget, click_widget_by_name, get_widget_tree, simulate_key)")
+    logger.info("Registered PIE / UMG automation tools (pie_*, find_widget, wait_for_widget, click_widget_by_name, get_widget_tree, simulate_key, tick_world, wait_for_condition)")

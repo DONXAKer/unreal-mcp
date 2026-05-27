@@ -1,5 +1,6 @@
 #include "Commands/UMGTestCommands.h"
 #include "Commands/EpicUnrealMCPCommonUtils.h"
+#include "Commands/PIEUtils.h"
 
 #include "Editor.h"
 #include "Engine/World.h"
@@ -139,8 +140,17 @@ TSharedPtr<FJsonObject> FUMGTestCommands::HandleFindWidget(const TSharedPtr<FJso
         return Result;
     }
 
+    // MCP-PLUGIN-003: controller_index — фильтруем по конкретному PIE world.
+    int32 ControllerIndex = 0;
+    Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+    UWorld* SearchWorld = FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex);
+    if (!SearchWorld)
+    {
+        SearchWorld = GEditor->PlayWorld;
+    }
+
     UUserWidget* Owner = nullptr;
-    UWidget* Found = FindWidgetByName(GEditor->PlayWorld, WidgetName, Owner);
+    UWidget* Found = FindWidgetByName(SearchWorld, WidgetName, Owner);
 
     TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
     Result->SetBoolField(TEXT("found"), Found != nullptr);
@@ -167,8 +177,17 @@ TSharedPtr<FJsonObject> FUMGTestCommands::HandleClickWidgetByName(const TSharedP
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No active PIE world — call pie_start first"));
     }
 
+    // MCP-PLUGIN-003: controller_index — ищем в world выбранного клиента.
+    int32 ControllerIndex = 0;
+    Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+    UWorld* SearchWorld = FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex);
+    if (!SearchWorld)
+    {
+        SearchWorld = GEditor->PlayWorld;
+    }
+
     UUserWidget* Owner = nullptr;
-    UWidget* Target = FindWidgetByName(GEditor->PlayWorld, WidgetName, Owner);
+    UWidget* Target = FindWidgetByName(SearchWorld, WidgetName, Owner);
     if (!Target)
     {
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
@@ -246,7 +265,15 @@ TSharedPtr<FJsonObject> FUMGTestCommands::HandleGetWidgetTree(const TSharedPtr<F
         return Result;
     }
 
-    UWorld* PlayWorld = GEditor->PlayWorld;
+    // MCP-PLUGIN-003: controller_index — фильтруем по нужному PIE world.
+    int32 ControllerIndex = 0;
+    Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+    UWorld* PlayWorld = FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex);
+    if (!PlayWorld)
+    {
+        PlayWorld = GEditor->PlayWorld;
+    }
+
     for (TObjectIterator<UUserWidget> It; It; ++It)
     {
         UUserWidget* UW = *It;
