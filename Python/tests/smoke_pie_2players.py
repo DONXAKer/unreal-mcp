@@ -42,10 +42,26 @@ USER2 = ("warcard_test_2", "Test1234", "warcard_test_2@example.com")
 POST_QUEUE_WIDGETS = ["WBP_Draft_C_0", "WBP_Mulligan_C_0", "WBP_DeploymentScreen_C_0"]
 
 
-def _send_raw(cmd, params):
-    """unwrap_result для случаев когда response может быть пустым (ничего критичного)."""
-    resp = pie_send(cmd, params)
-    return resp.get("result", resp) if isinstance(resp, dict) else {}
+def _send_raw(cmd, params, retries: int = 3, retry_delay: float = 0.5):
+    """Send с retry — multi-PIE bridge может задумываться под concurrent load
+    на 30s+, и одного timeout'а недостаточно (см. _inline_2p_stepwise.py: client 1
+    login занимает до 13s end-to-end; find_widget при том может тайматься на
+    промежуточных тиках). Retry создаёт новый socket — это снимает зависание
+    на конкретной TCP-сессии без affecting bridge worker thread."""
+    last_resp = None
+    for attempt in range(retries):
+        try:
+            resp = pie_send(cmd, params)
+            if isinstance(resp, dict):
+                return resp.get("result", resp)
+            return {}
+        except SmokeFailure as exc:
+            last_resp = exc
+            if attempt < retries - 1:
+                time.sleep(retry_delay)
+                continue
+            raise
+    return {}
 
 
 def _wait_pie_ready_multi(num_clients: int, timeout_s: float = 25.0) -> dict:
@@ -88,8 +104,9 @@ def _login_client(controller_index: int, login: str, password: str):
     _send_raw("invoke_button_click", {"widget_name": "LoginButton",
                                        "controller_index": controller_index})
 
-    # Wait MainMenu
-    deadline = time.monotonic() + 10.0
+    # Wait MainMenu — client 1 наблюдается до 13s под нагрузкой multi-PIE,
+    # поэтому даём 20s с запасом.
+    deadline = time.monotonic() + 20.0
     while time.monotonic() < deadline:
         r = _send_raw("find_widget", {"widget_name": "WBP_MainMenu_C_0",
                                        "controller_index": controller_index})
@@ -97,7 +114,7 @@ def _login_client(controller_index: int, login: str, password: str):
             return
         time.sleep(0.3)
     raise SmokeFailure(-1, f"login[c{controller_index}]",
-                       "WBP_MainMenu_C_0 не появился за 10s", {})
+                       "WBP_MainMenu_C_0 не появился за 20s", {})
 
 
 def _find_any_post_queue_widget(controller_index: int) -> str | None:
@@ -136,6 +153,10 @@ def main(argv: list[str]) -> int:
 
     def s_login_both():
         _login_client(0, USER1[0], USER1[1])
+        # Пауза даёт серверу обработать первый login + STOMP handshake до того,
+        # как второй клиент начнёт свой flow. Без неё multi-PIE bridge может
+        # затупить под concurrent нагрузкой.
+        time.sleep(2.0)
         _login_client(1, USER2[0], USER2[1])
 
     def s_find_game_both():
