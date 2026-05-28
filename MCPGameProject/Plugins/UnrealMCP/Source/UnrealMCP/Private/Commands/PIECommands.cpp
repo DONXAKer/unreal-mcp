@@ -65,14 +65,58 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStart(const TSharedPtr<FJsonObjec
     bool bDedicatedServer = false;
     Params->TryGetBoolField(TEXT("dedicated_server"), bDedicatedServer);
 
-    // Применяем NumberOfClients через ULevelEditorPlaySettings (только при изменении —
-    // не трогаем настройки если пользователь сам запустил с дефолтом 1).
-    if (NumClients != 1 || bDedicatedServer)
+    // Конфигурируем ULevelEditorPlaySettings ПЕРЕД RequestPlaySession.
+    //
+    // FIX-UI-008: для num_clients>1 нужны N НЕЗАВИСИМЫХ standalone PIE-инстансов
+    // в ОДНОМ процессе редактора (чтобы единственный MCP TCP-listener мог рулить
+    // обоими). Раньше выставлялся только SetPlayNumberOfClients(N) — без net mode
+    // и run-under-one-process, что при дефолтных настройках проекта давало ОДИН
+    // общий UWorld с N локальными игроками (split-screen) → один набор UMG-виджетов
+    // → войти мог только один клиент.
+    //
+    // Правильная комбинация (проверено по UE5.7 PlayLevel.cpp):
+    //   SetRunUnderOneProcess(true)
+    //     — в PlayLevel.cpp::1156-1172 ветка bIsSeparateProcess |= NumClients>1
+    //       выполняется ТОЛЬКО при !RunUnderOneProcess. С RunUnderOneProcess=true
+    //       движок остаётся в этом же процессе (StartPlayInEditorSession,
+    //       а не StartPlayInNewProcessSession) — MCP сохраняет TCP-доступ.
+    //   SetPlayNetMode(PIE_Standalone)
+    //     — для Standalone bNeedsServer=false (PlayLevel.cpp::2837-2839): UE НЕ
+    //       поднимает ни dedicated, ни listen-server. WarCard-клиенты ходят на
+    //       внешний Spring/STOMP (8081), UE-репликация не нужна.
+    //   SetPlayNumberOfClients(N)
+    //     — цикл PlayLevel.cpp::2886-2911 создаёт N PIE WorldContext'ов через
+    //       CreateNewPlayInEditorInstance с LocalNetMode=PIE_Standalone. Каждый
+    //       инстанс — полный game boot со своим GameInstance/GameMode/PlayerController
+    //       и своим viewport'ом → свой WBP_Login. Серверного контекста не создаётся.
+    //
+    // bDedicatedServer оставлен как явный override (на случай отладки UE-server-flow):
+    // он включает bLaunchSeparateServer и переводит net mode в PIE_Client.
+    if (ULevelEditorPlaySettings* PlaySettings = GetMutableDefault<ULevelEditorPlaySettings>())
     {
-        if (ULevelEditorPlaySettings* PlaySettings = GetMutableDefault<ULevelEditorPlaySettings>())
+        PlaySettings->SetPlayNumberOfClients(NumClients);
+
+        if (bDedicatedServer)
         {
-            PlaySettings->SetPlayNumberOfClients(NumClients);
-            PlaySettings->bLaunchSeparateServer = bDedicatedServer;
+            // Явный режим UE dedicated server (редко нужен для WarCard).
+            // PIE_Client + bLaunchSeparateServer → отдельный server-контекст,
+            // клиенты к нему подключаются. PIEUtils отфильтрует server-world.
+            PlaySettings->SetPlayNetMode(EPlayNetMode::PIE_Client);
+            PlaySettings->bLaunchSeparateServer = true;
+            PlaySettings->SetRunUnderOneProcess(true);
+        }
+        else if (NumClients > 1)
+        {
+            // Основной кейс WarCard: N независимых standalone-клиентов в одном процессе.
+            PlaySettings->SetPlayNetMode(EPlayNetMode::PIE_Standalone);
+            PlaySettings->bLaunchSeparateServer = false;
+            PlaySettings->SetRunUnderOneProcess(true);
+        }
+        else
+        {
+            // num_clients==1 — НЕ регрессируем общий кейс: классический single-PIE.
+            PlaySettings->SetPlayNetMode(EPlayNetMode::PIE_Standalone);
+            PlaySettings->bLaunchSeparateServer = false;
         }
     }
 
@@ -152,7 +196,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStatus(const TSharedPtr<FJsonObje
     Result->SetBoolField(TEXT("is_running"), true);
     Result->SetStringField(TEXT("world_name"), PlayWorld->GetName());
     Result->SetNumberField(TEXT("elapsed_seconds"), PlayWorld->GetTimeSeconds());
-    Result->SetStringField(TEXT("plugin_version"), TEXT("2.16.1"));
+    Result->SetStringField(TEXT("plugin_version"), TEXT("2.17.0"));
 
     APlayerController* PC = PlayWorld->GetFirstPlayerController();
     Result->SetBoolField(TEXT("has_player_controller"), PC != nullptr);

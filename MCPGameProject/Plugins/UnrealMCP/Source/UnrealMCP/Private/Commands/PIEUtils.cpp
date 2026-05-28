@@ -17,7 +17,20 @@
 
 namespace UnrealMCPPIEInternal
 {
-    /** Собрать все PIE-WorldContext'ы (отсортированные по PIEInstance). */
+    /**
+     * Собрать все КЛИЕНТСКИЕ PIE-WorldContext'ы (отсортированные по PIEInstance).
+     *
+     * FIX-UI-008: исключаем dedicated-server контекст. Когда pie_start запущен с
+     * dedicated_server=true (или любой UE net-flow, поднимающий server-world),
+     * среди PIE-контекстов появляется мир с GetNetMode()==NM_DedicatedServer.
+     * У него нет ни viewport'а, ни клиентского UMG — controller_index не должен
+     * на него попадать. Отфильтровав server-контекст здесь, мы гарантируем, что
+     * index 0/1 = первый/второй РЕАЛЬНЫЙ клиент.
+     *
+     * Для основного WarCard-кейса (PIE_Standalone, num_clients>1) серверного
+     * контекста нет вовсе, поэтому фильтр — no-op, и просто возвращаются N
+     * standalone-клиентов в порядке PIEInstance.
+     */
     static TArray<const FWorldContext*> CollectPIEContexts()
     {
         TArray<const FWorldContext*> Result;
@@ -27,10 +40,20 @@ namespace UnrealMCPPIEInternal
         }
         for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
         {
-            if (Ctx.WorldType == EWorldType::PIE)
+            if (Ctx.WorldType != EWorldType::PIE)
             {
-                Result.Add(&Ctx);
+                continue;
             }
+
+            // Пропускаем dedicated-server world — он не клиент.
+            if (const UWorld* W = Ctx.World())
+            {
+                if (W->GetNetMode() == NM_DedicatedServer)
+                {
+                    continue;
+                }
+            }
+            Result.Add(&Ctx);
         }
         Result.Sort([](const FWorldContext& A, const FWorldContext& B)
         {
@@ -73,20 +96,48 @@ APlayerController* FUnrealMCPPIEUtils::GetPlayerControllerByIndex(int32 Index)
         return nullptr;
     }
 
-    // Стратегия 1: multi-PIE — каждый клиент в отдельном WorldContext.
+    // Стратегия 1: multi-PIE — каждый клиент в отдельном (клиентском) WorldContext.
+    // FIX-UI-008: если найдено >1 клиентского контекста — это true multi-client
+    // standalone. Мапим index СТРОГО на N-й клиентский world и НЕ откатываемся
+    // на split-screen fallback (иначе оба индекса резолвятся в один PlayWorld).
     TArray<const FWorldContext*> Contexts = UnrealMCPPIEInternal::CollectPIEContexts();
-    if (Contexts.Num() > Index)
+    if (Contexts.Num() > 1)
     {
-        if (UWorld* W = Contexts[Index]->World())
+        if (Contexts.IsValidIndex(Index))
+        {
+            if (UWorld* W = Contexts[Index]->World())
+            {
+                // GetFirstPlayerController() может быть null на ранних тиках до
+                // полного boot'а инстанса — это нормально, вызывающий ретраит.
+                return W->GetFirstPlayerController();
+            }
+        }
+        return nullptr;
+    }
+
+    // Один клиентский контекст: пробуем его world, иначе PlayWorld.
+    if (Contexts.Num() == 1)
+    {
+        if (UWorld* W = Contexts[0]->World())
         {
             if (APlayerController* PC = W->GetFirstPlayerController())
             {
-                return PC;
+                // Если в единственном world несколько PC (split-screen) — индексируем по ним.
+                TArray<APlayerController*> Controllers = UnrealMCPPIEInternal::CollectControllersInWorld(W);
+                if (Controllers.IsValidIndex(Index))
+                {
+                    return Controllers[Index];
+                }
+                if (Index == 0)
+                {
+                    return PC;
+                }
             }
         }
     }
 
-    // Стратегия 2: один PIE world с N PlayerController'ами (split-screen).
+    // Стратегия 2 (fallback): один PIE world с N PlayerController'ами (split-screen),
+    // когда контексты ещё не собрались, но GEditor->PlayWorld уже есть.
     if (UWorld* PlayWorld = GEditor->PlayWorld)
     {
         TArray<APlayerController*> Controllers = UnrealMCPPIEInternal::CollectControllersInWorld(PlayWorld);
@@ -107,7 +158,8 @@ int32 FUnrealMCPPIEUtils::GetNumPIEClients()
 {
     TArray<const FWorldContext*> Contexts = UnrealMCPPIEInternal::CollectPIEContexts();
 
-    // Случай multi-PIE — клиентов = число PIE контекстов.
+    // FIX-UI-008: multi-client standalone — клиентов = число КЛИЕНТСКИХ PIE
+    // контекстов (dedicated-server уже отфильтрован в CollectPIEContexts).
     if (Contexts.Num() > 1)
     {
         return Contexts.Num();
@@ -138,10 +190,18 @@ UWorld* FUnrealMCPPIEUtils::GetPIEWorldForClient(int32 Index)
         return nullptr;
     }
 
+    // FIX-UI-008: multi-client — мапим строго на N-й КЛИЕНТСКИЙ world
+    // (dedicated-server отфильтрован в CollectPIEContexts). Для num_clients==1
+    // (Contexts.Num()<=1) сохраняем fallback на GEditor->PlayWorld — общий кейс
+    // не регрессирует.
     TArray<const FWorldContext*> Contexts = UnrealMCPPIEInternal::CollectPIEContexts();
-    if (Contexts.Num() > Index)
+    if (Contexts.Num() > 1)
     {
-        return Contexts[Index]->World();
+        return Contexts.IsValidIndex(Index) ? Contexts[Index]->World() : nullptr;
+    }
+    if (Contexts.Num() == 1 && Index == 0)
+    {
+        return Contexts[0]->World();
     }
     return GEditor->PlayWorld;
 }

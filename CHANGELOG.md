@@ -17,6 +17,31 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [2.17.0] — 2026-05-28
+
+Multi-client PIE теперь поднимает N независимых standalone-клиентов в ОДНОМ процессе редактора (FIX-UI-008).
+
+### Changed
+
+- `PIECommands.cpp:HandlePieStart` — для `num_clients > 1` конфигурирует `ULevelEditorPlaySettings` комбинацией `SetRunUnderOneProcess(true)` + `SetPlayNetMode(PIE_Standalone)` + `SetPlayNumberOfClients(N)`. Раньше выставлялся только `SetPlayNumberOfClients(N)` без net mode и run-under-one-process, что давало ОДИН общий `UWorld` с N локальными игроками (split-screen) — единственный набор UMG-виджетов, войти мог лишь один клиент. Теперь UE создаёт N полноценных standalone PIE-инстансов (каждый со своим `GameInstance`/`PlayerController`/viewport'ом → своим `WBP_Login`), всё в этом же процессе, поэтому единственный MCP TCP-listener (55557) рулит обоими через `controller_index`. `num_clients == 1` не регрессирует (классический single-PIE).
+- `dedicated_server=true` теперь явно включает `PIE_Client` + `bLaunchSeparateServer` + `RunUnderOneProcess(true)` (UE-server-flow для отладки; для WarCard не нужен — клиенты ходят на внешний Spring/STOMP :8081).
+
+### Fixed
+
+- `PIEUtils.cpp:CollectPIEContexts` теперь исключает dedicated-server `WorldContext` (`World->GetNetMode() == NM_DedicatedServer`), чтобы `controller_index` 0/1 всегда указывал на реальные КЛИЕНТСКИЕ миры, а не на server-world без viewport'а/UMG.
+- `PIEUtils.cpp:GetPlayerControllerByIndex` / `GetPIEWorldForClient` — при наличии >1 клиентского контекста индекс мапится СТРОГО на N-й клиентский world и больше НЕ откатывается на split-screen fallback (`GEditor->PlayWorld`), из-за которого оба индекса резолвились в один и тот же `WBP_Login_C_0` / `BP_StrategyPlayerController_C_0`.
+
+### Why
+
+Диагностика против живого редактора (v2.16.1): `pie_status` с `num_clients=2`
+показывал оба клиента с идентичными `world_name=MainMenu_Map` и
+`controller_name=BP_StrategyPlayerController_C_0`; `set_text_on_widget` /
+`invoke_button_click` для index=0 и index=1 возвращали ОДИН и тот же
+`WBP_Login_C_0`. Тесты matchmaking/draft/battle с двумя клиентами были
+невозможны — второй клиент не имел собственного UI и не мог залогиниться.
+
+---
+
 ## [2.16.1] — 2026-05-28
 
 Critical patch: UE краш при вызове void-функций без параметров через `InvokeFunction`.
