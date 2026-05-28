@@ -65,8 +65,12 @@ UWidget* FUMGTestCommands::FindWidgetByName(
             continue;
         }
         // MCP-PLUGIN-005: split-screen multi-client — фильтр по PC.
-        // Виджеты без owner — глобальные, принимаем; режем только явный чужой owner.
-        if (OwningPC && UW->GetOwningPlayer() != nullptr && UW->GetOwningPlayer() != OwningPC)
+        // FIX-UI-008: применяем фильтр ТОЛЬКО в single-world split-screen. В
+        // multi-world (PIE_ListenServer, каждый клиент в своём UWorld) разделение
+        // делает фильтр по World, а OwningPlayer-фильтр в listen-server world (где
+        // несколько PC) периодически режет ВСЕ виджеты — пик/клик не находил кнопку.
+        if (OwningPC && FUnrealMCPPIEUtils::GetNumPIEWorldContexts() <= 1
+            && UW->GetOwningPlayer() != nullptr && UW->GetOwningPlayer() != OwningPC)
         {
             continue;
         }
@@ -325,11 +329,12 @@ TSharedPtr<FJsonObject> FUMGTestCommands::HandleGetWidgetTree(const TSharedPtr<F
     {
         PlayWorld = GEditor->PlayWorld;
     }
-    // Применяем PC-фильтр только если controller_index ЯВНО задан.
-    // Случай "автоматически включить фильтр для multi-PIE" даёт пустой tree
-    // в момент когда widgets ещё не имеют owner (раннние тики после spawn).
+    // PC-фильтр только в single-world split-screen (FIX-UI-008). В multi-world
+    // (PIE_ListenServer) разделение клиентов делает фильтр по World; OwningPlayer-
+    // фильтр там периодически возвращал пустой tree (несколько PC в listen-server
+    // world → GetFirstPlayerController != owner виджета).
     APlayerController* OwningPC = nullptr;
-    if (bHasControllerIdx)
+    if (bHasControllerIdx && FUnrealMCPPIEUtils::GetNumPIEWorldContexts() <= 1)
     {
         OwningPC = FUnrealMCPPIEUtils::GetPlayerControllerByIndex(ControllerIndex);
     }

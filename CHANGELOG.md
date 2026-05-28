@@ -17,6 +17,33 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [2.17.2] — 2026-05-28
+
+Multi-world: `get_widget_tree`/`find_widget`/`invoke_button_click`/`set_text_on_widget` периодически не видели виджеты второго клиента (FIX-UI-008).
+
+### Fixed
+
+- OwningPlayer-фильтр (`MCP-PLUGIN-005`, для split-screen) теперь применяется ТОЛЬКО в single-world PIE. В multi-world (`PIE_ListenServer`, каждый клиент в своём `UWorld`) разделение клиентов делает фильтр по `World`, а фильтр по `OwningPlayer` в listen-server world (где несколько PlayerController'ов) периодически резал ВСЕ виджеты клиента → `get_widget_tree(controller_index)` возвращал пустой список, `invoke_button_click`/`set_text_on_widget` не находили кнопку. Затронуты `UMGTestCommands.cpp` (`HandleGetWidgetTree`, `FindWidgetByName`) и `UMGRuntimeCommands.cpp` (`FindWidgetByName`).
+- Добавлен `FUnrealMCPPIEUtils::GetNumPIEWorldContexts()` — число отдельных клиентских PIE-контекстов; используется как признак multi-world.
+- `ping.plugin_version` / `pie_status.plugin_version` синхронизированы с `VersionName`.
+
+---
+
+## [2.17.1] — 2026-05-28
+
+Исправление multi-client PIE: `PIE_Standalone` не создавал отдельные миры (FIX-UI-008 v2).
+
+### Fixed
+
+- `PIECommands.cpp:HandlePieStart` — для `num_clients > 1` net mode изменён с `PIE_Standalone` на `PIE_ListenServer`. Эмпирически подтверждено (diag `_verify_multiworld` / `_diag_multiclient`): `PIE_Standalone` + `NumberOfClients>1` создаёт ОДИН world со split-screen локальными игроками (оба `controller_index` резолвятся в один `WBP_Login_C_0`), а не N отдельных миров. Отдельные клиентские миры в UE PIE рождаются только в сетевом режиме. `PIE_ListenServer` + `RunUnderOneProcess(true)` + `NumberOfClients=N` создаёт N инстансов (0 = listen-server-игрок, 1..N-1 = клиенты), каждый со своим world/`GameInstance`/`WBP_Login`, всё в одном процессе. listen-server world имеет `NM_ListenServer` (не `NM_DedicatedServer`), поэтому фильтр `PIEUtils::CollectPIEContexts` его не отбрасывает.
+- `EpicUnrealMCPBridge.cpp:269` — `ping.plugin_version` рассинхронизирован (оставался `2.16.1` при .uplugin 2.17.0); синхронизирован с `VersionName`.
+
+### Why
+
+В 2.17.0 был выбран `PIE_Standalone` по неверной трактовке `PlayLevel.cpp`; реальный прогон показал один общий мир — войти мог лишь один клиент. `PIE_ListenServer` — стандартный «test multiplayer in PIE» сетап, реально дающий N миров.
+
+---
+
 ## [2.17.0] — 2026-05-28
 
 Multi-client PIE теперь поднимает N независимых standalone-клиентов в ОДНОМ процессе редактора (FIX-UI-008).

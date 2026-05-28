@@ -43,6 +43,15 @@ public:
     static int32 GetNumPIEClients();
 
     /**
+     * Количество ОТДЕЛЬНЫХ клиентских PIE-WorldContext'ов (без dedicated-server).
+     * >1 → true multi-world (каждый клиент в своём UWorld) → разделение клиентов
+     * делает фильтр по World, и фильтр по OwningPlayer не нужен (и вреден в
+     * listen-server world, где несколько PC). ==1 → single-world split-screen,
+     * где для разделения клиентов нужен фильтр по OwningPlayer.
+     */
+    static int32 GetNumPIEWorldContexts();
+
+    /**
      * Получить UWorld N-го PIE-клиента. Для multi-PIE — отдельный world per client.
      * Для single-world multi-PC — возвращает общий PIE world.
      */

@@ -64,10 +64,11 @@ UWidget* FUMGRuntimeCommands::FindWidgetByName(
             continue;
         }
         // MCP-PLUGIN-005: для split-screen PIE фильтруем по OwningPlayer.
-        // Виджеты без явного owner (CreateWidget без указания PC) — принимаем
-        // как "глобальные" для текущего клиента; пропускаем только если widget
-        // явно принадлежит ДРУГОМУ PC (это и есть split-screen сценарий).
-        if (OwningPC && UW->GetOwningPlayer() != nullptr && UW->GetOwningPlayer() != OwningPC)
+        // FIX-UI-008: только в single-world. В multi-world (PIE_ListenServer) клиенты
+        // в разных UWorld — разделение делает фильтр по World; OwningPlayer-фильтр в
+        // listen-server world (несколько PC) периодически режет нужный виджет.
+        if (OwningPC && FUnrealMCPPIEUtils::GetNumPIEWorldContexts() <= 1
+            && UW->GetOwningPlayer() != nullptr && UW->GetOwningPlayer() != OwningPC)
         {
             continue;
         }

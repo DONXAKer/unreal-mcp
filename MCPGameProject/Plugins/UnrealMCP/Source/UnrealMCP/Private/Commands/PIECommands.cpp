@@ -107,8 +107,26 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStart(const TSharedPtr<FJsonObjec
         }
         else if (NumClients > 1)
         {
-            // Основной кейс WarCard: N независимых standalone-клиентов в одном процессе.
-            PlaySettings->SetPlayNetMode(EPlayNetMode::PIE_Standalone);
+            // Основной кейс WarCard: N независимых клиентских миров в ОДНОМ процессе.
+            //
+            // FIX-UI-008 v2: PIE_Standalone НЕ создаёт отдельные миры — при
+            // NumberOfClients>1 движок делает ОДИН world со split-screen локальными
+            // игроками (один набор UMG → войти может только один клиент). Отдельные
+            // клиентские миры в UE PIE рождаются ТОЛЬКО при сетевом режиме.
+            //
+            // PIE_ListenServer + RunUnderOneProcess + NumberOfClients=N создаёт N
+            // инстансов: instance 0 = listen-server-игрок, 1..N-1 = чистые клиенты.
+            // Каждый — полный boot со своим world/GameInstance/PlayerController и
+            // своим WBP_Login. Это стандартный "test multiplayer in PIE" сетап.
+            // Отдельный dedicated-процесс НЕ поднимается (bLaunchSeparateServer=false),
+            // поэтому единственный MCP TCP-listener рулит всеми инстансами.
+            //
+            // Игровое состояние WarCard живёт на внешнем Spring/STOMP — UE-репликация
+            // listen-server здесь не используется (роль server для геймплея неважна),
+            // нужна лишь как механизм, заставляющий PIE создать N отдельных миров.
+            // listen-server world имеет NetMode==NM_ListenServer (НЕ NM_DedicatedServer),
+            // поэтому PIEUtils его НЕ отфильтровывает — index 0 = server-игрок.
+            PlaySettings->SetPlayNetMode(EPlayNetMode::PIE_ListenServer);
             PlaySettings->bLaunchSeparateServer = false;
             PlaySettings->SetRunUnderOneProcess(true);
         }
@@ -196,7 +214,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStatus(const TSharedPtr<FJsonObje
     Result->SetBoolField(TEXT("is_running"), true);
     Result->SetStringField(TEXT("world_name"), PlayWorld->GetName());
     Result->SetNumberField(TEXT("elapsed_seconds"), PlayWorld->GetTimeSeconds());
-    Result->SetStringField(TEXT("plugin_version"), TEXT("2.17.0"));
+    Result->SetStringField(TEXT("plugin_version"), TEXT("2.17.2"));
 
     APlayerController* PC = PlayWorld->GetFirstPlayerController();
     Result->SetBoolField(TEXT("has_player_controller"), PC != nullptr);
@@ -220,6 +238,41 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStatus(const TSharedPtr<FJsonObje
         ClientsArr.Add(MakeShared<FJsonValueObject>(FUnrealMCPPIEUtils::DescribeClient(i)));
     }
     Result->SetArrayField(TEXT("clients"), ClientsArr);
+
+    // FIX-UI-008 diag: реальное число PIE-WorldContext'ов + фактические play settings
+    // (чтобы понять, создаёт ли движок отдельные миры и применяются ли наши настройки).
+    if (GEngine)
+    {
+        int32 PieContextCount = 0;
+        TArray<TSharedPtr<FJsonValue>> CtxArr;
+        for (const FWorldContext& Ctx : GEngine->GetWorldContexts())
+        {
+            if (Ctx.WorldType != EWorldType::PIE)
+            {
+                continue;
+            }
+            PieContextCount++;
+            TSharedPtr<FJsonObject> C = MakeShared<FJsonObject>();
+            C->SetNumberField(TEXT("pie_instance"), Ctx.PIEInstance);
+            const UWorld* W = Ctx.World();
+            C->SetStringField(TEXT("world"), W ? W->GetName() : TEXT("<null>"));
+            C->SetNumberField(TEXT("net_mode"), W ? (int32)W->GetNetMode() : -1);
+            CtxArr.Add(MakeShared<FJsonValueObject>(C));
+        }
+        Result->SetNumberField(TEXT("num_pie_world_contexts"), PieContextCount);
+        Result->SetArrayField(TEXT("pie_contexts"), CtxArr);
+    }
+    if (const ULevelEditorPlaySettings* PS = GetDefault<ULevelEditorPlaySettings>())
+    {
+        int32 PsNumClients = -1;       PS->GetPlayNumberOfClients(PsNumClients);
+        EPlayNetMode PsNetMode = EPlayNetMode::PIE_Standalone; PS->GetPlayNetMode(PsNetMode);
+        bool bPsRunUnderOne = false;   PS->GetRunUnderOneProcess(bPsRunUnderOne);
+        TSharedPtr<FJsonObject> PSObj = MakeShared<FJsonObject>();
+        PSObj->SetNumberField(TEXT("num_clients"), PsNumClients);
+        PSObj->SetNumberField(TEXT("net_mode"), (int32)PsNetMode);  // 0=Standalone,1=ListenServer,2=Client
+        PSObj->SetBoolField(TEXT("run_under_one_process"), bPsRunUnderOne);
+        Result->SetObjectField(TEXT("play_settings"), PSObj);
+    }
 
     return Result;
 }

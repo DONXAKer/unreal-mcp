@@ -154,6 +154,11 @@ APlayerController* FUnrealMCPPIEUtils::GetPlayerControllerByIndex(int32 Index)
 // GetNumPIEClients
 // ─────────────────────────────────────────────────────────────────────────────
 
+int32 FUnrealMCPPIEUtils::GetNumPIEWorldContexts()
+{
+    return UnrealMCPPIEInternal::CollectPIEContexts().Num();
+}
+
 int32 FUnrealMCPPIEUtils::GetNumPIEClients()
 {
     TArray<const FWorldContext*> Contexts = UnrealMCPPIEInternal::CollectPIEContexts();
