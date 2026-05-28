@@ -13,6 +13,7 @@ namespace
 {
     constexpr const TCHAR* kDeploymentSubsystemPath    = TEXT("/Script/Client.DeploymentSubsystem");
     constexpr const TCHAR* kUnitSelectionSubsystemPath = TEXT("/Script/Client.UnitSelectionSubsystem");
+    constexpr const TCHAR* kActionCardSubsystemPath    = TEXT("/Script/Client.ActionCardSubsystem");
 
     /** Установить значение FProperty из FJsonValue (int / string / bool). Возвращает false если type mismatch. */
     bool SetPropertyFromJson(FProperty* Prop, void* PropAddr, const TSharedPtr<FJsonValue>& Value, FString& OutError)
@@ -178,6 +179,9 @@ TSharedPtr<FJsonObject> FWarCardGameCommands::HandleCommand(const FString& Comma
     if (CommandType == TEXT("wc_deploy_unit"))           return HandleDeployUnit(Params);
     if (CommandType == TEXT("wc_confirm_deployment"))    return HandleConfirmDeployment(Params);
     if (CommandType == TEXT("wc_get_deployment_state"))  return HandleGetDeploymentState(Params);
+    if (CommandType == TEXT("wc_surrender"))             return HandleSurrender(Params);
+    if (CommandType == TEXT("wc_end_turn"))              return HandleEndTurn(Params);
+    if (CommandType == TEXT("wc_get_battle_state"))      return HandleGetBattleState(Params);
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown WarCard command: %s"), *CommandType));
@@ -410,6 +414,95 @@ TSharedPtr<FJsonObject> FWarCardGameCommands::HandleGetDeploymentState(const TSh
         ReadyResult->TryGetBoolField(TEXT("return"), bReady);
     }
     Result->SetBoolField(TEXT("ready"), bReady);
+
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FWarCardGameCommands::HandleSurrender(const TSharedPtr<FJsonObject>& Params)
+{
+    int32 ControllerIndex = 0;
+    Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+
+    FString Err;
+    UObject* Sub = ResolveSubsystem(ControllerIndex, kActionCardSubsystemPath, Err);
+    if (!Sub) return FEpicUnrealMCPCommonUtils::CreateErrorResponse(Err);
+
+    // Surrender — void, без аргументов. Возврата нет, поэтому "return" в Result
+    // может отсутствовать; выставляем явные success-флаги.
+    TMap<FString, TSharedPtr<FJsonValue>> NoArgs;
+    TSharedPtr<FJsonObject> Result = InvokeFunction(Sub, TEXT("Surrender"), NoArgs);
+    if (Result.IsValid())
+    {
+        Result->SetBoolField(TEXT("ok"), true);
+        Result->SetBoolField(TEXT("surrendered"), true);
+        Result->SetNumberField(TEXT("controller_index"), ControllerIndex);
+    }
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FWarCardGameCommands::HandleEndTurn(const TSharedPtr<FJsonObject>& Params)
+{
+    int32 ControllerIndex = 0;
+    Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+
+    FString Err;
+    UObject* Sub = ResolveSubsystem(ControllerIndex, kActionCardSubsystemPath, Err);
+    if (!Sub) return FEpicUnrealMCPCommonUtils::CreateErrorResponse(Err);
+
+    TMap<FString, TSharedPtr<FJsonValue>> NoArgs;
+    TSharedPtr<FJsonObject> Result = InvokeFunction(Sub, TEXT("EndTurn"), NoArgs);
+    if (Result.IsValid())
+    {
+        bool bEnded = false;
+        Result->TryGetBoolField(TEXT("return"), bEnded);
+        Result->SetBoolField(TEXT("ok"), true);
+        Result->SetBoolField(TEXT("ended"), bEnded);
+        Result->SetNumberField(TEXT("controller_index"), ControllerIndex);
+    }
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FWarCardGameCommands::HandleGetBattleState(const TSharedPtr<FJsonObject>& Params)
+{
+    int32 ControllerIndex = 0;
+    Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+
+    FString Err;
+    UObject* Sub = ResolveSubsystem(ControllerIndex, kActionCardSubsystemPath, Err);
+    if (!Sub) return FEpicUnrealMCPCommonUtils::CreateErrorResponse(Err);
+
+    // Три getter'а: IsMyTurn → my_turn, GetCurrentAP → ap, GetMaxAP → max_ap.
+    TMap<FString, TSharedPtr<FJsonValue>> NoArgs;
+    TSharedPtr<FJsonObject> TurnR  = InvokeFunction(Sub, TEXT("IsMyTurn"), NoArgs);
+    TSharedPtr<FJsonObject> ApR    = InvokeFunction(Sub, TEXT("GetCurrentAP"), NoArgs);
+    TSharedPtr<FJsonObject> MaxApR = InvokeFunction(Sub, TEXT("GetMaxAP"), NoArgs);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("ok"), true);
+    Result->SetNumberField(TEXT("controller_index"), ControllerIndex);
+
+    bool bMyTurn = false;
+    if (TurnR.IsValid())
+    {
+        TurnR->TryGetBoolField(TEXT("return"), bMyTurn);
+    }
+    Result->SetBoolField(TEXT("my_turn"), bMyTurn);
+
+    int32 AP = 0;
+    if (ApR.IsValid())
+    {
+        const TSharedPtr<FJsonValue>* Ret = ApR->Values.Find(TEXT("return"));
+        if (Ret && Ret->IsValid()) (*Ret)->TryGetNumber(AP);
+    }
+    Result->SetNumberField(TEXT("ap"), AP);
+
+    int32 MaxAP = 0;
+    if (MaxApR.IsValid())
+    {
+        const TSharedPtr<FJsonValue>* Ret = MaxApR->Values.Find(TEXT("return"));
+        if (Ret && Ret->IsValid()) (*Ret)->TryGetNumber(MaxAP);
+    }
+    Result->SetNumberField(TEXT("max_ap"), MaxAP);
 
     return Result;
 }

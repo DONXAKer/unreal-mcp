@@ -16,7 +16,7 @@ logger = logging.getLogger("UnrealMCP")
 
 
 def register_warcard_tools(mcp: FastMCP) -> None:
-    """Регистрирует WarCard MCP tools для selection + deployment."""
+    """Регистрирует WarCard MCP tools для selection + deployment + battle."""
 
     @mcp.tool()
     def wc_select_unit(
@@ -168,6 +168,84 @@ def register_warcard_tools(mcp: FastMCP) -> None:
 
         params: dict[str, Any] = {"controller_index": controller_index}
         response = unreal.send_command("wc_get_deployment_state", params)
+        return response or {"status": "error", "error": "No response"}
+
+    @mcp.tool()
+    def wc_surrender(
+        ctx: Context[Any, Any, Any],
+        controller_index: int = 0,
+    ) -> dict[str, Any]:
+        """Сдаться в Battle phase — мгновенное поражение клиента.
+
+        Под капотом — UActionCardSubsystem::Surrender() (void).
+
+        Args:
+            controller_index: PIE-клиент.
+
+        Returns:
+            { ok, surrendered: bool, controller_index }
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"status": "error", "error": "No Unreal connection"}
+
+        params: dict[str, Any] = {"controller_index": controller_index}
+        logger.info(f"wc_surrender: ctrl={controller_index}")
+        response = unreal.send_command("wc_surrender", params)
+        return response or {"status": "error", "error": "No response"}
+
+    @mcp.tool()
+    def wc_end_turn(
+        ctx: Context[Any, Any, Any],
+        controller_index: int = 0,
+    ) -> dict[str, Any]:
+        """Завершить ход в Battle phase — передать ход оппоненту.
+
+        Под капотом — UActionCardSubsystem::EndTurn() → bool.
+
+        Args:
+            controller_index: PIE-клиент.
+
+        Returns:
+            { ok, ended: bool, controller_index, return: <bool> }
+            ended=false — не наш ход либо ход уже завершён.
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"status": "error", "error": "No Unreal connection"}
+
+        params: dict[str, Any] = {"controller_index": controller_index}
+        logger.info(f"wc_end_turn: ctrl={controller_index}")
+        response = unreal.send_command("wc_end_turn", params)
+        return response or {"status": "error", "error": "No response"}
+
+    @mcp.tool()
+    def wc_get_battle_state(
+        ctx: Context[Any, Any, Any],
+        controller_index: int = 0,
+    ) -> dict[str, Any]:
+        """Снимок состояния Battle phase.
+
+        Зовёт UActionCardSubsystem::IsMyTurn + GetCurrentAP + GetMaxAP.
+
+        Args:
+            controller_index: PIE-клиент.
+
+        Returns:
+            { ok, my_turn: bool, ap: int, max_ap: int, controller_index }
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"status": "error", "error": "No Unreal connection"}
+
+        params: dict[str, Any] = {"controller_index": controller_index}
+        response = unreal.send_command("wc_get_battle_state", params)
         return response or {"status": "error", "error": "No response"}
 
     logger.info("WarCard tools registered successfully")

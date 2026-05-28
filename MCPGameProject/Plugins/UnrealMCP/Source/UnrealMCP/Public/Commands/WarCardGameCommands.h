@@ -30,6 +30,9 @@ class UObject;
  *   wc_deploy_unit           — UDeploymentSubsystem::DeployUnit(UnitId, GridX, GridY) → bool
  *   wc_confirm_deployment    — UDeploymentSubsystem::ConfirmDeployment()
  *   wc_get_deployment_state  — { deployed_count, ready }
+ *   wc_surrender             — UActionCardSubsystem::Surrender()
+ *   wc_end_turn              — UActionCardSubsystem::EndTurn() → bool
+ *   wc_get_battle_state      — { my_turn, ap, max_ap }
  */
 class FWarCardGameCommands
 {
@@ -46,6 +49,9 @@ private:
     TSharedPtr<FJsonObject> HandleDeployUnit(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleConfirmDeployment(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleGetDeploymentState(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleSurrender(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleEndTurn(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleGetBattleState(const TSharedPtr<FJsonObject>& Params);
 
     /**
      * Найти UWorldSubsystem по class path в PIE world выбранного клиента.

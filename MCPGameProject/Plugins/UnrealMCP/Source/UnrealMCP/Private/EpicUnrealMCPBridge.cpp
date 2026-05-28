@@ -266,7 +266,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("2.17.4"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("2.18.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -420,7 +420,10 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                   || CommandType == TEXT("wc_get_selection_state")
                   || CommandType == TEXT("wc_deploy_unit")
                   || CommandType == TEXT("wc_confirm_deployment")
-                  || CommandType == TEXT("wc_get_deployment_state"))
+                  || CommandType == TEXT("wc_get_deployment_state")
+                  || CommandType == TEXT("wc_surrender")
+                  || CommandType == TEXT("wc_end_turn")
+                  || CommandType == TEXT("wc_get_battle_state"))
             {
                 ResultJson = WarCardGameCommands->HandleCommand(CommandType, Params);
             }
