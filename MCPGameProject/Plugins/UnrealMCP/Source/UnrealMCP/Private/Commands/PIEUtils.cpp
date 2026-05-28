@@ -195,13 +195,21 @@ UWorld* FUnrealMCPPIEUtils::GetPIEWorldForClient(int32 Index)
         return nullptr;
     }
 
-    // FIX-UI-008: multi-client — мапим строго на N-й КЛИЕНТСКИЙ world
-    // (dedicated-server отфильтрован в CollectPIEContexts). Для num_clients==1
-    // (Contexts.Num()<=1) сохраняем fallback на GEditor->PlayWorld — общий кейс
-    // не регрессирует.
+    // FIX-UI-008 v2: для multi-world берём мир через PlayerController клиента —
+    // PC->GetWorld() (как DescribeClient, который НАДЁЖНО находит виджеты обоих
+    // клиентов). Прямой Contexts[Index]->World() периодически указывал на мир без
+    // виджетов клиента в listen-server PIE → get_widget_tree(controller_index)
+    // возвращал пусто. PC->GetWorld() устойчив.
     TArray<const FWorldContext*> Contexts = UnrealMCPPIEInternal::CollectPIEContexts();
     if (Contexts.Num() > 1)
     {
+        if (APlayerController* PC = GetPlayerControllerByIndex(Index))
+        {
+            if (UWorld* W = PC->GetWorld())
+            {
+                return W;
+            }
+        }
         return Contexts.IsValidIndex(Index) ? Contexts[Index]->World() : nullptr;
     }
     if (Contexts.Num() == 1 && Index == 0)

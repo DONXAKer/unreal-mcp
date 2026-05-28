@@ -17,6 +17,22 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [2.17.4] — 2026-05-28
+
+`GetPIEWorldForClient` через `PC->GetWorld()` — стабильный резолв мира клиента (FIX-UI-008).
+
+### Fixed
+
+- `FUnrealMCPPIEUtils::GetPIEWorldForClient(index)` в multi-world теперь берёт мир
+  через `GetPlayerControllerByIndex(index)->GetWorld()` (как `DescribeClient`,
+  который НАДЁЖНО находит виджеты обоих клиентов в `pie_status`), а не напрямую
+  `Contexts[index]->World()`. Прямой контекст периодически указывал на мир без
+  виджетов клиента в listen-server PIE → `get_widget_tree(controller_index)` /
+  `invoke_button_click(controller_index)` возвращали пусто/не находили кнопку,
+  драфт-пики срывались в середине. Фоллбэк на `Contexts[index]->World()` сохранён.
+
+---
+
 ## [2.17.3] — 2026-05-28
 
 Multi-world: поиск виджетов по ВСЕМ PIE-мирам без `controller_index` (FIX-UI-008).

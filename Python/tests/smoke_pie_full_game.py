@@ -16,11 +16,16 @@ Stage 1-5 в одном flow. Использует:
 
 from __future__ import annotations
 
+import logging
 import sys
 import time
 from typing import Any
 
 sys.path.insert(0, str(__file__.rsplit("\\tests", 1)[0]))
+
+# Подавляем шумный INFO-логгер unreal_mcp_server (печатает полный JSON-ответ,
+# крашится на Windows cp1251 при Unicode-символах вроде '✕' в widget tree).
+logging.getLogger("UnrealMCP").setLevel(logging.ERROR)
 
 from tests._fixtures import ensure_test_user
 from unreal_mcp_server import UnrealConnection
