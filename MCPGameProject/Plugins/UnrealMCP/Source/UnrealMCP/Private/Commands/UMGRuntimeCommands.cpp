@@ -51,17 +51,30 @@ UWidget* FUMGRuntimeCommands::FindWidgetByName(
     APlayerController* OwningPC)
 {
     OutOwner = nullptr;
-    if (!PlayWorld || Target.IsEmpty())
+    if (Target.IsEmpty())
     {
         return nullptr;
     }
 
+    // FIX-UI-008: PlayWorld == nullptr → искать во ВСЕХ PIE-мирах. Имена кнопок
+    // драфта (CatalogEntryButton_N) глобально уникальны, поэтому поиск по всем
+    // мирам надёжнее, чем резолв мира по controller_index (в listen-server PIE
+    // он периодически нестабилен → нужный виджет «терялся»).
     for (TObjectIterator<UUserWidget> It; It; ++It)
     {
         UUserWidget* UW = *It;
-        if (!IsValid(UW) || UW->GetWorld() != PlayWorld)
+        if (!IsValid(UW))
         {
             continue;
+        }
+        UWorld* WidgetWorld = UW->GetWorld();
+        if (PlayWorld)
+        {
+            if (WidgetWorld != PlayWorld) continue;
+        }
+        else
+        {
+            if (!WidgetWorld || WidgetWorld->WorldType != EWorldType::PIE) continue;
         }
         // MCP-PLUGIN-005: для split-screen PIE фильтруем по OwningPlayer.
         // FIX-UI-008: только в single-world. В multi-world (PIE_ListenServer) клиенты
@@ -241,11 +254,14 @@ TSharedPtr<FJsonObject> FUMGRuntimeCommands::HandleInvokeButtonClick(const TShar
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
     }
 
+    // FIX-UI-008: controller_index ОПЦИОНАЛЕН. Без него ищем кнопку во ВСЕХ
+    // PIE-мирах (PlayWorld=null) — для драфта (имена кнопок глобально уникальны)
+    // это надёжнее, чем резолв мира по индексу. С controller_index — как раньше.
     int32 ControllerIndex = 0;
-    Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+    const bool bHasControllerIdx = Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
 
-    APlayerController* PC = ResolvePlayerController(ControllerIndex);
-    if (!PC)
+    APlayerController* PC = bHasControllerIdx ? ResolvePlayerController(ControllerIndex) : nullptr;
+    if (bHasControllerIdx && !PC)
     {
         TSharedPtr<FJsonObject> Resp = FEpicUnrealMCPCommonUtils::CreateErrorResponse(
             FString::Printf(TEXT("PlayerController not found for controller_index=%d"), ControllerIndex));
@@ -256,19 +272,19 @@ TSharedPtr<FJsonObject> FUMGRuntimeCommands::HandleInvokeButtonClick(const TShar
         return Resp;
     }
 
-    UWorld* PlayWorld = FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex);
-    if (!PlayWorld)
+    if (!GEditor || !GEditor->PlayWorld)
     {
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No active PIE world"));
     }
+    // PlayWorld=null → FindWidgetByName ищет по всем PIE-мирам.
+    UWorld* PlayWorld = bHasControllerIdx ? FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex) : nullptr;
 
     UUserWidget* Owner = nullptr;
     UWidget* Found = FindWidgetByName(PlayWorld, WidgetName, Owner, PC);
     if (!Found)
     {
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
-            FString::Printf(TEXT("Widget '%s' not found in any UUserWidget on controller %d"),
-                *WidgetName, ControllerIndex));
+            FString::Printf(TEXT("Widget '%s' not found in any PIE world"), *WidgetName));
     }
 
     UButton* Btn = Cast<UButton>(Found);
@@ -301,7 +317,7 @@ TSharedPtr<FJsonObject> FUMGRuntimeCommands::HandleInvokeButtonClick(const TShar
     Result->SetBoolField(TEXT("ok"), true);
     Result->SetStringField(TEXT("widget_name"), WidgetName);
     Result->SetStringField(TEXT("owner_user_widget"), Owner ? Owner->GetName() : TEXT(""));
-    Result->SetNumberField(TEXT("controller_index"), ControllerIndex);
-    Result->SetStringField(TEXT("controller_name"), PC->GetName());
+    Result->SetNumberField(TEXT("controller_index"), bHasControllerIdx ? ControllerIndex : -1);
+    Result->SetStringField(TEXT("controller_name"), PC ? PC->GetName() : TEXT(""));
     return Result;
 }

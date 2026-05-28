@@ -17,6 +17,28 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [2.17.3] — 2026-05-28
+
+Multi-world: поиск виджетов по ВСЕМ PIE-мирам без `controller_index` (FIX-UI-008).
+
+### Added
+
+- `get_widget_tree` и `invoke_button_click` БЕЗ `controller_index` теперь ищут
+  виджеты во ВСЕХ PIE-мирах (`UWorld::WorldType == PIE`), а не только в мире,
+  резолвнутом по индексу. Причина: в listen-server multi-world резолв
+  `GetPIEWorldForClient(index)` периодически нестабилен — `get_widget_tree(controller_index=0)`
+  возвращал пустой список, хотя виджеты клиента существуют (их находил DescribeClient
+  через `PC->GetWorld()`). Имена виджетов драфта (`CatalogEntryButton_N`) глобально
+  уникальны, поэтому поиск по всем мирам надёжно находит нужную кнопку. С явным
+  `controller_index` поведение прежнее (скоуп по миру клиента).
+
+### Fixed
+
+- `FindWidgetByName` (UMGRuntime/UMGTest): `PlayWorld == nullptr` → матч по любому
+  PIE-миру. `invoke_button_click` без `controller_index` не требует PlayerController.
+
+---
+
 ## [2.17.2] — 2026-05-28
 
 Multi-world: `get_widget_tree`/`find_widget`/`invoke_button_click`/`set_text_on_widget` периодически не видели виджеты второго клиента (FIX-UI-008).

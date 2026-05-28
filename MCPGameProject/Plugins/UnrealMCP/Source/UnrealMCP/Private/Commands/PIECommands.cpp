@@ -214,7 +214,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStatus(const TSharedPtr<FJsonObje
     Result->SetBoolField(TEXT("is_running"), true);
     Result->SetStringField(TEXT("world_name"), PlayWorld->GetName());
     Result->SetNumberField(TEXT("elapsed_seconds"), PlayWorld->GetTimeSeconds());
-    Result->SetStringField(TEXT("plugin_version"), TEXT("2.17.2"));
+    Result->SetStringField(TEXT("plugin_version"), TEXT("2.17.3"));
 
     APlayerController* PC = PlayWorld->GetFirstPlayerController();
     Result->SetBoolField(TEXT("has_player_controller"), PC != nullptr);

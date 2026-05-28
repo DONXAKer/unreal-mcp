@@ -45,44 +45,40 @@ def _find_node(node, predicate):
     return None
 
 
-# ВАЖНО: get_widget_tree скоупится по controller_index → миру конкретного клиента
-# (FUnrealMCPPIEUtils::GetPIEWorldForClient). Без явного controller_index он видит
-# только мир 0 (listen-server) и НЕ показывает виджеты второго клиента. Поэтому
-# всегда опрашиваем оба контроллера и пары (ctrl, имя) — имена CatalogEntryButton
-# глобально уникальны (NewObject), у каждого мира свои.
+# Плагин 2.17.3: get_widget_tree / invoke_button_click БЕЗ controller_index ищут
+# во ВСЕХ PIE-мирах. Для драфта это надёжнее, чем резолв мира по индексу (в
+# listen-server multi-world он периодически нестабилен). Имена CatalogEntryButton
+# глобально уникальны, поэтому клик по имени без controller_index попадает в нужную
+# кнопку (включённую — у текущего пикера). Логин остаётся per-controller (имена
+# логин-виджетов одинаковы в обоих мирах).
 
-def _tree(conn, ctrl):
-    return _send(conn, "get_widget_tree", {"controller_index": ctrl})
+def _tree_all(conn):
+    return _send(conn, "get_widget_tree", {})
 
 
-def _uw_classes(conn, ctrl):
-    tree = _tree(conn, ctrl)
+def _uw_classes(conn):
+    tree = _tree_all(conn)
     return [uw.get("class", "") for uw in (tree.get("user_widgets") or []) if uw.get("is_in_viewport")]
 
 
-def _has_uw_any(conn, substr):
-    """True если виджет с substr в class есть хотя бы у одного из 2 клиентов."""
-    for ctrl in (0, 1):
-        if any(substr in c for c in _uw_classes(conn, ctrl)):
-            return True
-    return False
+def _has_uw(conn, substr):
+    """True если виджет с substr в class есть в любом PIE-мире."""
+    return any(substr in c for c in _uw_classes(conn))
 
 
-def _draft_buttons(conn):
-    """Пары (controller_index, имя_кнопки) для всех CatalogEntryButton в
-    Scroll_AvailableUnits draft-виджета КАЖДОГО клиента."""
-    pairs = []
-    for ctrl in (0, 1):
-        tree = _tree(conn, ctrl)
-        for uw in (tree.get("user_widgets") or []):
-            if "Draft" not in uw.get("class", ""):
-                continue
-            scroll = _find_node(uw.get("root"), lambda n: n.get("name") == "Scroll_AvailableUnits")
-            if scroll:
-                for ch in (scroll.get("children") or []):
-                    if "Button" in ch.get("class", ""):
-                        pairs.append((ctrl, ch.get("name")))
-    return pairs
+def _draft_button_names(conn):
+    """Имена всех CatalogEntryButton в Scroll_AvailableUnits всех WBP_Draft (оба мира)."""
+    names = []
+    tree = _tree_all(conn)
+    for uw in (tree.get("user_widgets") or []):
+        if "Draft" not in uw.get("class", ""):
+            continue
+        scroll = _find_node(uw.get("root"), lambda n: n.get("name") == "Scroll_AvailableUnits")
+        if scroll:
+            for ch in (scroll.get("children") or []):
+                if "Button" in ch.get("class", ""):
+                    names.append(ch.get("name"))
+    return list(dict.fromkeys(names))
 
 
 def main():
@@ -147,7 +143,7 @@ def main():
         # ждём DRAFT до 30с в этом раунде
         dl = time.monotonic() + 30
         while time.monotonic() < dl:
-            if _has_uw_any(conn, "WBP_Draft_C"):
+            if _has_uw(conn, "WBP_Draft_C"):
                 draft_seen = True
                 break
             time.sleep(1.5)
@@ -157,7 +153,7 @@ def main():
         print(f"  раунд {rnd}: DRAFT ещё нет — повтор login+FindGame")
 
     print(f"DRAFT widget виден: {draft_seen}")
-    print(f"  кнопок юнитов (оба клиента): {len(_draft_buttons(conn))}")
+    print(f"  кнопок юнитов (все миры): {len(_draft_button_names(conn))}")
 
     # Гоним snake-пики: на каждом пике перебираем (controller, имя кнопки) пока
     # один invoke_button_click не сработает. Кнопка enabled только у текущего
@@ -170,11 +166,13 @@ def main():
     for pick in range(10):
         done = False
         for attempt in range(30):
-            # пары (ctrl, имя) из ОБОИХ миров; кликаем кнопку её же контроллером.
-            for ctrl, nm in _draft_buttons(conn):
-                r = _send(conn, "invoke_button_click", {"widget_name": nm, "controller_index": ctrl})
+            # Клик по имени БЕЗ controller_index — плагин ищет во всех PIE-мирах.
+            # Включённая кнопка (у текущего пикера) кликнется успешно; отключённые
+            # (не их ход) вернут "disabled". Имена глобально уникальны.
+            for nm in _draft_button_names(conn):
+                r = _send(conn, "invoke_button_click", {"widget_name": nm})
                 if isinstance(r, dict) and r.get("ok") and not r.get("error"):
-                    print(f"  pick {pick}: c{ctrl} -> {nm}")
+                    print(f"  pick {pick}: -> {nm}")
                     done = True
                     break
             if done:
@@ -195,7 +193,7 @@ def main():
     targets = {"Deployment": "WBP_DeploymentScreen", "Mulligan": "WBP_Mulligan", "Battle": "WBP_BattleHUD"}
     while time.monotonic() < dl:
         for label, sub in targets.items():
-            if label not in seen and _has_uw_any(conn, sub):
+            if label not in seen and _has_uw(conn, sub):
                 seen.add(label)
                 print(f"  [{time.strftime('%H:%M:%S')}] {label} ({sub}) APPEARED")
         if "Battle" in seen:

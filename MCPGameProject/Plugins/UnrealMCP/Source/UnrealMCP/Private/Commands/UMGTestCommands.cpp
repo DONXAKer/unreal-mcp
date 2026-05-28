@@ -324,15 +324,18 @@ TSharedPtr<FJsonObject> FUMGTestCommands::HandleGetWidgetTree(const TSharedPtr<F
     // чтобы tree содержал только виджеты целевого клиента.
     int32 ControllerIndex = 0;
     const bool bHasControllerIdx = Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
-    UWorld* PlayWorld = FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex);
-    if (!PlayWorld)
+
+    // FIX-UI-008: без controller_index — собираем виджеты ВСЕХ PIE-миров. В
+    // listen-server multi-world резолв мира по индексу периодически нестабилен
+    // (controller 0 возвращал пустой tree); сбор по всем мирам надёжен, а имена
+    // виджетов драфта (CatalogEntryButton_N) глобально уникальны.
+    const bool bAllWorlds = !bHasControllerIdx;
+    UWorld* PlayWorld = bAllWorlds ? nullptr : FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex);
+    if (!bAllWorlds && !PlayWorld)
     {
         PlayWorld = GEditor->PlayWorld;
     }
-    // PC-фильтр только в single-world split-screen (FIX-UI-008). В multi-world
-    // (PIE_ListenServer) разделение клиентов делает фильтр по World; OwningPlayer-
-    // фильтр там периодически возвращал пустой tree (несколько PC в listen-server
-    // world → GetFirstPlayerController != owner виджета).
+    // PC-фильтр только в single-world split-screen (с явным controller_index).
     APlayerController* OwningPC = nullptr;
     if (bHasControllerIdx && FUnrealMCPPIEUtils::GetNumPIEWorldContexts() <= 1)
     {
@@ -342,7 +345,16 @@ TSharedPtr<FJsonObject> FUMGTestCommands::HandleGetWidgetTree(const TSharedPtr<F
     for (TObjectIterator<UUserWidget> It; It; ++It)
     {
         UUserWidget* UW = *It;
-        if (!IsValid(UW) || UW->GetWorld() != PlayWorld)
+        if (!IsValid(UW))
+        {
+            continue;
+        }
+        UWorld* WidgetWorld = UW->GetWorld();
+        if (bAllWorlds)
+        {
+            if (!WidgetWorld || WidgetWorld->WorldType != EWorldType::PIE) continue;
+        }
+        else if (WidgetWorld != PlayWorld)
         {
             continue;
         }
