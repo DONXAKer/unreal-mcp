@@ -17,6 +17,26 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [2.20.0] — 2026-05-29
+
+Атака в MCP — детерминированный бой теперь move + attack (без LLM).
+
+### Added
+
+- `wc_attack` — атака юнита картой (`UActionCardSubsystem::AttackUnit`: ищет
+  BASIC/SPECIAL_ATTACK карту в руке → select-action-card + execute-action с
+  attacker/target). Reflection через ActionCardSubsystem + Python-обёртка.
+  Возврат `{ok, attacker_unit_id, target_unit_id, x, y, controller_index}`.
+- `smoke_pie_full_game.py::_run_battle_moves` теперь move + attack: на ходу каждый
+  юнит атакует ближайшего врага (если в радиусе/есть карта) и сближается;
+  пост-бой выводит HP/живость юнитов.
+
+### Why
+
+- Завершает детерминированный бой без LLM: движение (2.19.0) + атака (2.20.0).
+
+---
+
 ## [2.19.0] — 2026-05-29
 
 Movement + чтение состояния боя в MCP — для детерминированного бота (без LLM).

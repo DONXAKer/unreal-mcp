@@ -267,20 +267,28 @@ def _run_battle_moves(conn, max_turns: int = 8) -> int:
             break
 
         moved = 0
+        attacked = 0
         for u in units:
             enemies = [e for e in units if _suffix(e.get("unitId", "")) != _suffix(u.get("unitId", ""))]
             if not enemies:
                 continue
             tgt = min(enemies, key=lambda e: abs(e["gridX"] - u["gridX"]) + abs(e["gridY"] - u["gridY"]))
+            # 1) попытка атаки картой (сервер валидирует радиус/наличие карты);
+            ra = _send(conn, "wc_attack", {"controller_index": active,
+                                           "attacker_unit_id": u["unitId"], "target_unit_id": tgt["unitId"],
+                                           "x": tgt["gridX"], "y": tgt["gridY"]})
+            if isinstance(ra, dict) and ra.get("ok") and not ra.get("error"):
+                attacked += 1
+            # 2) сближение на 1 клетку к ближайшему врагу.
             nx = u["gridX"] + (1 if tgt["gridX"] > u["gridX"] else -1 if tgt["gridX"] < u["gridX"] else 0)
             ny = u["gridY"] + (1 if tgt["gridY"] > u["gridY"] else -1 if tgt["gridY"] < u["gridY"] else 0)
-            r = _send(conn, "wc_free_move",
-                      {"controller_index": active, "unit_id": u["unitId"], "x": nx, "y": ny})
-            if isinstance(r, dict) and r.get("ok") and not r.get("error"):
+            rm = _send(conn, "wc_free_move",
+                       {"controller_index": active, "unit_id": u["unitId"], "x": nx, "y": ny})
+            if isinstance(rm, dict) and rm.get("ok") and not rm.get("error"):
                 moved += 1
         _send(conn, "wc_end_turn", {"controller_index": active})
         turns_done += 1
-        print(f"  ход {turn}: c{active} подвинул {moved} юнитов к врагу")
+        print(f"  ход {turn}: c{active} — атак {attacked}, движений {moved}")
         time.sleep(1.5)
     return turns_done
 
@@ -398,11 +406,17 @@ def main() -> int:
     units0 = _battle_units(conn, 0)
     print(f"  юнитов на доске: {len(units0)}")
     turns = _run_battle_moves(conn, max_turns=8)
-    print(f"  сыграно ходов движения: {turns}")
-    # Скриншот после движения — видно, что юниты сошлись к центру.
+    print(f"  сыграно ходов: {turns}")
+    # Скриншот после боя — видно, что юниты сошлись/подрались.
     time.sleep(1.5)
     _send(conn, "pie_screenshot", {"filename": "e2e_battle_after_moves.png", "show_ui": False})
-    print("  after-moves screenshot -> e2e_battle_after_moves.png")
+    print("  after-battle screenshot -> e2e_battle_after_moves.png")
+    # Итоговое состояние юнитов (HP/живость) — видно результат атак.
+    units_after = _battle_units(conn, 0)
+    alive_after = [u for u in units_after if u.get("alive")]
+    print(f"  юнитов после боя: всего {len(units_after)}, живых {len(alive_after)}")
+    for u in units_after:
+        print(f"    {u.get('unitId')}: hp={u.get('hp')} alive={u.get('alive')} @({u.get('gridX')},{u.get('gridY')})")
 
     # 8. Капитуляция c0 → game-over → WBP_GameResult на ОБОИХ.
     print("\n--- 8/8 surrender c0 -> expect WBP_GameResult on both ---")
