@@ -41,7 +41,7 @@ private:
      *
      * Params:
      *   cmd (required) — the command string, exactly as it would be typed
-     *                    into the Output Log (e.g. "Automation RunTests WarCard").
+     *                    into the Output Log (e.g. "Automation RunTests MyProject").
      *
      * Returns:
      *   {

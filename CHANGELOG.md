@@ -17,66 +17,48 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
-## [2.20.0] — 2026-05-29
+## [3.0.0] — 2026-05-29
 
-Атака в MCP — детерминированный бой теперь move + attack (без LLM).
-
-### Added
-
-- `wc_attack` — атака юнита картой (`UActionCardSubsystem::AttackUnit`: ищет
-  BASIC/SPECIAL_ATTACK карту в руке → select-action-card + execute-action с
-  attacker/target). Reflection через ActionCardSubsystem + Python-обёртка.
-  Возврат `{ok, attacker_unit_id, target_unit_id, x, y, controller_index}`.
-- `smoke_pie_full_game.py::_run_battle_moves` теперь move + attack: на ходу каждый
-  юнит атакует ближайшего врага (если в радиусе/есть карта) и сближается;
-  пост-бой выводит HP/живость юнитов.
-
-### Why
-
-- Завершает детерминированный бой без LLM: движение (2.19.0) + атака (2.20.0).
-
----
-
-## [2.19.0] — 2026-05-29
-
-Movement + чтение состояния боя в MCP — для детерминированного бота (без LLM).
+Точка расширения: общий плагин стал generic — project-specific команды вынесены.
 
 ### Added
 
-- `wc_free_move` — свободное перемещение юнита в BATTLE
-  (`UActionCardSubsystem::FreeMove` → `/app/game/free-move` с серверным id юнита).
-  Возврат `{ok, unit_id, x, y, controller_index}`.
-- `wc_get_battle_units` — JSON-снимок юнитов на доске
-  (`UActionCardSubsystem::GetBattleUnitsJson` читает `ABattlefieldManager::GetAllUnits`):
-  `{units:[{unitId,gridX,gridY,hp,playerId,alive}]}`. Возврат `{ok, units_json, controller_index}`.
-- Оба — reflection через `ResolveSubsystem(/Script/Client.ActionCardSubsystem)` +
-  Python-обёртки `warcard_tools.py`. Позволяют гонять детерминированный драйвер боя
-  (`smoke_pie_full_game.py::_run_battle_moves`): на ходу активного клиента юниты
-  двигаются к ближайшему врагу.
+- **Реестр внешних обработчиков команд.** Новый интерфейс
+  `IUnrealMCPCommandHandler` (`CanHandleCommand` + `HandleCommand`) и API модуля
+  `FEpicUnrealMCPModule::RegisterCommandHandler` / `UnregisterCommandHandler`.
+  Bridge для нераспознанной команды опрашивает зарегистрированные внешние
+  обработчики. Это позволяет project-specific плагинам добавлять свои команды,
+  не трогая код ядра.
+
+### Removed
+
+- **Все `wc_*` команды** (unit selection / deployment / battle) и
+  `WarCardGameCommands.*` удалены из плагина. Они переехали в отдельный плагин
+  **WarCardMCP** (репо клиента WarCard), который регистрируется через новый
+  реестр. Python-обёртки `warcard_tools.py` больше не регистрируются в
+  `unreal_mcp_server.py`.
+- Команды: `wc_select_unit`, `wc_deselect_unit`, `wc_confirm_selection`,
+  `wc_get_selection_state`, `wc_deploy_unit`, `wc_confirm_deployment`,
+  `wc_get_deployment_state`, `wc_surrender`, `wc_end_turn`,
+  `wc_get_battle_state`, `wc_free_move`, `wc_attack`, `wc_get_battle_units`
+  (history: вводились в 2.14.0 / 2.18.0 / 2.19.0 / 2.20.0 — все перенесены).
 
 ### Why
 
-- Нужно тестировать бой (движение/атака) без LLM-симулятора. Эти команды +
-  драйвер дают воспроизводимое движение юнитов через MCP. (Атака карт — следующий шаг.)
+- Общий плагин UnrealMCP (DONXAKer/unreal-mcp) должен оставаться переносимым:
+  в ядре не должно быть ни одной строки про конкретный проект. WarCard-команды
+  ни от чего игрового не зависят на уровне компиляции (reflection-вызовы), поэтому
+  выносятся без потерь. **MAJOR** — удалены команды из поверхности плагина (хотя
+  при включённом WarCardMCP они по-прежнему доступны в рантайме).
 
 ---
 
 ## [2.18.0] — 2026-05-28
 
-Battle-фаза в MCP: команды боя + догнан e2e полной игры (FEAT-BATTLE / FIX-UI-008).
+Фикс `get_actors_in_level` / `find_actors_by_name` envelope (FIX-UI-008).
 
-### Added
-
-- `wc_surrender` — капитуляция клиента (`UActionCardSubsystem::Surrender()` через
-  reflection). Детерминированный game-over для e2e: сервер выставляет `bGameEnded`
-  → оба клиента переходят в GameResult. Возврат `{ok, surrendered, controller_index}`.
-- `wc_end_turn` — завершить ход (`EndTurn()`). Возврат `{ok, ended, controller_index}`.
-- `wc_get_battle_state` — снимок боя `{ok, my_turn, ap, max_ap, controller_index}`
-  (`IsMyTurn()`/`GetCurrentAP()`/`GetMaxAP()`).
-- Все три — C++ `WarCardGameCommands` (reflection через `ResolveSubsystem`
-  `/Script/Client.ActionCardSubsystem` + `InvokeFunction`, без client-include) +
-  Python-обёртки `warcard_tools.py`. Раньше WarCard MCP покрывал только selection +
-  deployment; battle — ничего.
+> Примечание: battle-команды `wc_*`, вводившиеся в этой версии, перенесены в
+> плагин WarCardMCP (см. 3.0.0). Здесь оставлен только generic-фикс.
 
 ### Fixed
 
@@ -91,10 +73,9 @@ Battle-фаза в MCP: команды боя + догнан e2e полной и
 
 ### Why
 
-- `smoke_pie_full_game.py` упирался в Battle HUD — не было MCP-команд для боя.
-  Теперь тест идёт login→matchmaking→draft→deployment→battle→surrender→GameResult.
-- Рестарт MCP-сервера нужен для Python-обёрток (новые tools + get_actors fix);
-  C++-команды доступны после пересборки ClientEditor.
+- `get_actors_in_level`/`find_actors_by_name` возвращали голый список и ломали
+  envelope-обёртку FastMCP — любой успешный ответ превращался в ошибку. Фикс
+  generic, к WarCard отношения не имеет. Рестарт MCP-сервера нужен для подхвата.
 
 ---
 
@@ -170,7 +151,7 @@ Multi-client PIE теперь поднимает N независимых standa
 ### Changed
 
 - `PIECommands.cpp:HandlePieStart` — для `num_clients > 1` конфигурирует `ULevelEditorPlaySettings` комбинацией `SetRunUnderOneProcess(true)` + `SetPlayNetMode(PIE_Standalone)` + `SetPlayNumberOfClients(N)`. Раньше выставлялся только `SetPlayNumberOfClients(N)` без net mode и run-under-one-process, что давало ОДИН общий `UWorld` с N локальными игроками (split-screen) — единственный набор UMG-виджетов, войти мог лишь один клиент. Теперь UE создаёт N полноценных standalone PIE-инстансов (каждый со своим `GameInstance`/`PlayerController`/viewport'ом → своим `WBP_Login`), всё в этом же процессе, поэтому единственный MCP TCP-listener (55557) рулит обоими через `controller_index`. `num_clients == 1` не регрессирует (классический single-PIE).
-- `dedicated_server=true` теперь явно включает `PIE_Client` + `bLaunchSeparateServer` + `RunUnderOneProcess(true)` (UE-server-flow для отладки; для WarCard не нужен — клиенты ходят на внешний Spring/STOMP :8081).
+- `dedicated_server=true` теперь явно включает `PIE_Client` + `bLaunchSeparateServer` + `RunUnderOneProcess(true)` (UE-server-flow для отладки; для проектов с внешним игровым сервером не нужен — клиенты ходят на него напрямую).
 
 ### Fixed
 
@@ -190,17 +171,10 @@ Multi-client PIE теперь поднимает N независимых standa
 
 ## [2.16.1] — 2026-05-28
 
-Critical patch: UE краш при вызове void-функций без параметров через `InvokeFunction`.
-
-### Fixed
-
-- `WarCardGameCommands.cpp:InvokeFunction` теперь корректно обрабатывает функции с `ParmsSize == 0` (например, `SendCompositionToServer()`, `ConfirmDeployment()`). Раньше `Buffer.SetNumZeroed(0)` возвращал `nullptr`, и `InitializeStruct(nullptr)` валился на assertion `Dest` (`Class.cpp:1189`), роняя весь UE Editor. Теперь буфер создаётся только когда `ParmsSize > 0`; `ProcessEvent` корректно принимает `nullptr` для void-функций.
-
-### Why
-
-E2e smoke: `wc_confirm_selection` крашил UE сразу после AddUnitToComposition × 5
-("Состав готов!"). Stage 6 (UnitSelection → Deployment) был полностью
-заблокирован — без этого фикса дальше пройти невозможно.
+> Историческое: фикс UE-краша в reflection-хелпере `InvokeFunction` при
+> void-функциях без параметров (`ParmsSize == 0` → `InitializeStruct(nullptr)`
+> assertion). Этот код был project-specific и перенесён в плагин WarCardMCP
+> (см. 3.0.0).
 
 ---
 
@@ -215,49 +189,27 @@ TextBlock/EditableText/RichTextBlock без отдельной команды.
 
 ### Why
 
-E2e-тест UnitSelection не мог проверить, что карточки `WBP_UnitCatalogEntry`
-содержат `NameText/TypeText/StatsText/AbilityText` с правильным содержимым
-после server response. Раньше snapshot показывал только структуру, без
-текста — баг "карточка отрисована, но пустая" был невидим автоматизации.
+E2e-тесты не могли проверить, что текстовые виджеты содержат правильное
+содержимое после обновления данных. Раньше snapshot показывал только
+структуру, без текста — баг "виджет отрисован, но пустой" был невидим
+автоматизации.
 
 ---
 
 ## [2.15.0] — 2026-05-27
 
-Adds WarCard UnitSelection bridge — reflection-based MCP commands для
-`UUnitSelectionSubsystem` (выбор юнитов до Deployment).
-
-### Added
-
-- **`wc_select_unit(unit_id, controller_index)`** — `UUnitSelectionSubsystem::AddUnitToComposition(UnitId)` → `bool`.
-- **`wc_deselect_unit(unit_id, controller_index)`** — `RemoveUnitFromComposition(UnitId)`.
-- **`wc_confirm_selection(controller_index)`** — `SendCompositionToServer()` (переход в Deployment phase).
-- **`wc_get_selection_state(controller_index)`** — `{ selected_count, ready }`.
-- Class path: `/Script/Client.UnitSelectionSubsystem`.
-
-### Why
-
-После MATCH_FOUND игрок попадает не в Deployment, а в **UnitSelection** —
-выбрать 5 юнитов из roster (9 в каталоге). Без этих команд e2e flow не
-доходит до Deployment.
+> Историческое: вводило project-specific команды unit-selection (`wc_select_unit`
+> и соседние). Перенесены в плагин WarCardMCP (см. 3.0.0).
 
 ---
 
 ## [2.14.0] — 2026-05-27
 
-Adds WarCard Deployment bridge — первая project-specific категория команд
-через UE reflection. Плагин не include'ит клиентские заголовки —
-subsystem resolution через class path + `FindFunction` + `ProcessEvent`
-с FProperty iteration. См. MCP-PLUGIN-006.
-
-### Added
-
-- **`WarCardGameCommands.h/.cpp`** — новая категория команд.
-- **`wc_deploy_unit(unit_id, grid_x, grid_y, controller_index)`** — `UDeploymentSubsystem::DeployUnit(UnitId, GridX, GridY)` → `bool`. Минует UI-клики по GridCell.
-- **`wc_confirm_deployment(controller_index)`** — `ConfirmDeployment()` (переход в Battle).
-- **`wc_get_deployment_state(controller_index)`** — `{ deployed_count, ready }`.
-- **`InvokeFunction`** helper в плагине — generic UFunction reflection-вызов: упаковка параметров по `FProperty.GetName()` (устойчиво к перестановке), типы FString/int32/bool/float, return value через `GetReturnProperty()`.
-- Python tools: `unreal-mcp/Python/tools/warcard_tools.py` + регистрация в `unreal_mcp_server.py`.
+> Историческое: первая project-specific категория команд (deployment-bridge через
+> UE reflection: `WarCardGameCommands.*`, `wc_deploy_unit` и соседние, helper
+> `InvokeFunction`, `warcard_tools.py`). Весь этот код перенесён в плагин
+> WarCardMCP (см. 3.0.0); reflection-паттерн (class-path + `FindFunction` +
+> `ProcessEvent` с FProperty iteration) остаётся образцом для внешних обработчиков.
 
 ---
 

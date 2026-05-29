@@ -282,7 +282,6 @@ from tools.pie_tools import register_pie_tools
 from tools.project_tools import register_project_tools
 from tools.texture_tools import register_texture_tools
 from tools.umg_tools import register_umg_tools
-from tools.warcard_tools import register_warcard_tools
 
 # Register tools
 register_editor_tools(mcp)
@@ -302,7 +301,10 @@ register_niagara_tools(mcp)
 register_pie_tools(mcp)  # v2.4.0 — Playwright-like e2e: PIE lifecycle + UMG automation
 register_console_tools(mcp)  # v2.6.0 — arbitrary console-command execution (Automation RunTests, CVars, etc.)
 register_enhanced_input_tools(mcp)  # v2.10.0 — UE5.7 Enhanced Input (MCP-PLUGIN-004)
-register_warcard_tools(mcp)         # v2.14.0 — WarCard deployment commands (MCP-PLUGIN-006)
+# NOTE: project-specific wc_* tools НЕ регистрируются здесь — они вынесены в
+# отдельный server клиента (client/Scripts/mcp/warcard_mcp_server.py), который
+# импортирует этот general-server и доустанавливает WarCard tools. Это держит
+# ядро generic (v3.0.0).
 
 # --- MCP Content Pipeline (MCP-CONTENT-001): config + recipe framework ---
 from tools import project_config as _project_config

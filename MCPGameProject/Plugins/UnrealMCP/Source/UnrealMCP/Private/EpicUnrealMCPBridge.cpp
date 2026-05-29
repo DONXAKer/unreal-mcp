@@ -1,4 +1,6 @@
 #include "EpicUnrealMCPBridge.h"
+#include "EpicUnrealMCPModule.h"
+#include "IUnrealMCPCommandHandler.h"
 #include "MCPServerRunnable.h"
 #include "Sockets.h"
 #include "SocketSubsystem.h"
@@ -94,7 +96,6 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     UMGRuntimeCommands = MakeShared<FUMGRuntimeCommands>();
     EnhancedInputCommands = MakeShared<FEnhancedInputCommands>();
     ConsoleCommands = MakeShared<FUnrealMCPConsoleCommands>();
-    WarCardGameCommands = MakeShared<FWarCardGameCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -117,7 +118,6 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     UMGRuntimeCommands.Reset();
     EnhancedInputCommands.Reset();
     ConsoleCommands.Reset();
-    WarCardGameCommands.Reset();
 }
 
 // Initialize subsystem
@@ -266,7 +266,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("2.20.0"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.0.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -413,23 +413,6 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             {
                 ResultJson = UMGRuntimeCommands->HandleCommand(CommandType, Params);
             }
-            // WarCard project-specific (MCP-PLUGIN-006): selection + deployment + battle bridges.
-            else if (CommandType == TEXT("wc_select_unit")
-                  || CommandType == TEXT("wc_deselect_unit")
-                  || CommandType == TEXT("wc_confirm_selection")
-                  || CommandType == TEXT("wc_get_selection_state")
-                  || CommandType == TEXT("wc_deploy_unit")
-                  || CommandType == TEXT("wc_confirm_deployment")
-                  || CommandType == TEXT("wc_get_deployment_state")
-                  || CommandType == TEXT("wc_surrender")
-                  || CommandType == TEXT("wc_end_turn")
-                  || CommandType == TEXT("wc_get_battle_state")
-                  || CommandType == TEXT("wc_free_move")
-                  || CommandType == TEXT("wc_attack")
-                  || CommandType == TEXT("wc_get_battle_units"))
-            {
-                ResultJson = WarCardGameCommands->HandleCommand(CommandType, Params);
-            }
             // Enhanced Input — UE5.7 native (v2.10.0 — MCP-PLUGIN-004)
             else if (CommandType == TEXT("create_input_action") ||
                      CommandType == TEXT("create_input_mapping_context") ||
@@ -493,14 +476,32 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             }
             else
             {
-                ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
-                ResponseJson->SetStringField(TEXT("error"), FString::Printf(TEXT("Unknown command: %s"), *CommandType));
-                
-                FString ResultString;
-                TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResultString);
-                FJsonSerializer::Serialize(ResponseJson.ToSharedRef(), Writer);
-                Promise.SetValue(ResultString);
-                return;
+                // Точка расширения: project-specific обработчики, зарегистрированные
+                // внешними плагинами через FEpicUnrealMCPModule::RegisterCommandHandler.
+                // Ядро плагина generic — про конкретные игры оно не знает.
+                if (FEpicUnrealMCPModule::IsAvailable())
+                {
+                    for (const TSharedPtr<IUnrealMCPCommandHandler>& Handler : FEpicUnrealMCPModule::Get().GetCommandHandlers())
+                    {
+                        if (Handler.IsValid() && Handler->CanHandleCommand(CommandType))
+                        {
+                            ResultJson = Handler->HandleCommand(CommandType, Params);
+                            break;
+                        }
+                    }
+                }
+
+                if (!ResultJson.IsValid())
+                {
+                    ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
+                    ResponseJson->SetStringField(TEXT("error"), FString::Printf(TEXT("Unknown command: %s"), *CommandType));
+
+                    FString ResultString;
+                    TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResultString);
+                    FJsonSerializer::Serialize(ResponseJson.ToSharedRef(), Writer);
+                    Promise.SetValue(ResultString);
+                    return;
+                }
             }
             
             // Check if the result contains an error

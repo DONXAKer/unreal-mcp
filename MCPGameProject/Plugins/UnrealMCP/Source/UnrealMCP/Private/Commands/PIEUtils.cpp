@@ -27,8 +27,8 @@ namespace UnrealMCPPIEInternal
      * на него попадать. Отфильтровав server-контекст здесь, мы гарантируем, что
      * index 0/1 = первый/второй РЕАЛЬНЫЙ клиент.
      *
-     * Для основного WarCard-кейса (PIE_Standalone, num_clients>1) серверного
-     * контекста нет вовсе, поэтому фильтр — no-op, и просто возвращаются N
+     * Для основного кейса (PIE_Standalone, num_clients>1) серверного контекста
+     * нет вовсе, поэтому фильтр — no-op, и просто возвращаются N
      * standalone-клиентов в порядке PIEInstance.
      */
     static TArray<const FWorldContext*> CollectPIEContexts()

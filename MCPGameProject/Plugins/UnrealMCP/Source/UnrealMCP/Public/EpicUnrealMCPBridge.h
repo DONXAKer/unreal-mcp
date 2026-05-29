@@ -26,7 +26,6 @@
 #include "Commands/UMGRuntimeCommands.h"
 #include "Commands/EnhancedInputCommands.h"
 #include "Commands/ConsoleCommands.h"
-#include "Commands/WarCardGameCommands.h"
 #include "EpicUnrealMCPBridge.generated.h"
 
 class FMCPServerRunnable;
@@ -88,5 +87,4 @@ private:
 	TSharedPtr<FUMGRuntimeCommands> UMGRuntimeCommands;
 	TSharedPtr<FEnhancedInputCommands> EnhancedInputCommands;
 	TSharedPtr<FUnrealMCPConsoleCommands> ConsoleCommands;
-	TSharedPtr<FWarCardGameCommands> WarCardGameCommands;
 };

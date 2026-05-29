@@ -82,8 +82,8 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStart(const TSharedPtr<FJsonObjec
     //       а не StartPlayInNewProcessSession) — MCP сохраняет TCP-доступ.
     //   SetPlayNetMode(PIE_Standalone)
     //     — для Standalone bNeedsServer=false (PlayLevel.cpp::2837-2839): UE НЕ
-    //       поднимает ни dedicated, ни listen-server. WarCard-клиенты ходят на
-    //       внешний Spring/STOMP (8081), UE-репликация не нужна.
+    //       поднимает ни dedicated, ни listen-server. Если клиенты проекта ходят
+    //       на внешний игровой сервер — UE-репликация не нужна.
     //   SetPlayNumberOfClients(N)
     //     — цикл PlayLevel.cpp::2886-2911 создаёт N PIE WorldContext'ов через
     //       CreateNewPlayInEditorInstance с LocalNetMode=PIE_Standalone. Каждый
@@ -98,7 +98,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStart(const TSharedPtr<FJsonObjec
 
         if (bDedicatedServer)
         {
-            // Явный режим UE dedicated server (редко нужен для WarCard).
+            // Явный режим UE dedicated server (редко нужен).
             // PIE_Client + bLaunchSeparateServer → отдельный server-контекст,
             // клиенты к нему подключаются. PIEUtils отфильтрует server-world.
             PlaySettings->SetPlayNetMode(EPlayNetMode::PIE_Client);
@@ -107,7 +107,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStart(const TSharedPtr<FJsonObjec
         }
         else if (NumClients > 1)
         {
-            // Основной кейс WarCard: N независимых клиентских миров в ОДНОМ процессе.
+            // Основной кейс: N независимых клиентских миров в ОДНОМ процессе.
             //
             // FIX-UI-008 v2: PIE_Standalone НЕ создаёт отдельные миры — при
             // NumberOfClients>1 движок делает ОДИН world со split-screen локальными
@@ -121,7 +121,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStart(const TSharedPtr<FJsonObjec
             // Отдельный dedicated-процесс НЕ поднимается (bLaunchSeparateServer=false),
             // поэтому единственный MCP TCP-listener рулит всеми инстансами.
             //
-            // Игровое состояние WarCard живёт на внешнем Spring/STOMP — UE-репликация
+            // Если игровое состояние живёт на внешнем сервере — UE-репликация
             // listen-server здесь не используется (роль server для геймплея неважна),
             // нужна лишь как механизм, заставляющий PIE создать N отдельных миров.
             // listen-server world имеет NetMode==NM_ListenServer (НЕ NM_DedicatedServer),
