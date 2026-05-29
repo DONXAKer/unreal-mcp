@@ -36,6 +36,7 @@ login → matchmaking → DRAFT (snake) → Deployment → Battle → surrender 
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
 import time
@@ -229,6 +230,61 @@ def _deploy_client(conn, ctrl: int) -> int:
     return deployed
 
 
+def _battle_units(conn, ctrl: int) -> list[dict[str, Any]]:
+    """Снимок юнитов на доске (через wc_get_battle_units → ActionCardSubsystem)."""
+    r = _send(conn, "wc_get_battle_units", {"controller_index": ctrl})
+    raw = r.get("units_json") or "{}"
+    try:
+        return json.loads(raw).get("units", [])
+    except Exception:
+        return []
+
+
+def _suffix(unit_id: str) -> str:
+    return "blue" if unit_id.endswith("-blue") else "red"
+
+
+def _run_battle_moves(conn, max_turns: int = 8) -> int:
+    """Детерминированный драйвер боя БЕЗ LLM: на ходу активного клиента двигаем
+    каждый его юнит на 1 клетку к ближайшему вражескому (по суффиксу id) юниту,
+    затем end-turn. Сервер применяет free-move только для юнитов активного игрока,
+    поэтому стороны вычислять не нужно. Возвращает число сыгранных ходов."""
+    turns_done = 0
+    for turn in range(max_turns):
+        active = None
+        for c in (0, 1):
+            st = _send(conn, "wc_get_battle_state", {"controller_index": c})
+            if st.get("my_turn"):
+                active = c
+                break
+        if active is None:
+            print(f"  ход {turn}: ни у кого нет my_turn — стоп")
+            break
+
+        units = [u for u in _battle_units(conn, active) if u.get("alive")]
+        if not units:
+            print(f"  ход {turn}: юнитов нет (c{active}) — стоп")
+            break
+
+        moved = 0
+        for u in units:
+            enemies = [e for e in units if _suffix(e.get("unitId", "")) != _suffix(u.get("unitId", ""))]
+            if not enemies:
+                continue
+            tgt = min(enemies, key=lambda e: abs(e["gridX"] - u["gridX"]) + abs(e["gridY"] - u["gridY"]))
+            nx = u["gridX"] + (1 if tgt["gridX"] > u["gridX"] else -1 if tgt["gridX"] < u["gridX"] else 0)
+            ny = u["gridY"] + (1 if tgt["gridY"] > u["gridY"] else -1 if tgt["gridY"] < u["gridY"] else 0)
+            r = _send(conn, "wc_free_move",
+                      {"controller_index": active, "unit_id": u["unitId"], "x": nx, "y": ny})
+            if isinstance(r, dict) and r.get("ok") and not r.get("error"):
+                moved += 1
+        _send(conn, "wc_end_turn", {"controller_index": active})
+        turns_done += 1
+        print(f"  ход {turn}: c{active} подвинул {moved} юнитов к врагу")
+        time.sleep(1.5)
+    return turns_done
+
+
 def main() -> int:
     ts = int(time.time()) % 1000000
     u1, u2 = f"wf_a_{ts}", f"wf_b_{ts}"
@@ -334,19 +390,19 @@ def main() -> int:
     _send(conn, "pie_screenshot", {"filename": "e2e_battle_field.png", "show_ui": False})
     print("  battle field screenshot -> e2e_battle_field.png")
 
-    # 7. Снимок боя + один end_turn активного игрока (упражняем боевой путь).
-    print("\n--- 7/8 battle state + end_turn ---")
+    # 7. Детерминированный драйвер боя БЕЗ LLM: юниты двигаются к врагу по ходам.
+    print("\n--- 7/8 deterministic battle moves (no LLM) ---")
     for ctrl in (0, 1):
         stt = _send(conn, "wc_get_battle_state", {"controller_index": ctrl})
         print(f"  c{ctrl}: my_turn={stt.get('my_turn')} ap={stt.get('ap')}/{stt.get('max_ap')}")
-    for ctrl in (0, 1):
-        stt = _send(conn, "wc_get_battle_state", {"controller_index": ctrl})
-        if stt.get("my_turn"):
-            r = _send(conn, "wc_end_turn", {"controller_index": ctrl})
-            print(f"  c{ctrl} end_turn: ended={r.get('ended')} ok={r.get('ok')}")
-            break
-    else:
-        print("  ни один клиент не сообщил my_turn — пропускаю end_turn")
+    units0 = _battle_units(conn, 0)
+    print(f"  юнитов на доске: {len(units0)}")
+    turns = _run_battle_moves(conn, max_turns=8)
+    print(f"  сыграно ходов движения: {turns}")
+    # Скриншот после движения — видно, что юниты сошлись к центру.
+    time.sleep(1.5)
+    _send(conn, "pie_screenshot", {"filename": "e2e_battle_after_moves.png", "show_ui": False})
+    print("  after-moves screenshot -> e2e_battle_after_moves.png")
 
     # 8. Капитуляция c0 → game-over → WBP_GameResult на ОБОИХ.
     print("\n--- 8/8 surrender c0 -> expect WBP_GameResult on both ---")

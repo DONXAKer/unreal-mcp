@@ -17,6 +17,30 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [2.19.0] — 2026-05-29
+
+Movement + чтение состояния боя в MCP — для детерминированного бота (без LLM).
+
+### Added
+
+- `wc_free_move` — свободное перемещение юнита в BATTLE
+  (`UActionCardSubsystem::FreeMove` → `/app/game/free-move` с серверным id юнита).
+  Возврат `{ok, unit_id, x, y, controller_index}`.
+- `wc_get_battle_units` — JSON-снимок юнитов на доске
+  (`UActionCardSubsystem::GetBattleUnitsJson` читает `ABattlefieldManager::GetAllUnits`):
+  `{units:[{unitId,gridX,gridY,hp,playerId,alive}]}`. Возврат `{ok, units_json, controller_index}`.
+- Оба — reflection через `ResolveSubsystem(/Script/Client.ActionCardSubsystem)` +
+  Python-обёртки `warcard_tools.py`. Позволяют гонять детерминированный драйвер боя
+  (`smoke_pie_full_game.py::_run_battle_moves`): на ходу активного клиента юниты
+  двигаются к ближайшему врагу.
+
+### Why
+
+- Нужно тестировать бой (движение/атака) без LLM-симулятора. Эти команды +
+  драйвер дают воспроизводимое движение юнитов через MCP. (Атака карт — следующий шаг.)
+
+---
+
 ## [2.18.0] — 2026-05-28
 
 Battle-фаза в MCP: команды боя + догнан e2e полной игры (FEAT-BATTLE / FIX-UI-008).
