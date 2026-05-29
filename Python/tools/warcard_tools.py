@@ -286,6 +286,50 @@ def register_warcard_tools(mcp: FastMCP) -> None:
         return response or {"status": "error", "error": "No response"}
 
     @mcp.tool()
+    def wc_attack(
+        ctx: Context[Any, Any, Any],
+        attacker_unit_id: str,
+        target_unit_id: str,
+        x: int,
+        y: int,
+        controller_index: int = 0,
+    ) -> dict[str, Any]:
+        """Атака юнита по цели в клетке (x, y) в Battle phase.
+
+        Под капотом — UActionCardSubsystem::AttackUnit(AttackerUnitId, TargetUnitId,
+        TargetX, TargetY) (void). Не требует UI-клика — это direct subsystem call
+        для детерминированного бота.
+
+        Args:
+            attacker_unit_id: ID атакующего юнита (см. wc_get_battle_units).
+            target_unit_id: ID юнита-цели.
+            x, y: целевые координаты клетки 0-based.
+            controller_index: PIE-клиент.
+
+        Returns:
+            { ok, attacker_unit_id, target_unit_id, x, y, controller_index }
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"status": "error", "error": "No Unreal connection"}
+
+        params: dict[str, Any] = {
+            "attacker_unit_id": attacker_unit_id,
+            "target_unit_id": target_unit_id,
+            "x": x,
+            "y": y,
+            "controller_index": controller_index,
+        }
+        logger.info(
+            f"wc_attack: attacker='{attacker_unit_id}' target='{target_unit_id}' "
+            f"to ({x},{y}) ctrl={controller_index}"
+        )
+        response = unreal.send_command("wc_attack", params)
+        return response or {"status": "error", "error": "No response"}
+
+    @mcp.tool()
     def wc_get_battle_units(
         ctx: Context[Any, Any, Any],
         controller_index: int = 0,

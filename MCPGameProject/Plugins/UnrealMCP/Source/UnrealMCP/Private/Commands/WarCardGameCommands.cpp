@@ -183,6 +183,7 @@ TSharedPtr<FJsonObject> FWarCardGameCommands::HandleCommand(const FString& Comma
     if (CommandType == TEXT("wc_end_turn"))              return HandleEndTurn(Params);
     if (CommandType == TEXT("wc_get_battle_state"))      return HandleGetBattleState(Params);
     if (CommandType == TEXT("wc_free_move"))             return HandleFreeMove(Params);
+    if (CommandType == TEXT("wc_attack"))                return HandleAttack(Params);
     if (CommandType == TEXT("wc_get_battle_units"))       return HandleGetBattleUnits(Params);
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
@@ -541,6 +542,51 @@ TSharedPtr<FJsonObject> FWarCardGameCommands::HandleFreeMove(const TSharedPtr<FJ
     {
         Result->SetBoolField(TEXT("ok"), true);
         Result->SetStringField(TEXT("unit_id"), UnitId);
+        Result->SetNumberField(TEXT("x"), X);
+        Result->SetNumberField(TEXT("y"), Y);
+        Result->SetNumberField(TEXT("controller_index"), ControllerIndex);
+    }
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FWarCardGameCommands::HandleAttack(const TSharedPtr<FJsonObject>& Params)
+{
+    int32 ControllerIndex = 0;
+    Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+
+    FString AttackerUnitId;
+    if (!Params->TryGetStringField(TEXT("attacker_unit_id"), AttackerUnitId))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'attacker_unit_id' parameter"));
+
+    FString TargetUnitId;
+    if (!Params->TryGetStringField(TEXT("target_unit_id"), TargetUnitId))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'target_unit_id' parameter"));
+
+    int32 X = -1, Y = -1;
+    if (!Params->TryGetNumberField(TEXT("x"), X))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'x' parameter"));
+    if (!Params->TryGetNumberField(TEXT("y"), Y))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'y' parameter"));
+
+    FString Err;
+    UObject* Sub = ResolveSubsystem(ControllerIndex, kActionCardSubsystemPath, Err);
+    if (!Sub) return FEpicUnrealMCPCommonUtils::CreateErrorResponse(Err);
+
+    // Имена параметров должны matchать FProperty.GetName() метода AttackUnit
+    // на стороне клиента (ActionCardSubsystem.h): AttackerUnitId, TargetUnitId,
+    // TargetX, TargetY. AttackUnit — void, без возврата.
+    TMap<FString, TSharedPtr<FJsonValue>> Args;
+    Args.Add(TEXT("AttackerUnitId"), MakeShared<FJsonValueString>(AttackerUnitId));
+    Args.Add(TEXT("TargetUnitId"), MakeShared<FJsonValueString>(TargetUnitId));
+    Args.Add(TEXT("TargetX"), MakeShared<FJsonValueNumber>(X));
+    Args.Add(TEXT("TargetY"), MakeShared<FJsonValueNumber>(Y));
+
+    TSharedPtr<FJsonObject> Result = InvokeFunction(Sub, TEXT("AttackUnit"), Args);
+    if (Result.IsValid())
+    {
+        Result->SetBoolField(TEXT("ok"), true);
+        Result->SetStringField(TEXT("attacker_unit_id"), AttackerUnitId);
+        Result->SetStringField(TEXT("target_unit_id"), TargetUnitId);
         Result->SetNumberField(TEXT("x"), X);
         Result->SetNumberField(TEXT("y"), Y);
         Result->SetNumberField(TEXT("controller_index"), ControllerIndex);

@@ -34,6 +34,7 @@ class UObject;
  *   wc_end_turn              — UActionCardSubsystem::EndTurn() → bool
  *   wc_get_battle_state      — { my_turn, ap, max_ap }
  *   wc_free_move             — UActionCardSubsystem::FreeMove(UnitId, TargetX, TargetY)
+ *   wc_attack                — UActionCardSubsystem::AttackUnit(AttackerUnitId, TargetUnitId, TargetX, TargetY)
  *   wc_get_battle_units      — UActionCardSubsystem::GetBattleUnitsJson() → FString
  */
 class FWarCardGameCommands
@@ -55,6 +56,7 @@ private:
     TSharedPtr<FJsonObject> HandleEndTurn(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleGetBattleState(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleFreeMove(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleAttack(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleGetBattleUnits(const TSharedPtr<FJsonObject>& Params);
 
     /**
