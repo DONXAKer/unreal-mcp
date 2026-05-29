@@ -1,17 +1,37 @@
-"""Полный e2e smoke: 2 клиента проходят login → matchmaking → UnitSelection →
-Deployment → Battle. Стабильный — с retry, fallback и детальной диагностикой.
+"""Полный e2e smoke ПОЛНОЙ игры: 2 клиента проходят
+login → matchmaking → DRAFT (snake) → Deployment → Battle → surrender → GameResult.
 
-Stage 1-5 в одном flow. Использует:
-- prefix unique users (timestamp) — обходит конфликты с pending games в БД сервера.
-- PIE n=2 fresh start.
-- Sequential login c long pause (sync STOMP handshake).
-- _wait_widget с fallback на поиск без controller_index если PC-фильтр не находит сразу.
-- wc_select_unit / wc_confirm_selection — UnitSelection phase.
-- wc_deploy_unit / wc_confirm_deployment — Deployment phase.
+Победа достигается детерминированно через капитуляцию (wc_surrender) одного
+клиента — естественный бой до 0 юнитов занял бы десятки ходов и флакал бы.
+После surrender сервер шлёт bGameEnded → оба клиента переходят в GameResult
+(победитель/проигравший) → проверяем WBP_GameResult на ОБОИХ.
+
+Поток (актуальный, FEAT-BATTLE + FIX-UI-008):
+1. PIE n=2, оба клиента на WBP_Login.
+2. Sequential login + FindGame (с ретраями) → оба сматчиваются → WBP_Draft.
+3. Snake-draft: на каждом пике кликаем включённую CatalogEntryButton текущего
+   пикера; ЗАПОМИНАЕМ имя выбранного юнита per-controller (нужно для деплоя —
+   роадж драфт-состав в DeploymentSubsystem недоступен через MCP).
+4. Deployment: размещаем именно выбранные на драфте юниты (имя→тип, пробуем оба
+   суффикса -blue/-red и обе зоны) через wc_deploy_unit + wc_confirm_deployment.
+5. Battle: wc_get_battle_state / wc_end_turn (упражняем боевой HUD).
+6. wc_surrender(c0) → детерминированный game-over → WBP_GameResult на обоих.
+
+Использует battle-команды плагина v2.18.0+
+(wc_surrender / wc_end_turn / wc_get_battle_state).
+
+Запуск из D:\\WarCard\\unreal-mcp\\Python:
+    uv run python tests/smoke_pie_full_game.py
 
 Требования:
-- UnrealMCP плагин v2.16.0+ (WarCardGameCommands + text в get_widget_tree).
+- UnrealMCP плагин v2.18.0+ (battle-команды).
 - WarCard сервер на :8081.
+- BP_GamePhaseManager с заданными DraftWidgetClass/DeploymentScreenWidgetClass/
+  BattleHUDWidgetClass/GameResultWidgetClass/ActionCardHandWidgetClass;
+  ACardEffectManager на Game_Map (для VFX, не обязателен).
+
+ВНИМАНИЕ: multi-client PIE нестабилен (см. memory project_multiclient_pie_limitation).
+Тест устойчив к гонкам через ретраи, но «зелёный» прогон не гарантирован с первого раза.
 """
 
 from __future__ import annotations
@@ -30,23 +50,36 @@ logging.getLogger("UnrealMCP").setLevel(logging.ERROR)
 from tests._fixtures import ensure_test_user
 from unreal_mcp_server import UnrealConnection
 
-
-# Server отправляет roster по стороне. Берём первые 5 из логов available-units;
-# скрипт пробует оба prefix'а, выбирая то, что AddUnitToComposition принимает.
-UNIT_ROSTER_BLUE = ["sniper-blue", "medic-blue", "assault-blue", "apache-blue", "abrams-blue"]
-UNIT_ROSTER_RED  = ["sniper-red",  "medic-red",  "assault-red",  "apache-red",  "abrams-red"]
 UNITS_TO_PICK = 5
+
+# Полный каталог id юнитов (сервер, обе стороны, по 9). Деплой перебирает все:
+# 5 в ростере игрока разместятся, остальные сервер отвергнет (не в составе или
+# клетка вне зоны). Не зависит от чтения имён из дерева виджета — устойчивее.
+ALL_UNIT_IDS = [
+    "sniper-blue", "medic-blue", "assault-blue", "apache-blue", "abrams-blue",
+    "bradley-blue", "patriot-blue", "mlrs-blue", "paladin-blue",
+    "sniper-red", "medic-red", "assault-red", "mi24-red", "t72-red",
+    "btr80-red", "s300-red", "grad-red", "msta-red",
+]
+
+# Координаты зон: Player1 → X∈[0,2], Player2 → X∈[5,7]. Сторона клиента
+# неизвестна — пробуем обе зоны, невалидная отвергнется сервером.
+COORDS_BY_ZONE = {
+    "p1": [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1)],
+    "p2": [(5, 0), (6, 0), (7, 0), (5, 1), (6, 1)],
+}
 
 
 def _send(conn: UnrealConnection, cmd: str, params: dict[str, Any],
-          retries: int = 5, retry_delay: float = 0.6) -> dict[str, Any]:
+          retries: int = 4, retry_delay: float = 0.6) -> dict[str, Any]:
     """Send + retry с reconnect на socket timeout. Возвращает result или {error}."""
     last_err: str | None = None
-    for attempt in range(retries):
+    for _ in range(retries):
         try:
             resp = conn.send_command(cmd, params)
             if isinstance(resp, dict):
-                return resp.get("result", resp) if resp.get("status") == "success" else {"error": resp.get("error", "no error msg"), "_raw": resp}
+                return resp.get("result", resp) if resp.get("status") == "success" \
+                    else {"error": resp.get("error", "no error msg"), "_raw": resp}
             return {}
         except Exception as exc:
             last_err = str(exc)
@@ -58,269 +91,285 @@ def _send(conn: UnrealConnection, cmd: str, params: dict[str, Any],
     return {"error": last_err or "unknown"}
 
 
-def _wait_widget_strict(conn, ctrl: int, name: str, timeout: float = 25.0, label: str = "") -> bool:
-    """Polling find_widget с фильтром по controller_index. Возвращает True если
-    виджет найден за timeout, False иначе."""
-    deadline = time.monotonic() + timeout
-    attempts = 0
-    while time.monotonic() < deadline:
-        attempts += 1
-        r = _send(conn, "find_widget", {"widget_name": name, "controller_index": ctrl})
-        if r.get("found"):
-            elapsed = timeout - (deadline - time.monotonic())
-            if label: print(f"    [{label}] '{name}' found on c{ctrl} after {elapsed:.1f}s, {attempts} attempts")
-            return True
-        time.sleep(0.5)
-    if label: print(f"    [{label}] '{name}' NOT found on c{ctrl} after {timeout}s, {attempts} attempts")
-    return False
-
-
-def _wait_any_widget(conn, ctrl: int, names: list[str], timeout: float = 20.0, label: str = "") -> str | None:
-    """Polling нескольких виджетов — возвращает имя первого найденного."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        for name in names:
-            r = _send(conn, "find_widget", {"widget_name": name, "controller_index": ctrl})
-            if r.get("found"):
-                if label: print(f"    [{label}] '{name}' found on c{ctrl}")
-                return name
-        time.sleep(0.5)
-    if label: print(f"    [{label}] none of {names} found on c{ctrl} after {timeout}s")
+def _find_node(node: Any, predicate) -> Any:
+    """DFS по дереву виджета (get_widget_tree root)."""
+    if not isinstance(node, dict):
+        return None
+    if predicate(node):
+        return node
+    for child in node.get("children", []) or []:
+        hit = _find_node(child, predicate)
+        if hit:
+            return hit
     return None
 
 
-def _wait_pie_both_clients_ready(conn, target_widget: str = "WBP_Login_C", timeout: float = 30.0) -> bool:
-    """Ждать пока оба клиента видны в pie_status и оба показывают target_widget."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        st = _send(conn, "pie_status", {})
-        cs = st.get("clients") or []
-        if len(cs) == 2:
-            widgets = [c.get("current_widget") for c in cs]
-            if all(w == target_widget for w in widgets):
-                return True
-        time.sleep(0.5)
+def _node_first_text(node: Any) -> str:
+    """Первый непустой TextBlock-текст в поддереве (имя юнита в карточке драфта)."""
+    found = _find_node(node, lambda n: "TextBlock" in n.get("class", "") and n.get("text"))
+    return (found or {}).get("text", "") if found else ""
+
+
+def _tree(conn, ctrl: int) -> dict[str, Any]:
+    return _send(conn, "get_widget_tree", {"controller_index": ctrl})
+
+
+def _uw_classes(conn, ctrl: int) -> list[str]:
+    tree = _tree(conn, ctrl)
+    return [uw.get("class", "") for uw in (tree.get("user_widgets") or []) if uw.get("is_in_viewport")]
+
+
+def _has_uw_any(conn, substr: str) -> bool:
+    """True если виджет с substr в class есть у любого из 2 клиентов."""
+    for ctrl in (0, 1):
+        if any(substr in c for c in _uw_classes(conn, ctrl)):
+            return True
     return False
 
 
-def _login_client(conn, ctrl: int, login: str, password: str) -> bool:
-    """Login flow для одного клиента. Возвращает True если дошёл до MainMenu/UnitSelection/Deployment."""
-    print(f"\n--- login c{ctrl} ({login}) ---")
-    r = _send(conn, "set_text_on_widget",
-              {"widget_name": "LoginUsernameInput", "text": login, "controller_index": ctrl})
-    if not r.get("ok"):
-        print(f"  set username failed: {r}")
-        return False
-
-    r = _send(conn, "set_text_on_widget",
-              {"widget_name": "LoginPasswordInput", "text": password, "controller_index": ctrl})
-    if not r.get("ok"):
-        print(f"  set password failed: {r}")
-        return False
-
-    r = _send(conn, "invoke_button_click",
-              {"widget_name": "LoginButton", "controller_index": ctrl})
-    if not r.get("ok"):
-        print(f"  click failed: {r}")
-        return False
-
-    # Login — async на server. Ждём пост-login widget (MainMenu, либо если auto-resume —
-    # сразу Matchmaking/UnitSelection/Deployment).
-    found = _wait_any_widget(conn, ctrl,
-                             ["WBP_MainMenu_C_0", "WBP_Matchmaking_C_0",
-                              "WBP_UnitSelection_C_0", "WBP_DeploymentScreen_C_0"],
-                             timeout=30.0, label=f"login c{ctrl}")
-    return found is not None
+def _wait_widget_strict(conn, ctrl: int, name: str, timeout: float = 25.0, label: str = "") -> bool:
+    """Polling find_widget с фильтром по controller_index."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        r = _send(conn, "find_widget", {"widget_name": name, "controller_index": ctrl})
+        if r.get("found"):
+            if label: print(f"    [{label}] '{name}' found on c{ctrl}")
+            return True
+        time.sleep(0.5)
+    if label: print(f"    [{label}] '{name}' NOT found on c{ctrl} after {timeout}s")
+    return False
 
 
-def _select_5_units(conn, ctrl: int) -> int:
-    """Выбрать 5 unit'ов через wc_select_unit. Пробует оба roster (blue/red).
-    Возвращает количество успешно добавленных."""
-    selected_count = 0
-    for roster in [UNIT_ROSTER_BLUE, UNIT_ROSTER_RED]:
-        if selected_count >= UNITS_TO_PICK: break
-        for unit_id in roster:
-            if selected_count >= UNITS_TO_PICK: break
-            r = _send(conn, "wc_select_unit",
-                      {"unit_id": unit_id, "controller_index": ctrl})
-            if r.get("selected"):
-                selected_count += 1
-                print(f"    + {unit_id} ({selected_count}/{UNITS_TO_PICK})")
-    return selected_count
+def _draft_entries(conn) -> list[tuple[int, str, str]]:
+    """Тройки (controller_index, имя кнопки, имя юнита) для CatalogEntryButton
+    в Scroll_AvailableUnits draft-виджета каждого клиента."""
+    out: list[tuple[int, str, str]] = []
+    for ctrl in (0, 1):
+        tree = _tree(conn, ctrl)
+        for uw in (tree.get("user_widgets") or []):
+            if "Draft" not in uw.get("class", ""):
+                continue
+            scroll = _find_node(uw.get("root"), lambda n: n.get("name") == "Scroll_AvailableUnits")
+            if not scroll:
+                continue
+            for ch in (scroll.get("children") or []):
+                if "Button" in ch.get("class", ""):
+                    out.append((ctrl, ch.get("name"), _node_first_text(ch)))
+    return out
 
 
-def _deploy_5_units(conn, ctrl: int) -> int:
-    """Деплоит 5 unit'ов. PlayerZone определяет валидные X:
-       Player1 → X∈[0,2], Player2 → X∈[5,7]. Пробуем оба набора координат
-       для каждого roster — wc_deploy_unit вернёт ok=False на неверный side."""
-    # 5 уникальных (x,y) для каждой стороны.
-    COORDS_P1 = [(0, 0), (1, 0), (2, 0), (0, 1), (1, 1)]
-    COORDS_P2 = [(5, 0), (6, 0), (7, 0), (5, 1), (6, 1)]
+def _login_round(conn, u1: str, u2: str, pwd: str) -> bool:
+    """Login + FindGame обоих клиентов с ретраями. Критерий успеха — появление
+    WBP_Draft (значит оба залогинились и сматчились)."""
+    for rnd in range(5):
+        for ctrl, login in [(0, u1), (1, u2)]:
+            _send(conn, "set_text_on_widget", {"widget_name": "LoginUsernameInput", "text": login, "controller_index": ctrl})
+            _send(conn, "set_text_on_widget", {"widget_name": "LoginPasswordInput", "text": pwd, "controller_index": ctrl})
+            _send(conn, "invoke_button_click", {"widget_name": "LoginButton", "controller_index": ctrl})
+        time.sleep(3.0)
+        for ctrl in (0, 1):
+            _send(conn, "invoke_button_click", {"widget_name": "FindGameButton", "controller_index": ctrl})
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            if _has_uw_any(conn, "WBP_Draft_C"):
+                print(f"  DRAFT достигнут на раунде {rnd}")
+                return True
+            time.sleep(1.5)
+        print(f"  раунд {rnd}: DRAFT ещё нет — повтор login+FindGame")
+    return False
 
-    deployed_count = 0
-    for roster in [UNIT_ROSTER_BLUE, UNIT_ROSTER_RED]:
-        if deployed_count >= UNITS_TO_PICK: break
-        for coords in [COORDS_P1, COORDS_P2]:
-            if deployed_count >= UNITS_TO_PICK: break
-            for i, (unit_id, (gx, gy)) in enumerate(zip(roster, coords)):
-                if deployed_count >= UNITS_TO_PICK: break
-                r = _send(conn, "wc_deploy_unit",
-                          {"unit_id": unit_id, "grid_x": gx, "grid_y": gy,
-                           "controller_index": ctrl})
-                if r.get("deployed"):
-                    deployed_count += 1
-                    print(f"    + {unit_id} @ ({gx},{gy}) ({deployed_count}/{UNITS_TO_PICK})")
-    return deployed_count
+
+def _run_snake_draft(conn) -> int:
+    """10 snake-пиков. Возвращает число сделанных пиков. На каждом пике кликаем
+    включённую кнопку текущего пикера (у остальных disabled → invoke вернёт
+    error). Имена кнопок меняются после draft-update — перечитываем дерево."""
+    counts = {0: 0, 1: 0}
+    for pick in range(10):
+        done = False
+        for _ in range(30):
+            for ctrl, btn_name, _unit in _draft_entries(conn):
+                r = _send(conn, "invoke_button_click", {"widget_name": btn_name, "controller_index": ctrl})
+                if isinstance(r, dict) and r.get("ok") and not r.get("error"):
+                    counts[ctrl] += 1
+                    print(f"  pick {pick}: c{ctrl} -> {btn_name}")
+                    done = True
+                    break
+            if done:
+                break
+            time.sleep(0.8)
+        if not done:
+            print(f"  pick {pick}: не удалось — остановка драфта")
+            break
+        time.sleep(1.8)  # дать серверу broadcast draft-update + UI rebuild
+    total = counts[0] + counts[1]
+    print(f"  пики сделано: c0={counts[0]} c1={counts[1]} (всего {total}/10)")
+    return total
+
+
+def _deploy_client(conn, ctrl: int) -> int:
+    """Разместить 5 юнитов ростера, перебирая весь каталог id по координатам зоны.
+    Сторона/зона клиента неизвестны — пробуем обе зоны; невалидные комбинации
+    (юнит не в составе ИЛИ клетка вне зоны) сервер отвергает (deployed=false).
+    Имя из дерева читать не нужно — устойчиво к multi-world enumeration flake."""
+    deployed = 0
+    for coords in COORDS_BY_ZONE.values():
+        if deployed >= UNITS_TO_PICK:
+            break
+        ci = 0
+        for uid in ALL_UNIT_IDS:
+            if deployed >= UNITS_TO_PICK or ci >= len(coords):
+                break
+            gx, gy = coords[ci]
+            r = _send(conn, "wc_deploy_unit",
+                      {"unit_id": uid, "grid_x": gx, "grid_y": gy, "controller_index": ctrl})
+            if r.get("deployed"):
+                deployed += 1
+                ci += 1
+                print(f"    c{ctrl} + {uid} @ ({gx},{gy}) ({deployed}/{UNITS_TO_PICK})")
+    return deployed
 
 
 def main() -> int:
-    ts = int(time.time())
-    u1, u2 = f"wc_e2e_a_{ts}", f"wc_e2e_b_{ts}"
+    ts = int(time.time()) % 1000000
+    u1, u2 = f"wf_a_{ts}", f"wf_b_{ts}"
     pwd = "Test1234"
 
-    print(f"=== smoke_pie_full_game ===")
+    print("=== smoke_pie_full_game ===")
     print(f"users: {u1} / {u2}\n")
 
-    # 1. Ensure both users.
     ensure_test_user(u1, pwd, f"{u1}@x.com")
     ensure_test_user(u2, pwd, f"{u2}@x.com")
 
     conn = UnrealConnection()
     conn.connect()
 
-    # 2. Fresh PIE n=2 — если уже идёт 2 клиента, переиспользуем.
-    print("--- 1/9 PIE n=2 setup ---")
+    # 1. Полный стоп предыдущего PIE → старт n=2 → ждём оба PIE-мира.
+    print("--- 1/8 PIE n=2 setup ---")
+    _send(conn, "pie_stop", {})
+    dl = time.monotonic() + 25
+    while time.monotonic() < dl:
+        if not (_send(conn, "pie_status", {}) or {}).get("is_running"):
+            break
+        time.sleep(1.0)
+    time.sleep(2)
+    for _ in range(3):
+        _send(conn, "pie_start", {"num_clients": 2})
+        dl = time.monotonic() + 25
+        while time.monotonic() < dl:
+            if (_send(conn, "pie_status", {}) or {}).get("is_running"):
+                break
+            time.sleep(1.0)
+        if (_send(conn, "pie_status", {}) or {}).get("is_running"):
+            break
+        print("  pie_start не поднял PIE — повтор")
+    dl = time.monotonic() + 75
+    while time.monotonic() < dl:
+        st = _send(conn, "pie_status", {})
+        cs = st.get("clients") or []
+        if st.get("num_pie_world_contexts", 0) >= 2 and len(cs) >= 2 and all(c.get("current_widget") for c in cs):
+            break
+        time.sleep(2.0)
     st = _send(conn, "pie_status", {})
-    if st.get("is_running") and st.get("num_clients") == 2:
-        print("  PIE уже с 2 клиентами — переиспользую")
-    else:
-        if st.get("is_running"):
-            _send(conn, "pie_stop", {})
-            time.sleep(3.0)  # дать UE доочиститься после stop.
-        r = _send(conn, "pie_start", {"num_clients": 2})
-        if not r.get("started"):
-            print(f"  pie_start failed: {r}")
-            return 1
-    if not _wait_pie_both_clients_ready(conn, "WBP_Login_C", timeout=45.0):
-        print("  PIE clients not ready in 45s — попробую продолжить как есть")
-    else:
-        print("  both clients on WBP_Login_C")
+    print(f"  PIE worlds={st.get('num_pie_world_contexts')}, clients={len(st.get('clients') or [])}")
+    time.sleep(4)
 
-    # 3. Login both — sequential, 4s pause между для async STOMP handshake.
-    print("\n--- 2/9 login both clients (sequential) ---")
-    if not _login_client(conn, 0, u1, pwd):
-        print("  login c0 failed")
-        return 1
-    time.sleep(4.0)
-    if not _login_client(conn, 1, u2, pwd):
-        print("  login c1 failed")
+    # 2. Login + FindGame → DRAFT.
+    print("\n--- 2/8 login + FindGame -> DRAFT ---")
+    if not _login_round(conn, u1, u2, pwd):
+        print("\n=== RESULT: DRAFT NOT reached -> FAIL ===")
         return 1
 
-    # 4. FindGame на тех клиентах, кто на MainMenu (если auto-resume — уже после).
-    print("\n--- 3/9 FindGame ---")
-    for ctrl in (0, 1):
-        r = _send(conn, "find_widget",
-                  {"widget_name": "WBP_MainMenu_C_0", "controller_index": ctrl})
-        if r.get("found"):
-            _send(conn, "invoke_button_click",
-                  {"widget_name": "FindGameButton", "controller_index": ctrl})
-            print(f"  c{ctrl} clicked FindGameButton")
-        else:
-            print(f"  c{ctrl} not on MainMenu — skip FindGame")
+    # 3. Snake-draft (10 пиков).
+    print("\n--- 3/8 snake draft ---")
+    total_picks = _run_snake_draft(conn)
+    if total_picks < 10:
+        print(f"  ПРЕДУПРЕЖДЕНИЕ: неполный драфт ({total_picks}/10) — сервер может не перейти в Deployment")
 
-    # 5. Wait UnitSelection (или сразу DeploymentScreen если phase прыгает).
-    print("\n--- 4/9 wait UnitSelection ---")
-    selection_ctrl = None
-    for ctrl in (0, 1):
-        if _wait_widget_strict(conn, ctrl, "WBP_UnitSelection_C_0", timeout=60.0,
-                                label="MATCH"):
-            selection_ctrl = ctrl
+    # 4. Wait Deployment.
+    print("\n--- 4/8 wait Deployment ---")
+    deploy_seen = False
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        if _has_uw_any(conn, "WBP_DeploymentScreen"):
+            deploy_seen = True
             break
-    if selection_ctrl is None:
-        print("  WBP_UnitSelection не появился ни на одном клиенте — Stage 4 stuck")
-        # Probe via state — может subsystem уже инициализирован.
-        for ctrl in (0, 1):
-            st = _send(conn, "wc_get_selection_state", {"controller_index": ctrl})
-            print(f"  c{ctrl} selection state: {st}")
-        return 1
-    print(f"  UnitSelection on c{selection_ctrl}")
+        time.sleep(1.5)
+    print(f"  deployment widget виден: {deploy_seen}")
 
-    # 6. UnitSelection phase — выбрать 5 unit'ов на КАЖДОМ клиенте.
-    print("\n--- 5/9 select 5 units on each client ---")
+    # 5. Deploy выбранные юниты на каждом клиенте + confirm.
+    print("\n--- 5/8 deploy drafted units ---")
     for ctrl in (0, 1):
         print(f"  client {ctrl}:")
-        # Skip если этого клиента нет в UnitSelection (другой ещё в MainMenu или
-        # already in deployment).
-        if not _send(conn, "find_widget",
-                     {"widget_name": "WBP_UnitSelection_C_0", "controller_index": ctrl}).get("found"):
-            print(f"    not on UnitSelection — пробуем wc_select_unit всё равно")
-        n = _select_5_units(conn, ctrl)
-        st = _send(conn, "wc_get_selection_state", {"controller_index": ctrl})
-        print(f"    state: selected={st.get('selected_count')} ready={st.get('ready')}")
-
-    # 7. Confirm selection on both.
-    print("\n--- 6/9 confirm_selection on both ---")
-    for ctrl in (0, 1):
-        r = _send(conn, "wc_confirm_selection", {"controller_index": ctrl})
-        print(f"  c{ctrl}: ok={r.get('ok')}")
-
-    # 8. Wait DeploymentScreen.
-    print("\n--- 7/9 wait Deployment ---")
-    deploy_ctrl = None
-    for ctrl in (0, 1):
-        if _wait_widget_strict(conn, ctrl, "WBP_DeploymentScreen_C_0",
-                                timeout=30.0, label="DEPLOY"):
-            deploy_ctrl = ctrl
-            break
-    if deploy_ctrl is None:
-        print("  Deployment не появился — server возможно ждёт ещё подтверждение")
-        for ctrl in (0, 1):
-            st = _send(conn, "wc_get_deployment_state", {"controller_index": ctrl})
-            print(f"  c{ctrl} deploy state: {st}")
-        # не fatal — пробуем дальше через wc_deploy напрямую (subsystem может
-        # быть инициализирован хотя UI не показан).
-
-    # 9. Deploy 5 units на каждом.
-    print("\n--- 8/9 deploy 5 units on each ---")
-    for ctrl in (0, 1):
-        print(f"  client {ctrl}:")
-        n = _deploy_5_units(conn, ctrl)
-        st = _send(conn, "wc_get_deployment_state", {"controller_index": ctrl})
-        print(f"    state: deployed={st.get('deployed_count')} ready={st.get('ready')}")
-
-    # 10. Confirm deployment.
-    print("\n--- 9/9 confirm_deployment ---")
+        n = _deploy_client(conn, ctrl)
+        stt = _send(conn, "wc_get_deployment_state", {"controller_index": ctrl})
+        print(f"    deployed={stt.get('deployed_count')} ready={stt.get('ready')} (placed={n})")
     for ctrl in (0, 1):
         r = _send(conn, "wc_confirm_deployment", {"controller_index": ctrl})
-        print(f"  c{ctrl}: ok={r.get('ok')}")
+        print(f"  c{ctrl} confirm_deployment: ok={r.get('ok')}")
 
-    # 11. Wait Battle widget.
-    print("\n--- waiting Battle ---")
-    battle = None
-    for ctrl in (0, 1):
-        name = _wait_any_widget(conn, ctrl,
-                                ["WBP_BattleHUD_C_0", "WBP_Battle_C_0",
-                                 "WBP_ActionCardHand_C_0"],
-                                timeout=30.0, label="BATTLE")
-        if name:
-            battle = (ctrl, name)
-            break
+    # 6. Wait Battle HUD на обоих клиентах.
+    print("\n--- 6/8 wait Battle HUD ---")
+    battle_ctrls: list[int] = []
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline and len(battle_ctrls) < 2:
+        for ctrl in (0, 1):
+            if ctrl in battle_ctrls:
+                continue
+            if any("BattleHUD" in c or "ActionCardHand" in c for c in _uw_classes(conn, ctrl)):
+                battle_ctrls.append(ctrl)
+                print(f"  battle HUD on c{ctrl}")
+        time.sleep(1.5)
 
-    # Если battle не найден — diagnostic dump всех активных widgets.
-    if battle is None:
+    if not battle_ctrls:
         print("\n--- diag: all user_widgets per client ---")
         for ctrl in (0, 1):
-            tree = _send(conn, "get_widget_tree", {"controller_index": ctrl})
+            tree = _tree(conn, ctrl)
             uws = tree.get("user_widgets") or []
-            print(f"  c{ctrl} ({len(uws)} widgets):")
-            for uw in uws:
-                print(f"    - {uw.get('name')} ({uw.get('class')}) viewport={uw.get('is_in_viewport')}")
+            print(f"  c{ctrl} ({len(uws)} widgets): {[uw.get('class') for uw in uws if uw.get('is_in_viewport')]}")
+        print("\n=== RESULT: battle NOT reached -> FAIL ===")
+        return 1
 
-    print(f"\n=== RESULT: battle={battle} ===")
+    # Скриншот поля боя БЕЗ UI — проверяем рендер сетки + юнитов на Game_Map.
+    time.sleep(2.5)  # дать /state-броадкасту заспавнить юнит-актёры
+    _send(conn, "pie_screenshot", {"filename": "e2e_battle_field.png", "show_ui": False})
+    print("  battle field screenshot -> e2e_battle_field.png")
 
-    # Оставляем PIE running для дальнейшей диагностики через MCP-tool.
-    # _send(conn, "pie_stop", {})
-    return 0 if battle else 1
+    # 7. Снимок боя + один end_turn активного игрока (упражняем боевой путь).
+    print("\n--- 7/8 battle state + end_turn ---")
+    for ctrl in (0, 1):
+        stt = _send(conn, "wc_get_battle_state", {"controller_index": ctrl})
+        print(f"  c{ctrl}: my_turn={stt.get('my_turn')} ap={stt.get('ap')}/{stt.get('max_ap')}")
+    for ctrl in (0, 1):
+        stt = _send(conn, "wc_get_battle_state", {"controller_index": ctrl})
+        if stt.get("my_turn"):
+            r = _send(conn, "wc_end_turn", {"controller_index": ctrl})
+            print(f"  c{ctrl} end_turn: ended={r.get('ended')} ok={r.get('ok')}")
+            break
+    else:
+        print("  ни один клиент не сообщил my_turn — пропускаю end_turn")
+
+    # 8. Капитуляция c0 → game-over → WBP_GameResult на ОБОИХ.
+    print("\n--- 8/8 surrender c0 -> expect WBP_GameResult on both ---")
+    r = _send(conn, "wc_surrender", {"controller_index": 0})
+    print(f"  c0 surrender: ok={r.get('ok')} surrendered={r.get('surrendered')}")
+
+    result_ctrls: list[int] = []
+    for ctrl in (0, 1):
+        if _wait_widget_strict(conn, ctrl, "WBP_GameResult_C_0", timeout=30.0, label="RESULT"):
+            result_ctrls.append(ctrl)
+
+    if len(result_ctrls) < 2:
+        print("\n--- diag: all user_widgets per client ---")
+        for ctrl in (0, 1):
+            tree = _tree(conn, ctrl)
+            uws = tree.get("user_widgets") or []
+            print(f"  c{ctrl}: {[uw.get('class') for uw in uws if uw.get('is_in_viewport')]}")
+
+    ok = len(result_ctrls) == 2
+    print(f"\n=== RESULT: battle={battle_ctrls} result_screen={result_ctrls} -> {'PASS' if ok else 'FAIL'} ===")
+
+    # Оставляем PIE running для дальнейшей диагностики.
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":

@@ -17,6 +17,43 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [2.18.0] — 2026-05-28
+
+Battle-фаза в MCP: команды боя + догнан e2e полной игры (FEAT-BATTLE / FIX-UI-008).
+
+### Added
+
+- `wc_surrender` — капитуляция клиента (`UActionCardSubsystem::Surrender()` через
+  reflection). Детерминированный game-over для e2e: сервер выставляет `bGameEnded`
+  → оба клиента переходят в GameResult. Возврат `{ok, surrendered, controller_index}`.
+- `wc_end_turn` — завершить ход (`EndTurn()`). Возврат `{ok, ended, controller_index}`.
+- `wc_get_battle_state` — снимок боя `{ok, my_turn, ap, max_ap, controller_index}`
+  (`IsMyTurn()`/`GetCurrentAP()`/`GetMaxAP()`).
+- Все три — C++ `WarCardGameCommands` (reflection через `ResolveSubsystem`
+  `/Script/Client.ActionCardSubsystem` + `InvokeFunction`, без client-include) +
+  Python-обёртки `warcard_tools.py`. Раньше WarCard MCP покрывал только selection +
+  deployment; battle — ничего.
+
+### Fixed
+
+- `get_actors_in_level` и `find_actors_by_name` (Python `tools/editor_tools.py`)
+  больше не падают с Pydantic "Input should be a valid list" /
+  `INVALID_RESPONSE_TYPE`. Они возвращали голый `list`, а
+  `wrap_with_envelope._normalize_outbound` принимает только `dict` → любой
+  успешный ответ превращался в ошибку "Tool returned non-dict (list)", а
+  annotation `-> list[...]` дополнительно ломала output-схему FastMCP. Теперь оба
+  несут результат внутри dict (`{success, actors, count}` → `meta.actors`),
+  annotation `-> dict[str, Any]`. C++ не затронут.
+
+### Why
+
+- `smoke_pie_full_game.py` упирался в Battle HUD — не было MCP-команд для боя.
+  Теперь тест идёт login→matchmaking→draft→deployment→battle→surrender→GameResult.
+- Рестарт MCP-сервера нужен для Python-обёрток (новые tools + get_actors fix);
+  C++-команды доступны после пересборки ClientEditor.
+
+---
+
 ## [2.17.4] — 2026-05-28
 
 `GetPIEWorldForClient` через `PC->GetWorld()` — стабильный резолв мира клиента (FIX-UI-008).

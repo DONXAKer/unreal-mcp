@@ -19,66 +19,79 @@ def register_editor_tools(mcp: FastMCP) -> None:
     mcp = wrap_with_envelope(mcp)
 
     @mcp.tool()
-    def get_actors_in_level(ctx: Context[Any, Any, Any]) -> list[dict[str, Any]]:
-        """Get a list of all actors in the current level."""
+    def get_actors_in_level(ctx: Context[Any, Any, Any]) -> dict[str, Any]:
+        """Get a list of all actors in the current level.
+
+        Returns a dict envelope carrying meta.actors (list) and meta.count. The
+        @mcp.tool is wrapped by wrap_with_envelope, whose _normalize_outbound
+        ONLY accepts dict returns — a bare list is rejected as
+        INVALID_RESPONSE_TYPE ("Tool returned non-dict (list)"), которое к тому
+        же ломает output-схему (annotation list). Поэтому список актёров
+        ВСЕГДА несётся внутри dict, не возвращается голым списком.
+        """
         from unreal_mcp_server import get_unreal_connection
-        
+
         try:
             unreal = get_unreal_connection()
             if not unreal:
                 logger.warning("Failed to connect to Unreal Engine")
-                return []
-                
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
             response = unreal.send_command("get_actors_in_level", {})
-            
+
             if not response:
                 logger.warning("No response from Unreal Engine")
-                return []
-                
+                return {"success": False, "message": "No response from Unreal Engine"}
+
             # Log the complete response for debugging
             logger.info(f"Complete response from Unreal: {response}")
-            
+
             # Check response format
             if "result" in response and "actors" in response["result"]:
                 actors: list[dict[str, Any]] = response["result"]["actors"]
-                logger.info(f"Found {len(actors)} actors in level")
-                return actors
             elif "actors" in response:
-                actors2: list[dict[str, Any]] = response["actors"]
-                logger.info(f"Found {len(actors2)} actors in level")
-                return actors2
-                
-            logger.warning(f"Unexpected response format: {response}")
-            return []
-            
+                actors = response["actors"]
+            else:
+                logger.warning(f"Unexpected response format: {response}")
+                return {"success": False, "message": "Unexpected response format from Unreal", "actors": [], "count": 0}
+
+            logger.info(f"Found {len(actors)} actors in level")
+            return {"success": True, "actors": actors, "count": len(actors)}
+
         except Exception as e:
             logger.error(f"Error getting actors: {e}")
-            return []
+            return {"success": False, "message": f"Error getting actors: {e}"}
 
     @mcp.tool()
-    def find_actors_by_name(ctx: Context[Any, Any, Any], pattern: str) -> list[str]:
-        """Find actors by name pattern."""
+    def find_actors_by_name(ctx: Context[Any, Any, Any], pattern: str) -> dict[str, Any]:
+        """Find actors by name pattern. Returns meta.actors (list of names).
+
+        Несёт результат внутри dict — голый список ломает wrap_with_envelope
+        (см. get_actors_in_level).
+        """
         from unreal_mcp_server import get_unreal_connection
-        
+
         try:
             unreal = get_unreal_connection()
             if not unreal:
                 logger.warning("Failed to connect to Unreal Engine")
-                return []
-                
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
             response = unreal.send_command("find_actors_by_name", {
                 "pattern": pattern
             })
-            
+
             if not response:
-                return []
-                
+                return {"success": False, "message": "No response from Unreal Engine"}
+
             result: list[str] = response.get("actors", [])
-            return result
+            if not result and isinstance(response.get("result"), dict):
+                result = response["result"].get("actors", [])
+            return {"success": True, "actors": result, "count": len(result)}
 
         except Exception as e:
             logger.error(f"Error finding actors: {e}")
-            return []
+            return {"success": False, "message": f"Error finding actors: {e}"}
     
     @mcp.tool()
     def spawn_actor(
