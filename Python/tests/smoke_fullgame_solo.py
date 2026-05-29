@@ -30,30 +30,106 @@ import time
 
 sys.path.insert(0, str(__file__.rsplit("\\tests", 1)[0]))
 
+import json
 import logging
 logging.getLogger("UnrealMCP").setLevel(logging.ERROR)
 
 from tests._fixtures import ensure_test_user, get_test_jwt
 from tests._stomp_opponent import OpponentBot
 from tests.smoke_pie_full_game import (
-    _send, _draft_entries, _deploy_client, _has_uw_any,
+    _send, _draft_entries, _deploy_client, _has_uw_any, _suffix,
     UNITS_TO_PICK,
 )
 from unreal_mcp_server import UnrealConnection
 
 
+def _battle_units(conn, ctrl: int = 0) -> list[dict]:
+    """Снимок юнитов на доске (через wc_get_battle_units)."""
+    r = _send(conn, "wc_get_battle_units", {"controller_index": ctrl})
+    try:
+        return json.loads(r.get("units_json") or "{}").get("units", [])
+    except Exception:
+        return []
+
+
+def _ue_battle_round(conn, my_side: str) -> tuple[bool, int, int]:
+    """Дождаться хода UE (ctrl 0), перебрать свои юниты пока чей-то ход не пройдёт,
+    плюс попробовать атаки. Возвращает (got_turn, moves_ok, attacks_ok)."""
+    dl = time.monotonic() + 25
+    while time.monotonic() < dl:
+        st = _send(conn, "wc_get_battle_state", {"controller_index": 0})
+        if st.get("my_turn"):
+            break
+        time.sleep(1.0)
+    else:
+        return (False, 0, 0)
+
+    units = [u for u in _battle_units(conn, 0) if u.get("alive")]
+    mine = [u for u in units if _suffix(u.get("unitId", "")) == my_side]
+    enemies = [u for u in units if _suffix(u.get("unitId", "")) != my_side]
+    if not mine or not enemies:
+        _send(conn, "wc_end_turn", {"controller_index": 0})
+        return (True, 0, 0)
+
+    occupied = {(u["gridX"], u["gridY"]) for u in units}
+    moves_ok = attacks_ok = 0
+
+    # 1) Сначала попытка атак: атаковать может каждый свой юнит в диапазоне.
+    for u in mine:
+        nearest = min(enemies, key=lambda e: abs(e["gridX"] - u["gridX"]) + abs(e["gridY"] - u["gridY"]))
+        r = _send(conn, "wc_attack", {"controller_index": 0,
+                                       "attacker_unit_id": u["unitId"], "target_unit_id": nearest["unitId"],
+                                       "x": nearest["gridX"], "y": nearest["gridY"]})
+        if isinstance(r, dict) and r.get("ok") and not r.get("error"):
+            attacks_ok += 1
+
+    # 2) Движение: ищем своего юнита, у которого есть свободная клетка вперёд (+x к врагу).
+    for u in mine:
+        nx, ny = u["gridX"] + 1, u["gridY"]  # red → +x; для blue было бы -1, но мы red
+        if 0 <= nx <= 7 and 0 <= ny <= 7 and (nx, ny) not in occupied:
+            r = _send(conn, "wc_free_move", {"controller_index": 0, "unit_id": u["unitId"], "x": nx, "y": ny})
+            if isinstance(r, dict) and r.get("ok") and not r.get("error"):
+                moves_ok += 1
+                print(f"    UE move: {u['unitId']} ({u['gridX']},{u['gridY']}) -> ({nx},{ny})")
+                break
+
+    _send(conn, "wc_end_turn", {"controller_index": 0})
+    print(f"    UE turn: атак ok={attacks_ok}, движений ok={moves_ok}")
+    return (True, moves_ok, attacks_ok)
+
+
 def _wait_uw(conn, substr: str, timeout: float, label: str = "") -> bool:
-    """Поллинг появления user-widget по подстроке КЛАССА (надёжнее find_widget по
-    имени: инстансы имеют суффикс _N, напр. WBP_BattleHUD_C_0)."""
+    """Поллинг user-widget по подстроке КЛАССА (через get_widget_tree)."""
     dl = time.monotonic() + timeout
     while time.monotonic() < dl:
-        if _has_uw_any(conn, substr):
-            if label:
-                print(f"    [{label}] '{substr}' найден")
-            return True
+        try:
+            if _has_uw_any(conn, substr):
+                if label:
+                    print(f"    [{label}] '{substr}' найден")
+                return True
+        except Exception:
+            pass  # tree может не парситься при больших ответах — игнорируем
         time.sleep(1.5)
     if label:
         print(f"    [{label}] '{substr}' НЕ найден за {timeout}s")
+    return False
+
+
+def _wait_pie_widget(conn, candidates: tuple, timeout: float, label: str = "") -> bool:
+    """Поллинг pie_status.clients[0].current_widget на любую из подстрок.
+    Лёгкий ответ — не страдает от truncation get_widget_tree при больших сценах."""
+    dl = time.monotonic() + timeout
+    while time.monotonic() < dl:
+        st = _send(conn, "pie_status", {}) or {}
+        cs = st.get("clients") or []
+        cur = (cs[0].get("current_widget") or "") if cs else ""
+        if any(c in cur for c in candidates):
+            if label:
+                print(f"    [{label}] '{cur}' матчит {candidates}")
+            return True
+        time.sleep(1.0)
+    if label:
+        print(f"    [{label}] ни одна из {candidates} не появилась за {timeout}s")
     return False
 
 
@@ -184,13 +260,17 @@ def main() -> int:
         _send(conn, "wc_confirm_deployment", {"controller_index": 0})
 
         print("\n--- 5/6 wait BATTLE HUD on UE client ---")
-        battle = _wait_uw(conn, "WBP_BattleHUD", timeout=60, label="battle")
+        # Используем pie_status.current_widget (лёгкий ответ) вместо get_widget_tree:
+        # последний даёт многоКБ JSON и режется UTF-8 декодером в боевом состоянии.
+        # В бою current_widget показывает WBP_BattleHUD или WBP_ActionCardHand —
+        # любое из них = клиент дошёл до боя.
+        battle = _wait_pie_widget(conn, ("BattleHUD", "ActionCardHand"), 60, "battle")
         if not battle:
             bot_battle = bot.wait_battle(5)
-            print(f"  WBP_BattleHUD не найден на UE; бот в BATTLE={bot_battle}")
+            print(f"  боевой виджет не найден на UE; бот в BATTLE={bot_battle}")
             print("\n=== RESULT: BATTLE NOT reached on UE client -> FAIL ===")
             return 1
-        print("  BATTLE HUD виден на UE-клиенте [OK]")
+        print("  боевой UI виден на UE-клиенте [OK]")
 
         # Регресс-гард (фикс HideStaleScreenWidgets): экраны прошлых фаз не должны
         # оставаться в viewport поверх боя. Раньше залипали Login/MainMenu/
@@ -203,9 +283,31 @@ def main() -> int:
         else:
             print("  залипших экранов прошлых фаз нет [OK]")
 
+        # FEAT-BATTLE-003: интерактивный card-play. UE играет 3 хода (атака + ход),
+        # бот пасует свои. После — снимок доски должен отличаться (юнит сдвинулся
+        # или HP изменилось).
+        print("\n--- 5b/6 card-play (UE moves + бот пасует) ---")
+        ue_side = "red"  # UE деплоил в зону x=0..2 (red)
+        before = _battle_units(conn, 0)
+        rounds = total_moves = total_attacks = 0
+        for _ in range(3):
+            got, m, a = _ue_battle_round(conn, ue_side)
+            if got:
+                rounds += 1
+                total_moves += m
+                total_attacks += a
+                time.sleep(2.0)  # дать боту пасовать
+            else:
+                print("  ход UE не настал за 25s — стоп")
+                break
+        after = _battle_units(conn, 0)
+        def _key(u): return (u.get("unitId"), u.get("gridX"), u.get("gridY"), u.get("currentHp"))
+        changed = {_key(u) for u in before} != {_key(u) for u in after}
+        print(f"  UE ходов: {rounds}, успешных движений: {total_moves}, атак: {total_attacks}; доска изменилась: {changed}")
+
         print("\n--- 6/6 UE surrender -> GameResult ---")
         _send(conn, "wc_surrender", {"controller_index": 0})
-        result = _wait_uw(conn, "WBP_GameResult", timeout=30, label="result")
+        result = _wait_pie_widget(conn, ("GameResult",), 30, "result")
         print(f"  WBP_GameResult виден: {result}")
 
         print("\n=== RESULT: PASS — UE client reached BATTLE"

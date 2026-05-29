@@ -332,7 +332,29 @@ class OpponentBot:
         self.stomp.close()
 
     # --- обработка входящих ---
+    def _on_turn_changed(self, body: dict[str, Any]) -> None:
+        """В BATTLE — пасуем ход бота: посылаем end-turn с задержкой (даём UE
+        увидеть «Ход оппонента»). Без гейта `_reached_battle`: turn-changed
+        эмитится сервером только в BATTLE — сам факт его прихода означает бой,
+        а гейт ловил race с broadcast'ом фазы BATTLE."""
+        active = body.get("activePlayerId", "")
+        if active != self.my_id:
+            return
+        gid = self.game_id
+        if not gid:
+            return
+        # Подстраховка: считать, что бой начался (для wait_battle).
+        self._reached_battle.set()
+        def _pass():
+            if self.game_id == gid:
+                self.stomp.send_json("/app/game/end-turn", {"gameId": gid})
+                self._log("end-turn (pass)")
+        threading.Timer(1.5, _pass).start()
+
     def _on_message(self, dest: str, body: dict[str, Any]) -> None:
+        if dest.endswith("/turn-changed"):
+            self._on_turn_changed(body)
+            return
         if dest.endswith("/game-found"):
             gid = body.get("gameId")
             if gid and not self.game_id:
@@ -414,6 +436,17 @@ class OpponentBot:
             elif phase == "BATTLE":
                 if not self._reached_battle.is_set():
                     self._log("BATTLE достигнут — оппонент в режиме ожидания")
+                    # «Kick» end-turn: сервер не шлёт turn-changed на старте боя
+                    # (turn-changed эмитится в ответ на end-turn). Если первый ход
+                    # бота — этот end-turn пройдёт, дальше цикл turn-changed работает.
+                    # Если не его — сервер отвергнет (не твой ход), no-op.
+                    gid = self.game_id
+                    if gid:
+                        def _kick():
+                            if self.game_id == gid:
+                                self.stomp.send_json("/app/game/end-turn", {"gameId": gid})
+                                self._log("end-turn (battle kick)")
+                        threading.Timer(2.0, _kick).start()
                 self._reached_battle.set()
 
     def _deploy_units(self) -> None:
