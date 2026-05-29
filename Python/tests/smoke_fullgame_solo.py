@@ -192,6 +192,17 @@ def main() -> int:
             return 1
         print("  BATTLE HUD виден на UE-клиенте [OK]")
 
+        # Регресс-гард (фикс HideStaleScreenWidgets): экраны прошлых фаз не должны
+        # оставаться в viewport поверх боя. Раньше залипали Login/MainMenu/
+        # Matchmaking/Mulligan (найдено этим же e2e 2026-05-29).
+        time.sleep(2)
+        stale = [s for s in ("WBP_Login", "WBP_MainMenu", "WBP_Matchmaking", "WBP_Mulligan")
+                 if _has_uw_any(conn, s)]
+        if stale:
+            print(f"  ВНИМАНИЕ: залипшие экраны в бою: {stale}")
+        else:
+            print("  залипших экранов прошлых фаз нет [OK]")
+
         print("\n--- 6/6 UE surrender -> GameResult ---")
         _send(conn, "wc_surrender", {"controller_index": 0})
         result = _wait_uw(conn, "WBP_GameResult", timeout=30, label="result")
