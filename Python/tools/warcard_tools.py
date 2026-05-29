@@ -248,4 +248,68 @@ def register_warcard_tools(mcp: FastMCP) -> None:
         response = unreal.send_command("wc_get_battle_state", params)
         return response or {"status": "error", "error": "No response"}
 
+    @mcp.tool()
+    def wc_free_move(
+        ctx: Context[Any, Any, Any],
+        unit_id: str,
+        x: int,
+        y: int,
+        controller_index: int = 0,
+    ) -> dict[str, Any]:
+        """Свободное перемещение юнита в клетку (x, y) в Battle phase.
+
+        Под капотом — UActionCardSubsystem::FreeMove(UnitId, TargetX, TargetY) (void).
+        Не требует UI-клика — это direct subsystem call для детерминированного бота.
+
+        Args:
+            unit_id: ID юнита на поле боя (см. wc_get_battle_units).
+            x, y: целевые координаты клетки 0-based.
+            controller_index: PIE-клиент.
+
+        Returns:
+            { ok, unit_id, x, y, controller_index }
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"status": "error", "error": "No Unreal connection"}
+
+        params: dict[str, Any] = {
+            "unit_id": unit_id,
+            "x": x,
+            "y": y,
+            "controller_index": controller_index,
+        }
+        logger.info(f"wc_free_move: unit='{unit_id}' to ({x},{y}) ctrl={controller_index}")
+        response = unreal.send_command("wc_free_move", params)
+        return response or {"status": "error", "error": "No response"}
+
+    @mcp.tool()
+    def wc_get_battle_units(
+        ctx: Context[Any, Any, Any],
+        controller_index: int = 0,
+    ) -> dict[str, Any]:
+        """Снимок всех юнитов на поле боя в Battle phase.
+
+        Зовёт UActionCardSubsystem::GetBattleUnitsJson() → FString. Плагин отдаёт
+        сырую JSON-строку в поле units_json; парсим её тут через json.loads.
+
+        Args:
+            controller_index: PIE-клиент.
+
+        Returns:
+            { ok, units_json: str, controller_index }
+            units_json — JSON-объект {"units":[{unitId,gridX,gridY,hp,playerId,alive}]}.
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"status": "error", "error": "No Unreal connection"}
+
+        params: dict[str, Any] = {"controller_index": controller_index}
+        response = unreal.send_command("wc_get_battle_units", params)
+        return response or {"status": "error", "error": "No response"}
+
     logger.info("WarCard tools registered successfully")

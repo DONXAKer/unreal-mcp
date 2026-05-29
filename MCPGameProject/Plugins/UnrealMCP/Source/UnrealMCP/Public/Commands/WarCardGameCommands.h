@@ -33,6 +33,8 @@ class UObject;
  *   wc_surrender             — UActionCardSubsystem::Surrender()
  *   wc_end_turn              — UActionCardSubsystem::EndTurn() → bool
  *   wc_get_battle_state      — { my_turn, ap, max_ap }
+ *   wc_free_move             — UActionCardSubsystem::FreeMove(UnitId, TargetX, TargetY)
+ *   wc_get_battle_units      — UActionCardSubsystem::GetBattleUnitsJson() → FString
  */
 class FWarCardGameCommands
 {
@@ -52,6 +54,8 @@ private:
     TSharedPtr<FJsonObject> HandleSurrender(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleEndTurn(const TSharedPtr<FJsonObject>& Params);
     TSharedPtr<FJsonObject> HandleGetBattleState(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleFreeMove(const TSharedPtr<FJsonObject>& Params);
+    TSharedPtr<FJsonObject> HandleGetBattleUnits(const TSharedPtr<FJsonObject>& Params);
 
     /**
      * Найти UWorldSubsystem по class path в PIE world выбранного клиента.

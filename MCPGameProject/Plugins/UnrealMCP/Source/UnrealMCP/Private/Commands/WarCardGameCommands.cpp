@@ -182,6 +182,8 @@ TSharedPtr<FJsonObject> FWarCardGameCommands::HandleCommand(const FString& Comma
     if (CommandType == TEXT("wc_surrender"))             return HandleSurrender(Params);
     if (CommandType == TEXT("wc_end_turn"))              return HandleEndTurn(Params);
     if (CommandType == TEXT("wc_get_battle_state"))      return HandleGetBattleState(Params);
+    if (CommandType == TEXT("wc_free_move"))             return HandleFreeMove(Params);
+    if (CommandType == TEXT("wc_get_battle_units"))       return HandleGetBattleUnits(Params);
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown WarCard command: %s"), *CommandType));
@@ -503,6 +505,75 @@ TSharedPtr<FJsonObject> FWarCardGameCommands::HandleGetBattleState(const TShared
         if (Ret && Ret->IsValid()) (*Ret)->TryGetNumber(MaxAP);
     }
     Result->SetNumberField(TEXT("max_ap"), MaxAP);
+
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FWarCardGameCommands::HandleFreeMove(const TSharedPtr<FJsonObject>& Params)
+{
+    int32 ControllerIndex = 0;
+    Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+
+    FString UnitId;
+    if (!Params->TryGetStringField(TEXT("unit_id"), UnitId))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'unit_id' parameter"));
+
+    int32 X = -1, Y = -1;
+    if (!Params->TryGetNumberField(TEXT("x"), X))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'x' parameter"));
+    if (!Params->TryGetNumberField(TEXT("y"), Y))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'y' parameter"));
+
+    FString Err;
+    UObject* Sub = ResolveSubsystem(ControllerIndex, kActionCardSubsystemPath, Err);
+    if (!Sub) return FEpicUnrealMCPCommonUtils::CreateErrorResponse(Err);
+
+    // Имена параметров должны matchать FProperty.GetName() метода FreeMove
+    // на стороне клиента (ActionCardSubsystem.h): UnitId, TargetX, TargetY.
+    // FreeMove — void, без возврата.
+    TMap<FString, TSharedPtr<FJsonValue>> Args;
+    Args.Add(TEXT("UnitId"), MakeShared<FJsonValueString>(UnitId));
+    Args.Add(TEXT("TargetX"), MakeShared<FJsonValueNumber>(X));
+    Args.Add(TEXT("TargetY"), MakeShared<FJsonValueNumber>(Y));
+
+    TSharedPtr<FJsonObject> Result = InvokeFunction(Sub, TEXT("FreeMove"), Args);
+    if (Result.IsValid())
+    {
+        Result->SetBoolField(TEXT("ok"), true);
+        Result->SetStringField(TEXT("unit_id"), UnitId);
+        Result->SetNumberField(TEXT("x"), X);
+        Result->SetNumberField(TEXT("y"), Y);
+        Result->SetNumberField(TEXT("controller_index"), ControllerIndex);
+    }
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FWarCardGameCommands::HandleGetBattleUnits(const TSharedPtr<FJsonObject>& Params)
+{
+    int32 ControllerIndex = 0;
+    Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+
+    FString Err;
+    UObject* Sub = ResolveSubsystem(ControllerIndex, kActionCardSubsystemPath, Err);
+    if (!Sub) return FEpicUnrealMCPCommonUtils::CreateErrorResponse(Err);
+
+    // GetBattleUnitsJson возвращает FString с JSON-объектом
+    // {"units":[{unitId,gridX,gridY,hp,playerId,alive}]}. Отдаём raw-строкой —
+    // Python сам распарсит (envelope требует dict, поэтому оборачиваем).
+    TMap<FString, TSharedPtr<FJsonValue>> NoArgs;
+    TSharedPtr<FJsonObject> Inner = InvokeFunction(Sub, TEXT("GetBattleUnitsJson"), NoArgs);
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("ok"), true);
+    Result->SetNumberField(TEXT("controller_index"), ControllerIndex);
+
+    FString UnitsJson;
+    if (Inner.IsValid())
+    {
+        const TSharedPtr<FJsonValue>* Ret = Inner->Values.Find(TEXT("return"));
+        if (Ret && Ret->IsValid()) (*Ret)->TryGetString(UnitsJson);
+    }
+    Result->SetStringField(TEXT("units_json"), UnitsJson);
 
     return Result;
 }
