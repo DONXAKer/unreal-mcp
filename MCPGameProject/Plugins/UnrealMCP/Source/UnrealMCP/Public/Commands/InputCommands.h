@@ -19,7 +19,8 @@ public:
 
     /**
      * Routes incoming input commands.
-     * @param CommandType  Command name (currently only "create_input_mapping").
+     * @param CommandType  Command name ("create_input_mapping",
+     *                      "input_action_get_info", "input_mapping_context_get_info").
      * @param Params       JSON parameters.
      * @return JSON response.
      */
@@ -40,4 +41,27 @@ private:
      *                            — modifier keys for ActionMapping.
      */
     TSharedPtr<FJsonObject> HandleCreateInputMapping(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * Read-only inspection of a UInputAction asset (Enhanced Input).
+     *
+     * Params:
+     *   action_path (required) — full asset path, e.g.
+     *                            "/Game/Game/Core/Input/IA_RotateCamera".
+     * Returns:
+     *   { value_type: "Boolean"|"Axis1D"|"Axis2D"|"Axis3D",
+     *     triggers: [class names...], modifiers: [class names...] }.
+     */
+    TSharedPtr<FJsonObject> HandleInputActionGetInfo(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * Read-only inspection of a UInputMappingContext asset (Enhanced Input).
+     *
+     * Params:
+     *   context_path (required) — full asset path, e.g.
+     *                             "/Game/Game/Core/Input/IMC_FreeCamera".
+     * Returns:
+     *   { mappings: [ { key, action, triggers:[...], modifiers:[...] }, ... ] }.
+     */
+    TSharedPtr<FJsonObject> HandleInputMappingContextGetInfo(const TSharedPtr<FJsonObject>& Params);
 };

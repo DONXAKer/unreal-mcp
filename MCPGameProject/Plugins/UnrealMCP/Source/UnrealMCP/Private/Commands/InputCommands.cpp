@@ -3,6 +3,13 @@
 #include "GameFramework/InputSettings.h"
 #include "InputCoreTypes.h"
 
+// Enhanced Input (UE5.7) — read-only inspection helpers.
+#include "InputAction.h"
+#include "InputMappingContext.h"
+#include "InputTriggers.h"
+#include "InputModifiers.h"
+#include "EnhancedActionKeyMapping.h"
+
 FInputCommands::FInputCommands()
 {
 }
@@ -11,6 +18,10 @@ TSharedPtr<FJsonObject> FInputCommands::HandleCommand(const FString& CommandType
 {
     if (CommandType == TEXT("create_input_mapping"))
         return HandleCreateInputMapping(Params);
+    if (CommandType == TEXT("input_action_get_info"))
+        return HandleInputActionGetInfo(Params);
+    if (CommandType == TEXT("input_mapping_context_get_info"))
+        return HandleInputMappingContextGetInfo(Params);
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
         FString::Printf(TEXT("Unknown input command: %s"), *CommandType));
@@ -98,5 +109,88 @@ TSharedPtr<FJsonObject> FInputCommands::HandleCreateInputMapping(const TSharedPt
     InputSettings->SaveKeyMappings();
 
     Result->SetBoolField(TEXT("success"), true);
+    return Result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enhanced Input — read-only inspection
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace
+{
+    /** EInputActionValueType → строка для JSON-ответа. */
+    FString ValueTypeToString(EInputActionValueType ValueType)
+    {
+        switch (ValueType)
+        {
+        case EInputActionValueType::Boolean: return TEXT("Boolean");
+        case EInputActionValueType::Axis1D:  return TEXT("Axis1D");
+        case EInputActionValueType::Axis2D:  return TEXT("Axis2D");
+        case EInputActionValueType::Axis3D:  return TEXT("Axis3D");
+        default:                             return TEXT("Unknown");
+        }
+    }
+
+    /** Собрать массив имён классов UObject-инстансов (триггеры/модификаторы). */
+    template <typename T>
+    TArray<TSharedPtr<FJsonValue>> ClassNamesOf(const TArray<TObjectPtr<T>>& Items)
+    {
+        TArray<TSharedPtr<FJsonValue>> Out;
+        for (const TObjectPtr<T>& Item : Items)
+        {
+            if (Item && Item->GetClass())
+            {
+                Out.Add(MakeShared<FJsonValueString>(Item->GetClass()->GetName()));
+            }
+        }
+        return Out;
+    }
+}
+
+TSharedPtr<FJsonObject> FInputCommands::HandleInputActionGetInfo(const TSharedPtr<FJsonObject>& Params)
+{
+    FString ActionPath;
+    if (!Params->TryGetStringField(TEXT("action_path"), ActionPath) || ActionPath.IsEmpty())
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'action_path' parameter"));
+
+    UInputAction* Action = LoadObject<UInputAction>(nullptr, *ActionPath);
+    if (!Action)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("InputAction not found: %s"), *ActionPath));
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("action_path"), ActionPath);
+    Result->SetStringField(TEXT("value_type"), ValueTypeToString(Action->ValueType));
+    Result->SetArrayField(TEXT("triggers"),  ClassNamesOf(Action->Triggers));
+    Result->SetArrayField(TEXT("modifiers"), ClassNamesOf(Action->Modifiers));
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FInputCommands::HandleInputMappingContextGetInfo(const TSharedPtr<FJsonObject>& Params)
+{
+    FString ContextPath;
+    if (!Params->TryGetStringField(TEXT("context_path"), ContextPath) || ContextPath.IsEmpty())
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'context_path' parameter"));
+
+    UInputMappingContext* Context = LoadObject<UInputMappingContext>(nullptr, *ContextPath);
+    if (!Context)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("InputMappingContext not found: %s"), *ContextPath));
+
+    TArray<TSharedPtr<FJsonValue>> MappingsJson;
+    for (const FEnhancedActionKeyMapping& Mapping : Context->GetMappings())
+    {
+        TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
+        Entry->SetStringField(TEXT("key"), Mapping.Key.GetFName().ToString());
+        Entry->SetStringField(TEXT("action"),
+            Mapping.Action ? Mapping.Action->GetPathName() : FString());
+        Entry->SetArrayField(TEXT("triggers"),  ClassNamesOf(Mapping.Triggers));
+        Entry->SetArrayField(TEXT("modifiers"), ClassNamesOf(Mapping.Modifiers));
+        MappingsJson.Add(MakeShared<FJsonValueObject>(Entry));
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetStringField(TEXT("context_path"), ContextPath);
+    Result->SetArrayField(TEXT("mappings"), MappingsJson);
     return Result;
 }

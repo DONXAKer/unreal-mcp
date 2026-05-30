@@ -337,7 +337,10 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 ResultJson = UMGCommands->HandleCommand(CommandType, Params);
             }
             // Input mapping commands (project-wide DefaultInput.ini)
-            else if (CommandType == TEXT("create_input_mapping"))
+            // + read-only Enhanced Input inspection (v3.1.0)
+            else if (CommandType == TEXT("create_input_mapping") ||
+                     CommandType == TEXT("input_action_get_info") ||
+                     CommandType == TEXT("input_mapping_context_get_info"))
             {
                 ResultJson = InputCommands->HandleCommand(CommandType, Params);
             }

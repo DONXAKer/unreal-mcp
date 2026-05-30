@@ -17,6 +17,32 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [3.1.0] — 2026-05-30
+
+Read-only инспекция Enhanced Input — верификация конфигурации без чтения
+бинарных `.uasset`.
+
+### Added
+
+- **`input_action_get_info`** — загружает `UInputAction` по `action_path` и
+  возвращает `value_type` (`Boolean`/`Axis1D`/`Axis2D`/`Axis3D`), массив имён
+  классов триггеров (`triggers`) и модификаторов (`modifiers`). Реализовано в
+  `FInputCommands` (`InputCommands.cpp`), зарегистрировано в bridge allow-list.
+- **`input_mapping_context_get_info`** — загружает `UInputMappingContext` по
+  `context_path` и возвращает массив `mappings`, по одному объекту на
+  `FEnhancedActionKeyMapping`: `key`, путь привязанного `action`, классы
+  `triggers` и `modifiers` маппинга.
+- Python-обёртки `input_action_get_info` / `input_mapping_context_get_info` в
+  `Python/tools/enhanced_input_tools.py` (subject-first, read-only).
+
+### Why
+
+Чтобы автоматически верифицировать корректность настройки Enhanced Input
+(`IA_*` / `IMC_*`) после генерации через MCP, не открывая ассеты вручную в
+Editor и не парся бинарный формат `.uasset`.
+
+---
+
 ## [3.0.0] — 2026-05-29
 
 Точка расширения: общий плагин стал generic — project-specific команды вынесены.

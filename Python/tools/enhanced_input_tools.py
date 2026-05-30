@@ -177,4 +177,77 @@ def register_enhanced_input_tools(mcp: FastMCP) -> None:
         response = unreal.send_command("add_enhanced_input_action_event_node", params)
         return response or {"status": "error", "error": "No response"}
 
-    logger.info("Enhanced Input tools registered (create_input_action, create_input_mapping_context, add_input_action_mapping, add_enhanced_input_action_event_node)")
+    @mcp.tool()
+    def input_action_get_info(
+        ctx: Context[Any, Any, Any],
+        action_path: str,
+    ) -> dict[str, Any]:
+        """Прочитать конфигурацию UInputAction-ассета (read-only).
+
+        Загружает ассет и возвращает его value type, список классов триггеров
+        и модификаторов — без чтения бинарного .uasset.
+
+        Args:
+            action_path: Полный путь к IA-ассету
+                         (e.g. "/Game/Game/Core/Input/IA_RotateCamera").
+
+        Returns:
+            {
+              ok, status,
+              value_type: "Boolean" | "Axis1D" | "Axis2D" | "Axis3D",
+              triggers:  ["InputTriggerPressed", ...],
+              modifiers: ["InputModifierNegate", ...]
+            }
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"status": "error", "error": "No Unreal connection"}
+
+        response = unreal.send_command("input_action_get_info", {
+            "action_path": action_path,
+        })
+        return response or {"status": "error", "error": "No response"}
+
+    @mcp.tool()
+    def input_mapping_context_get_info(
+        ctx: Context[Any, Any, Any],
+        context_path: str,
+    ) -> dict[str, Any]:
+        """Прочитать конфигурацию UInputMappingContext-ассета (read-only).
+
+        Возвращает все маппинги контекста: key, привязанный action и списки
+        классов триггеров/модификаторов каждого маппинга — без чтения
+        бинарного .uasset.
+
+        Args:
+            context_path: Полный путь к IMC-ассету
+                          (e.g. "/Game/Game/Core/Input/IMC_FreeCamera").
+
+        Returns:
+            {
+              ok, status,
+              mappings: [
+                {
+                  key: "MouseWheelAxis",
+                  action: "/Game/.../IA_Zoom.IA_Zoom",
+                  triggers:  ["InputTriggerDown", ...],
+                  modifiers: ["InputModifierNegate", ...]
+                },
+                ...
+              ]
+            }
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"status": "error", "error": "No Unreal connection"}
+
+        response = unreal.send_command("input_mapping_context_get_info", {
+            "context_path": context_path,
+        })
+        return response or {"status": "error", "error": "No response"}
+
+    logger.info("Enhanced Input tools registered (create_input_action, create_input_mapping_context, add_input_action_mapping, add_enhanced_input_action_event_node, input_action_get_info, input_mapping_context_get_info)")
