@@ -12,6 +12,7 @@
 #include "Misc/Paths.h"
 #include "HAL/FileManager.h"
 #include "UnrealClient.h"
+#include "RenderingThread.h"
 #include "InputCoreTypes.h"
 #include "InputKeyEventArgs.h"
 #include "Engine/EngineBaseTypes.h"
@@ -333,18 +334,43 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieScreenshot(const TSharedPtr<FJson
         FHighResScreenshotConfig& Config = GetHighResScreenshotConfig();
         Config.FilenameOverride = FullPath;
         Config.SetHDRCapture(false);
+
+        FViewport* const Viewport = GameViewport->Viewport;
+
+        // --- Чёрный-кадр фикс (3.2.1) ---
+        // В авто-прогоне редактор в фоне → его PIE-вьюпорт не перерисовывается
+        // сам по себе, и запрос скриншота читает пустой (чёрный) backbuffer.
+        // Команда уже исполняется на GameThread (см. UEpicUnrealMCPBridge::
+        // ExecuteCommand → AsyncTask(GameThread)), поэтому можем синхронно
+        // форсировать redraw и дождаться render-команд. Логика: рисуем кадр
+        // (заполняем backbuffer актуальной сценой+UI), ставим запрос
+        // скриншота, рисуем ещё раз — на этом Draw движок прочитает свежий
+        // буфер в файл, после чего флашим render-thread.
+        //
+        // Подготовительный кадр: invalidate + честная отрисовка свежего present.
+        Viewport->InvalidateDisplay();
+        Viewport->Draw(/*bShouldPresent=*/true);
+        FlushRenderingCommands();
+
         // Если bShowUI=true — желаем захватить UMG; HighResScreenshotConfig
         // не имеет прямого флага, но штатный TakeHighResScreenShot захватывает
         // финальный кадр со всем UI поверх. Для bShowUI=false вызовем
         // FScreenshotRequest::RequestScreenshot, у которого есть параметр.
         if (bShowUI)
         {
-            GameViewport->Viewport->TakeHighResScreenShot();
+            Viewport->TakeHighResScreenShot();
         }
         else
         {
             FScreenshotRequest::RequestScreenshot(FullPath, /*bInShowUI=*/false, /*bAddFilenameSuffix=*/false);
         }
+
+        // Кадр-захват: ещё один Draw, в рамках которого вьюпорт обработает
+        // поставленный screenshot-запрос поверх свежепрезентованного буфера,
+        // затем синхронно дожидаемся завершения render-команд (PNG-write).
+        Viewport->InvalidateDisplay();
+        Viewport->Draw(/*bShouldPresent=*/true);
+        FlushRenderingCommands();
 
         TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
         Result->SetStringField(TEXT("status"), TEXT("created"));
@@ -352,7 +378,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieScreenshot(const TSharedPtr<FJson
         Result->SetStringField(TEXT("filename"), Filename);
         Result->SetBoolField(TEXT("show_ui"), bShowUI);
         Result->SetStringField(TEXT("source"), TEXT("game_viewport"));
-        Result->SetStringField(TEXT("note"), TEXT("PIE screenshot queued; file appears within 1-2 ticks"));
+        Result->SetStringField(TEXT("note"), TEXT("PIE screenshot captured via forced viewport redraw"));
         return Result;
     }
 

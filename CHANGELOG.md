@@ -17,6 +17,63 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [3.2.1] — 2026-06-01
+
+Фикс чёрного кадра в `pie_screenshot` при авто-прогонах с фоновым редактором.
+
+### Fixed
+
+- **`pie_screenshot` отдавал полностью чёрный PNG** в headless/фоновом
+  авто-режиме (`FPIECommands::HandlePieScreenshot`, `PIECommands.cpp`). Раньше
+  команда просто ставила запрос (`TakeHighResScreenShot` / `RequestScreenshot`)
+  в очередь, а кадр обрабатывался на следующем тике рендера. Когда редактор в
+  фоне, его PIE-вьюпорт не перерисовывается сам → читался пустой backbuffer.
+  Теперь вокруг постановки запроса команда форсирует
+  `Viewport->InvalidateDisplay()` + `Viewport->Draw(true)` +
+  `FlushRenderingCommands()`: первый Draw презентует свежую сцену+UI, второй
+  Draw обрабатывает screenshot-запрос на актуальном буфере, после чего флаш
+  синхронно дожидается записи PNG. Команда уже исполняется на GameThread
+  (`UEpicUnrealMCPBridge::ExecuteCommand` → `AsyncTask(GameThread)`), поэтому
+  синхронный redraw/flush безопасен. Контракт ответа не изменён
+  (`status/assetPath/filename/show_ui/source/note`), `controller_index`-суффикс
+  и fallback-ветка сохранены; обновлён только текст `note`.
+
+### Why
+
+В авто-харнессе `tests/playtest_visual.py` поднимаются два UnrealEditor (PIE
+n=1 в каждом), управляемые по TCP, окна НЕ в фокусе. Все кадры на всех фазах
+выходили побайтно идентичными чёрными PNG (35601 байт, 1914×994 = размер
+level-вьюпорта редактора), хотя PIE реально бежал (`is_running=true`, живые
+юниты). `Slate.bAllowThrottling 0`, `t.IdleWhenNotForeground 0` и
+`SetForegroundWindow` не помогали, потому что проблема не в throttling, а в
+отсутствии свежего present для фонового PIE-вьюпорта — нужен явный redraw
+перед чтением буфера.
+
+---
+
+## [3.2.0] — 2026-06-01
+
+Конфигурируемый порт MCP-моста — несколько инстансов Editor'а могут работать
+одновременно, каждый со своим TCP-портом.
+
+### Added
+
+- **Per-process MCP port override** в `EpicUnrealMCPBridge::Initialize()`
+  (`EpicUnrealMCPBridge.cpp`). Порт берётся из (по приоритету): аргумент
+  командной строки `-MCPPort=<n>`, затем env-переменная `UNREALMCP_PORT`,
+  иначе дефолт `55557`. Валидация диапазона `1..65535`. Без флага поведение
+  не меняется (обратная совместимость).
+
+### Why
+
+Для 2-player визуального playtest-харнесса нужно поднять два инстанса
+UnrealEditor одного проекта одновременно — каждый рендерит своего игрока. Два
+процесса не могут слушать один порт `55557`, поэтому второй запускается с
+`-MCPPort=55558`. Мост — `UEditorSubsystem`, создаётся в каждом процессе
+отдельно и читает свою командную строку, поэтому override работает по-процессно.
+
+---
+
 ## [3.1.0] — 2026-05-30
 
 Read-only инспекция Enhanced Input — верификация конфигурации без чтения
