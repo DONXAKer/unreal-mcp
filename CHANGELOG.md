@@ -17,6 +17,54 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [3.3.1] — 2026-06-01
+
+Фикс readback в `pie_screenshot`: кадр рендерился на экране, но захват писал
+полностью чёрный PNG.
+
+### Fixed
+
+- **`pie_screenshot` чёрный PNG** (`FPIECommands::HandlePieScreenshot`,
+  `PIECommands.cpp`). Подтверждено вживую: при `pie_start mode="new_window"`
+  floating-окно корректно рендерит игру НА ЭКРАНЕ, но прежние пути захвата
+  (`Viewport->TakeHighResScreenShot()` и `FScreenshotRequest::RequestScreenshot`)
+  читали scene-буфер/не ту поверхность → чёрный PNG (1280×720, ~17758 Б,
+  идентичный между снимками). Рендер работал — баг был чисто в readback.
+
+### Changed
+
+- **Основной путь захвата — Slate window readback.** Когда найден `SWindow`
+  игрового PIE-вьюпорта (`UGameViewportClient::GetWindow()`, иначе
+  `FSlateApplication::FindWidgetWindow(GetGameViewportWidget())`), кадр читается
+  с реального backbuffer'а окна через
+  `FSlateApplication::Get().TakeScreenshot(Window, OutColor, OutSize)` (UE 5.7
+  сигнатура `bool TakeScreenshot(const TSharedRef<SWidget>&, TArray<FColor>&,
+  FIntVector&)`) — это то, что видно на экране (3D-сцена + UMG поверх).
+  Последовательность: forced redraw → `TakeScreenshot` (ставит запрос) → ещё
+  один `Draw(true)` + `FlushRenderingCommands()` (запрос исполняется на
+  следующей отрисовке окна). Alpha принудительно ставится в 255 (TakeScreenshot
+  может вернуть A=0 → прозрачный/чёрный PNG). Кодирование —
+  `FImageUtils::PNGCompressImageArray(W, H, TArrayView64<const FColor>, TArray64<uint8>)`
+  + запись `FFileHelper::SaveArrayToFile`. Работает и для `show_ui=true`, и для
+  `show_ui=false` (захват окна включает финальный кадр со сценой и UI).
+- Ответ при Slate-захвате: `source="slate_window"`, добавлены `width`/`height`/
+  `bytes`, `note="...via Slate window readback..."`. Старый scene-путь
+  (`source="game_viewport"`, forced redraw 3.2.1) сохранён как fallback, если
+  окно не найдено или readback пуст; ещё ниже — editor-fallback
+  (`source="fallback_editor_viewport"`). Контракт ответа (`status`/`assetPath`/
+  `filename`/`show_ui`/`source`/`note`) и `controller_index`-суффикс сохранены.
+
+### Why
+
+`new_window` (3.3.0) и forced redraw (3.2.1) гарантировали корректный present
+на экране, но scene-readback всё равно отдавал чёрное. Чтение именно
+презентованного Slate-backbuffer'а окна — единственный путь, видящий то же, что
+и пользователь. Новых build-модулей не требуется: `FSlateApplication` —
+Slate/SlateCore, `FImageUtils` — Engine, `FFileHelper` — Core (все уже
+подключены).
+
+---
+
 ## [3.3.0] — 2026-06-01
 
 Режим запуска PIE в отдельном floating game-окне для надёжного (не-чёрного)

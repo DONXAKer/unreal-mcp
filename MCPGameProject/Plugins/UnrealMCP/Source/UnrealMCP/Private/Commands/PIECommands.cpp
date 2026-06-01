@@ -10,12 +10,17 @@
 #include "GameFramework/PlayerInput.h"
 #include "HighResScreenshot.h"
 #include "Misc/Paths.h"
+#include "Misc/FileHelper.h"
 #include "HAL/FileManager.h"
 #include "UnrealClient.h"
 #include "RenderingThread.h"
 #include "InputCoreTypes.h"
 #include "InputKeyEventArgs.h"
 #include "Engine/EngineBaseTypes.h"
+#include "ImageUtils.h"
+#include "Framework/Application/SlateApplication.h"
+#include "Widgets/SWindow.h"
+#include "Widgets/SWidget.h"
 
 FPIECommands::FPIECommands()
 {
@@ -397,6 +402,87 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieScreenshot(const TSharedPtr<FJson
 
     if (GameViewport && GameViewport->Viewport)
     {
+        FViewport* const Viewport = GameViewport->Viewport;
+
+        // --- 3.3.1: Slate window readback ---
+        // Решающий факт (2026-06-01): floating PIE-окно (mode="new_window")
+        // корректно рендерит игру НА ЭКРАНЕ, но старые пути
+        // TakeHighResScreenShot()/FScreenshotRequest читали scene-буфер/не ту
+        // поверхность → чёрный PNG. Рендер работает — баг в readback.
+        // Решение: читать реальный backbuffer Slate-окна игрового вьюпорта
+        // через FSlateApplication::TakeScreenshot — он отдаёт то, что видно
+        // на экране (3D-сцена + UMG поверх, финальный презентованный кадр).
+
+        // 1) Найти SWindow игрового PIE-вьюпорта.
+        TSharedPtr<SWindow> Window;
+        TSharedPtr<SWidget> ViewportWidget;
+        if (FSlateApplication::IsInitialized())
+        {
+            Window = GameViewport->GetWindow();
+            ViewportWidget = GameViewport->GetGameViewportWidget();
+            if (!Window.IsValid() && ViewportWidget.IsValid())
+            {
+                Window = FSlateApplication::Get().FindWidgetWindow(ViewportWidget.ToSharedRef());
+            }
+        }
+
+        if (Window.IsValid())
+        {
+            // Подготовительный кадр: форсируем актуальный present
+            // (редактор в фоне сам не перерисовывает PIE-вьюпорт).
+            Viewport->InvalidateDisplay();
+            Viewport->Draw(/*bShouldPresent=*/true);
+            FlushRenderingCommands();
+
+            // 2) TakeScreenshot ставит запрос на захват backbuffer'а окна на
+            // следующем Draw. Сигнатура UE 5.7:
+            //   void TakeScreenshot(const TSharedRef<SWidget>&, TArray<FColor>& OutColorData, FIntVector& OutSize)
+            // Захватываем окно целиком (root widget окна).
+            TArray<FColor> Bitmap;
+            FIntVector OutSize(0, 0, 0);
+            const bool bTaken = FSlateApplication::Get().TakeScreenshot(Window.ToSharedRef(), Bitmap, OutSize);
+
+            // 3) Запрос обрабатывается на следующей отрисовке окна — рисуем
+            // окно ещё раз и флашим render-thread, чтобы Bitmap заполнился.
+            Viewport->InvalidateDisplay();
+            Viewport->Draw(/*bShouldPresent=*/true);
+            FlushRenderingCommands();
+
+            const int32 Width  = OutSize.X;
+            const int32 Height = OutSize.Y;
+            if (bTaken && Width > 0 && Height > 0 && Bitmap.Num() >= Width * Height)
+            {
+                // 4) TakeScreenshot нередко отдаёт A=0 → PNG будет прозрачным
+                // (чёрным). Принудительно делаем непрозрачным.
+                for (FColor& Px : Bitmap)
+                {
+                    Px.A = 255;
+                }
+
+                // 5) Кодируем в PNG (FImageUtils — Engine) и пишем файл
+                // (FFileHelper — Core). Без новых build-зависимостей.
+                TArray64<uint8> CompressedPng;
+                FImageUtils::PNGCompressImageArray(Width, Height, TArrayView64<const FColor>(Bitmap.GetData(), Bitmap.Num()), CompressedPng);
+
+                if (CompressedPng.Num() > 0 && FFileHelper::SaveArrayToFile(CompressedPng, *FullPath))
+                {
+                    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+                    Result->SetStringField(TEXT("status"), TEXT("created"));
+                    Result->SetStringField(TEXT("assetPath"), FullPath);
+                    Result->SetStringField(TEXT("filename"), Filename);
+                    Result->SetBoolField(TEXT("show_ui"), bShowUI);
+                    Result->SetStringField(TEXT("source"), TEXT("slate_window"));
+                    Result->SetNumberField(TEXT("width"), Width);
+                    Result->SetNumberField(TEXT("height"), Height);
+                    Result->SetNumberField(TEXT("bytes"), CompressedPng.Num());
+                    Result->SetStringField(TEXT("note"), TEXT("PIE screenshot captured via Slate window readback (real backbuffer: scene + UI)"));
+                    return Result;
+                }
+            }
+            // Slate-захват не дал данных — провалимся в scene-fallback ниже.
+        }
+
+        // --- Fallback (scene-путь, 3.2.1): окно не найдено или readback пуст ---
         // Корректный путь для PIE: триггерим hi-res screenshot через сам
         // game viewport. Снимок попадёт в стандартную папку, имя — Filename
         // (мы переопределяем через FHighResScreenshotConfig).
@@ -404,27 +490,11 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieScreenshot(const TSharedPtr<FJson
         Config.FilenameOverride = FullPath;
         Config.SetHDRCapture(false);
 
-        FViewport* const Viewport = GameViewport->Viewport;
-
-        // --- Чёрный-кадр фикс (3.2.1) ---
-        // В авто-прогоне редактор в фоне → его PIE-вьюпорт не перерисовывается
-        // сам по себе, и запрос скриншота читает пустой (чёрный) backbuffer.
-        // Команда уже исполняется на GameThread (см. UEpicUnrealMCPBridge::
-        // ExecuteCommand → AsyncTask(GameThread)), поэтому можем синхронно
-        // форсировать redraw и дождаться render-команд. Логика: рисуем кадр
-        // (заполняем backbuffer актуальной сценой+UI), ставим запрос
-        // скриншота, рисуем ещё раз — на этом Draw движок прочитает свежий
-        // буфер в файл, после чего флашим render-thread.
-        //
         // Подготовительный кадр: invalidate + честная отрисовка свежего present.
         Viewport->InvalidateDisplay();
         Viewport->Draw(/*bShouldPresent=*/true);
         FlushRenderingCommands();
 
-        // Если bShowUI=true — желаем захватить UMG; HighResScreenshotConfig
-        // не имеет прямого флага, но штатный TakeHighResScreenShot захватывает
-        // финальный кадр со всем UI поверх. Для bShowUI=false вызовем
-        // FScreenshotRequest::RequestScreenshot, у которого есть параметр.
         if (bShowUI)
         {
             Viewport->TakeHighResScreenShot();
@@ -434,9 +504,6 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieScreenshot(const TSharedPtr<FJson
             FScreenshotRequest::RequestScreenshot(FullPath, /*bInShowUI=*/false, /*bAddFilenameSuffix=*/false);
         }
 
-        // Кадр-захват: ещё один Draw, в рамках которого вьюпорт обработает
-        // поставленный screenshot-запрос поверх свежепрезентованного буфера,
-        // затем синхронно дожидаемся завершения render-команд (PNG-write).
         Viewport->InvalidateDisplay();
         Viewport->Draw(/*bShouldPresent=*/true);
         FlushRenderingCommands();
@@ -447,7 +514,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieScreenshot(const TSharedPtr<FJson
         Result->SetStringField(TEXT("filename"), Filename);
         Result->SetBoolField(TEXT("show_ui"), bShowUI);
         Result->SetStringField(TEXT("source"), TEXT("game_viewport"));
-        Result->SetStringField(TEXT("note"), TEXT("PIE screenshot captured via forced viewport redraw"));
+        Result->SetStringField(TEXT("note"), TEXT("PIE screenshot captured via forced viewport redraw (Slate window not found — scene fallback)"));
         return Result;
     }
 
