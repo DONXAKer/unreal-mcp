@@ -17,6 +17,47 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [3.3.0] — 2026-06-01
+
+Режим запуска PIE в отдельном floating game-окне для надёжного (не-чёрного)
+скриншота в авто-прогонах.
+
+### Added
+
+- **`pie_start` mode `"new_window"`** (`FPIECommands::HandlePieStart`,
+  `PIECommands.cpp`). Новое значение параметра `mode` (рядом с дефолтным
+  `"selected_viewport"`). При `mode="new_window"` PIE презентится в отдельном
+  floating-окне (самостоятельный `SWindow` + `SPIEViewport` с реальным
+  present'ом), а не вкладывается в level-вьюпорт редактора. Механика (UE 5.7
+  `PlayLevel.cpp`): `SessionDestination` остаётся `InProcess` (тот же процесс →
+  MCP сохраняет TCP-listener), но `FRequestPlaySessionParams::DestinationSlateViewport`
+  явно очищается → движок идёт в ветку `GeneratePIEViewportWindow`. Окно
+  размером по умолчанию 1280×720, центрируется; размер настраивается опциональными
+  параметрами `window_width`/`window_height` (clamp ≥64). Размер задаётся через
+  public-поля `ULevelEditorPlaySettings` (`NewWindowWidth/Height`,
+  `CenterNewWindow`, `LastExecutedPlayModeType = PlayMode_InEditorFloating`).
+  Ответ дополнен полями `new_window` (bool) и, при new_window, `window_width`/
+  `window_height`.
+
+### Why
+
+- В авто-прогоне (`playtest_visual.py`) редактор в фоне/не realtime → его
+  PIE level-вьюпорт не презентит реальный кадр, поэтому `pie_screenshot`
+  читал чёрный backbuffer даже с форс-redraw из 3.2.1 (для UMG-экранов hi-res
+  screenshot снимает scene-буфер без UI). Отдельное presented-окно имеет живой
+  backbuffer со сценой+UMG → существующий путь захвата даёт не-чёрный кадр.
+
+### Compatibility
+
+- Дефолт `mode="selected_viewport"` и режимы net mode
+  (`PIE_Standalone`/`PIE_ListenServer`/`PIE_Client`, ось `dedicated_server`/
+  `num_clients`) не изменены — `new_window` ортогонален net mode.
+  `controller_index`/multi-world резолв (`GetPIEWorldForClient`,
+  `pie_screenshot`/`get_widget_tree`/`pie_status`) работает без правок: для n=1
+  `PlayWorld->GetGameViewport()` указывает на viewport нового окна.
+
+---
+
 ## [3.2.1] — 2026-06-01
 
 Фикс чёрного кадра в `pie_screenshot` при авто-прогонах с фоновым редактором.

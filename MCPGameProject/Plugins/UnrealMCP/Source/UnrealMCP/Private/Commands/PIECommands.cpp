@@ -57,6 +57,25 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStart(const TSharedPtr<FJsonObjec
     FString Mode = TEXT("selected_viewport");
     Params->TryGetStringField(TEXT("mode"), Mode);
 
+    // 3.3.0: режим запуска PIE в ОТДЕЛЬНОМ floating game-окне. Зачем: дефолтный
+    // selected_viewport рендерит PIE в level-вьюпорт ВНУТРИ окна редактора;
+    // когда редактор в фоне/не realtime, этот вьюпорт не презентит реальный
+    // кадр и pie_screenshot читает чёрный backbuffer (даже с форс-redraw 3.2.1).
+    // Отдельное игровое окно — самостоятельный presented Slate-window: его
+    // backbuffer всегда содержит свежий кадр со сценой+UMG, поэтому
+    // TakeHighResScreenShot даёт НЕ чёрный кадр. Ось "destination окна"
+    // ортогональна net mode (Standalone/ListenServer/Client) — комбинируется.
+    const bool bNewWindow = Mode.Equals(TEXT("new_window"), ESearchCase::IgnoreCase);
+
+    // Опциональный размер нового окна (default 1280x720). Применяется только
+    // для new_window; для selected_viewport не трогаем настройки окна.
+    int32 NewWindowWidth = 1280;
+    int32 NewWindowHeight = 720;
+    Params->TryGetNumberField(TEXT("window_width"), NewWindowWidth);
+    Params->TryGetNumberField(TEXT("window_height"), NewWindowHeight);
+    if (NewWindowWidth < 64)  NewWindowWidth = 64;
+    if (NewWindowHeight < 64) NewWindowHeight = 64;
+
     // MCP-PLUGIN-003: multi-client поддержка. Default 1 — старое поведение.
     int32 NumClients = 1;
     Params->TryGetNumberField(TEXT("num_clients"), NumClients);
@@ -96,6 +115,23 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStart(const TSharedPtr<FJsonObjec
     if (ULevelEditorPlaySettings* PlaySettings = GetMutableDefault<ULevelEditorPlaySettings>())
     {
         PlaySettings->SetPlayNumberOfClients(NumClients);
+
+        // 3.3.0: для new_window готовим параметры floating game-окна.
+        // GeneratePIEViewportWindow → GetWindowSizeAndPositionForInstanceIndex
+        // (PlayLevel.cpp, UE 5.7) читает именно эти public-поля настроек. Сеттеров
+        // у них нет — присваиваем напрямую. Поля влияют ТОЛЬКО когда PIE
+        // презентится в собственном окне (т.е. DestinationSlateViewport не задан,
+        // см. ниже); для selected_viewport не трогаем — обратная совместимость.
+        if (bNewWindow)
+        {
+            PlaySettings->NewWindowWidth = NewWindowWidth;
+            PlaySettings->NewWindowHeight = NewWindowHeight;
+            PlaySettings->CenterNewWindow = true;   // позицию определит движок (центр рабочей области)
+            PlaySettings->PIEAlwaysOnTop = false;
+            // Согласуем тип последнего play-режима с floating-окном, чтобы UI/настройки
+            // редактора не конфликтовали с нашим запросом.
+            PlaySettings->LastExecutedPlayModeType = EPlayModeType::PlayMode_InEditorFloating;
+        }
 
         if (bDedicatedServer)
         {
@@ -140,11 +176,44 @@ TSharedPtr<FJsonObject> FPIECommands::HandlePieStart(const TSharedPtr<FJsonObjec
     }
 
     FRequestPlaySessionParams SessionParams;
+
+    // 3.3.0: при mode="new_window" презентим PIE в ОТДЕЛЬНОМ floating game-окне.
+    //
+    // Механика (UE 5.7 PlayLevel.cpp): destination остаётся InProcess (в том же
+    // процессе редактора — MCP сохраняет TCP-доступ), но мы ЯВНО гарантируем, что
+    // DestinationSlateViewport НЕ задан. В CreateInnerProcessPIEGameInstance
+    // (строка ~3119) при невалидном DestinationSlateViewport движок идёт в ветку
+    // GeneratePIEViewportWindow — создаёт самостоятельный SWindow + SPIEViewport
+    // с реальным present'ом (а НЕ вкладывает PIE в level-вьюпорт редактора, который
+    // в фоне не презентит → чёрный backbuffer). После старта
+    // PlayWorld->GetGameViewport()->Viewport указывает на backbuffer этого окна,
+    // и существующий путь захвата (forced redraw + TakeHighResScreenShot из 3.2.1)
+    // снимает живой кадр со сценой+UMG.
+    //
+    // SessionDestination оставляем дефолтным (InProcess) — НЕ NewProcess/Launcher:
+    // отдельный процесс лишил бы MCP единственного TCP-listener'а. "Окно vs
+    // вьюпорт" — это НЕ destination-ось, а отсутствие/наличие DestinationSlateViewport.
+    //
+    // Дефолтный selected_viewport не трогаем (smoke-тесты зовут pie_start без mode).
+    if (bNewWindow)
+    {
+        // Гарантируем floating-window путь: явно очищаем (на случай если CDO/
+        // прошлый запуск оставил привязку к вьюпорту) и не задаём кастомное окно.
+        SessionParams.DestinationSlateViewport.Reset();
+        SessionParams.CustomPIEWindow.Reset();
+    }
+
     GEditor->RequestPlaySession(SessionParams);
 
     TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
     Result->SetBoolField(TEXT("started"), true);
     Result->SetStringField(TEXT("mode"), Mode);
+    Result->SetBoolField(TEXT("new_window"), bNewWindow);
+    if (bNewWindow)
+    {
+        Result->SetNumberField(TEXT("window_width"), NewWindowWidth);
+        Result->SetNumberField(TEXT("window_height"), NewWindowHeight);
+    }
     Result->SetNumberField(TEXT("num_clients"), NumClients);
     Result->SetBoolField(TEXT("dedicated_server"), bDedicatedServer);
     if (!LevelName.IsEmpty())

@@ -36,6 +36,8 @@ def register_pie_tools(mcp: FastMCP) -> None:
         mode: str = "selected_viewport",
         num_clients: int = 1,
         dedicated_server: bool = False,
+        window_width: int = 0,
+        window_height: int = 0,
     ) -> dict[str, Any]:
         """Start a Play-In-Editor session.
 
@@ -43,9 +45,20 @@ def register_pie_tools(mcp: FastMCP) -> None:
             level_name: Optional. Short name of the level to load before starting
                         (advisory only — the plugin currently does not auto-load;
                         call `load_level` first if you need a specific map).
-            mode: "selected_viewport" (default) or "new_window". The mode is
-                  advisory in the current implementation; PIE uses the project's
-                  configured Editor Play Settings.
+            mode: "selected_viewport" (default) or "new_window".
+                  - "selected_viewport": PIE renders inside the editor level
+                    viewport. In a backgrounded/non-realtime editor this viewport
+                    does not present a real frame → screenshots can be black.
+                  - "new_window" (3.3.0): PIE launches in a separate presented
+                    floating game window (same editor process — MCP keeps its TCP
+                    listener). Its backbuffer holds a live scene+UMG frame, so
+                    `pie_screenshot` captures a non-black frame in automated runs.
+            window_width: Optional (3.3.0). Floating window width in px for
+                          mode="new_window". 0 → plugin default 1280. Ignored for
+                          selected_viewport.
+            window_height: Optional (3.3.0). Floating window height in px for
+                           mode="new_window". 0 → plugin default 720. Ignored for
+                           selected_viewport.
             num_clients: MCP-PLUGIN-003 — number of PIE clients to spawn
                          (1..8). Default 1 (legacy behaviour). Each client gets
                          its own UWorld / PlayerController. Use `controller_index`
@@ -73,6 +86,11 @@ def register_pie_tools(mcp: FastMCP) -> None:
         }
         if level_name:
             params["level_name"] = level_name
+        # 3.3.0: размер floating-окна — шлём только если задан и режим new_window.
+        if window_width > 0:
+            params["window_width"] = window_width
+        if window_height > 0:
+            params["window_height"] = window_height
 
         response = unreal.send_command("pie_start", params)
         return response or {"status": "error", "error": "No response"}
