@@ -21,6 +21,7 @@
 #include "Framework/Application/SlateApplication.h"
 #include "Widgets/SWindow.h"
 #include "Widgets/SWidget.h"
+#include "Widgets/SViewport.h"  // SViewport — полный тип для upcast GetGameViewportWidget()->SWidget (3.3.1)
 
 FPIECommands::FPIECommands()
 {
@@ -33,6 +34,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandleCommand(const FString& CommandType, 
     if (CommandType == TEXT("pie_status"))      return HandlePieStatus(Params);
     if (CommandType == TEXT("pie_screenshot"))  return HandlePieScreenshot(Params);
     if (CommandType == TEXT("simulate_key"))    return HandleSimulateKey(Params);
+    if (CommandType == TEXT("screen_click"))    return HandleScreenClick(Params);
     if (CommandType == TEXT("tick_world"))      return HandleTickWorld(Params);
 
     return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
@@ -577,6 +579,136 @@ TSharedPtr<FJsonObject> FPIECommands::HandleSimulateKey(const TSharedPtr<FJsonOb
     Result->SetStringField(TEXT("key"), KeyName);
     Result->SetNumberField(TEXT("controller_index"), ControllerIndex);
     Result->SetStringField(TEXT("controller_name"), PC->GetName());
+    return Result;
+}
+
+TSharedPtr<FJsonObject> FPIECommands::HandleScreenClick(const TSharedPtr<FJsonObject>& Params)
+{
+    // --- Параметры ---
+    double X = 0.0, Y = 0.0;
+    if (!Params->TryGetNumberField(TEXT("x"), X) || !Params->TryGetNumberField(TEXT("y"), Y))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'x' / 'y' parameters"));
+    }
+
+    FString ButtonName = TEXT("Left");
+    Params->TryGetStringField(TEXT("button"), ButtonName);
+
+    FKey EffectingButton = EKeys::LeftMouseButton;
+    if (ButtonName.Equals(TEXT("Right"), ESearchCase::IgnoreCase))
+    {
+        EffectingButton = EKeys::RightMouseButton;
+    }
+    else if (ButtonName.Equals(TEXT("Middle"), ESearchCase::IgnoreCase))
+    {
+        EffectingButton = EKeys::MiddleMouseButton;
+    }
+    else if (!ButtonName.Equals(TEXT("Left"), ESearchCase::IgnoreCase))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Unknown button: '%s' (expected Left/Right/Middle)"), *ButtonName));
+    }
+
+    bool bNormalized = false;
+    Params->TryGetBoolField(TEXT("normalized"), bNormalized);
+
+    int32 ControllerIndex = 0;
+    const bool bHasControllerIdx = Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
+
+    if (!GEditor || !GEditor->PlayWorld)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("No active PIE world — call pie_start first"));
+    }
+    if (!FSlateApplication::IsInitialized())
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("FSlateApplication not initialized"));
+    }
+
+    // --- Резолв game viewport / окна нужного клиента (как в pie_screenshot) ---
+    UWorld* PlayWorld = bHasControllerIdx
+        ? FUnrealMCPPIEUtils::GetPIEWorldForClient(ControllerIndex)
+        : ToRawPtr(GEditor->PlayWorld);
+    UGameViewportClient* GameViewport = PlayWorld ? PlayWorld->GetGameViewport() : nullptr;
+    if (!GameViewport || !GameViewport->Viewport)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("No game viewport for controller_index=%d"), ControllerIndex));
+    }
+
+    // Найти SWindow игрового вьюпорта + сам widget вьюпорта (для геометрии).
+    TSharedPtr<SWindow> Window = GameViewport->GetWindow();
+    TSharedPtr<SWidget> ViewportWidget = GameViewport->GetGameViewportWidget();
+    if (!Window.IsValid() && ViewportWidget.IsValid())
+    {
+        Window = FSlateApplication::Get().FindWidgetWindow(ViewportWidget.ToSharedRef());
+    }
+    if (!ViewportWidget.IsValid())
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Game viewport widget not found"));
+    }
+
+    // --- Перевод viewport-пикселей в абсолютные экранные координаты ---
+    // Геометрия widget'а вьюпорта даёт абсолютную (десктопную, DPI-scaled)
+    // позицию верхнего-левого угла области рендера и её абсолютный размер.
+    const FGeometry& ViewportGeom = ViewportWidget->GetCachedGeometry();
+    const FVector2D AbsTopLeft = ViewportGeom.GetAbsolutePosition();
+    const FVector2D AbsSize = ViewportGeom.GetAbsoluteSize();   // уже с учётом DPI
+
+    // Размер вьюпорта в пикселях (для normalized и масштаба pixel→absolute).
+    FIntPoint ViewportSizeXY = GameViewport->Viewport->GetSizeXY();
+    const double VpW = ViewportSizeXY.X > 0 ? (double)ViewportSizeXY.X : (double)AbsSize.X;
+    const double VpH = ViewportSizeXY.Y > 0 ? (double)ViewportSizeXY.Y : (double)AbsSize.Y;
+
+    // Пиксели вьюпорта, к которым относится клик.
+    const double PixelX = bNormalized ? X * VpW : X;
+    const double PixelY = bNormalized ? Y * VpH : Y;
+
+    // Масштаб: абсолютный размер области / размер вьюпорта в пикселях = DPI scale.
+    const double ScaleX = VpW > 0.0 ? (double)AbsSize.X / VpW : 1.0;
+    const double ScaleY = VpH > 0.0 ? (double)AbsSize.Y / VpH : 1.0;
+
+    const FVector2D AbsPos(
+        AbsTopLeft.X + PixelX * ScaleX,
+        AbsTopLeft.Y + PixelY * ScaleY);
+
+    // --- Инъекция реального Slate-клика (down + up) ---
+    FSlateApplication& SlateApp = FSlateApplication::Get();
+    TSet<FKey> EmptyPressed;
+    const FModifierKeysState ModifierKeys;
+
+    SlateApp.SetCursorPos(AbsPos);
+
+    {
+        FPointerEvent MouseDown(
+            0,                  // PointerIndex (primary mouse)
+            AbsPos,             // ScreenSpacePosition
+            AbsPos,             // LastScreenSpacePosition
+            EmptyPressed,       // PressedButtons
+            EffectingButton,    // EffectingButton
+            0.0f,               // WheelDelta
+            ModifierKeys);
+        SlateApp.ProcessMouseButtonDownEvent(TSharedPtr<FGenericWindow>(), MouseDown);
+    }
+    {
+        FPointerEvent MouseUp(
+            0,
+            AbsPos,
+            AbsPos,
+            EmptyPressed,
+            EffectingButton,
+            0.0f,
+            ModifierKeys);
+        SlateApp.ProcessMouseButtonUpEvent(MouseUp);
+    }
+
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("ok"), true);
+    Result->SetStringField(TEXT("button"), ButtonName);
+    Result->SetNumberField(TEXT("screen_x"), PixelX);   // пиксели внутри вьюпорта
+    Result->SetNumberField(TEXT("screen_y"), PixelY);
+    Result->SetNumberField(TEXT("abs_x"), AbsPos.X);     // абсолютные десктопные
+    Result->SetNumberField(TEXT("abs_y"), AbsPos.Y);
+    Result->SetNumberField(TEXT("controller_index"), ControllerIndex);
     return Result;
 }
 

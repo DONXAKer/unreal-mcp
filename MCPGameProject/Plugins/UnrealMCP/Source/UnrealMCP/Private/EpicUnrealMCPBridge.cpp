@@ -24,6 +24,9 @@
 #include "Engine/Selection.h"
 #include "Kismet/GameplayStatics.h"
 #include "Async/Async.h"
+#include "Misc/CommandLine.h"
+#include "Misc/Parse.h"
+#include "HAL/PlatformMisc.h"
 // Add Blueprint related includes
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
@@ -130,6 +133,31 @@ void UEpicUnrealMCPBridge::Initialize(FSubsystemCollectionBase& Collection)
     ConnectionSocket = nullptr;
     ServerThread = nullptr;
     Port = MCP_SERVER_PORT;
+
+    // Per-process port override — позволяет нескольким инстансам Editor'а поднять
+    // каждый свой MCP-мост (нужно для 2-player визуального playtest-харнесса).
+    // Приоритет: аргумент командной строки -MCPPort=<n>, затем env UNREALMCP_PORT.
+    // Без флага дефолт 55557 сохраняется (обратная совместимость).
+    int32 OverridePort = 0;
+    if (FParse::Value(FCommandLine::Get(), TEXT("MCPPort="), OverridePort) && OverridePort > 0 && OverridePort <= 65535)
+    {
+        Port = static_cast<uint16>(OverridePort);
+        UE_LOG(LogTemp, Display, TEXT("EpicUnrealMCPBridge: Port overridden via -MCPPort= to %d"), Port);
+    }
+    else
+    {
+        const FString EnvPort = FPlatformMisc::GetEnvironmentVariable(TEXT("UNREALMCP_PORT"));
+        if (!EnvPort.IsEmpty())
+        {
+            const int32 ParsedEnvPort = FCString::Atoi(*EnvPort);
+            if (ParsedEnvPort > 0 && ParsedEnvPort <= 65535)
+            {
+                Port = static_cast<uint16>(ParsedEnvPort);
+                UE_LOG(LogTemp, Display, TEXT("EpicUnrealMCPBridge: Port overridden via UNREALMCP_PORT to %d"), Port);
+            }
+        }
+    }
+
     FIPv4Address::Parse(MCP_SERVER_HOST, ServerAddress);
 
     // Start the server automatically
@@ -398,6 +426,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("pie_status") ||
                      CommandType == TEXT("pie_screenshot") ||
                      CommandType == TEXT("simulate_key") ||
+                     CommandType == TEXT("screen_click") ||
                      CommandType == TEXT("tick_world"))
             {
                 ResultJson = PIECommands->HandleCommand(CommandType, Params);

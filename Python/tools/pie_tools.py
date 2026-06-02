@@ -506,4 +506,63 @@ def register_pie_tools(mcp: FastMCP) -> None:
         )
         return response or {"status": "error", "error": "No response"}
 
-    logger.info("Registered PIE / UMG automation tools (pie_*, find_widget, wait_for_widget, click_widget_by_name, get_widget_tree, simulate_key, tick_world, wait_for_condition)")
+    @mcp.tool()
+    def screen_click(
+        ctx: Context[Any, Any, Any],
+        x: float,
+        y: float,
+        button: str = "Left",
+        controller_index: int = 0,
+        normalized: bool = False,
+    ) -> dict[str, Any]:
+        """Inject a REAL mouse click at PIE viewport pixel coords through Slate.
+
+        Unlike `simulate_key("LeftMouseButton")` (which injects at
+        APlayerController::InputKey and BYPASSES Slate hit-testing), this sends
+        ProcessMouseButtonDownEvent/UpEvent through FSlateApplication — exactly
+        like a physical mouse. So `SelfHitTestInvisible` widgets pass the click
+        to the world (e.g. a grid cell), while buttons intercept it. Use this to
+        test UI hit-test / click pass-through, and to click dynamically created
+        widgets (NewObject, not BindWidget) that report 0,0 geometry in
+        `click_widget_by_name`.
+
+        Coordinates are relative to the PIE game viewport's top-left. The plugin
+        converts them to absolute desktop coords using the viewport window
+        geometry (window position + DPI scale).
+
+        Args:
+            x: Viewport-relative X in pixels (or 0..1 fraction if normalized).
+            y: Viewport-relative Y in pixels (or 0..1 fraction if normalized).
+            button: "Left" | "Right" | "Middle". Default "Left".
+            controller_index: Which PIE client window (multi-PIE). Default 0.
+            normalized: If True, x/y are 0..1 fractions of the viewport size
+                        (e.g. center = 0.5, 0.5). Default False.
+
+        Examples:
+            screen_click(640, 360)                       # pixel click, left button
+            screen_click(0.5, 0.5, normalized=True)      # exact viewport center
+            screen_click(100, 50, button="Right")        # right-click near top-left
+
+        Returns:
+            { ok: bool, button: str, screen_x: float, screen_y: float,
+              abs_x: float, abs_y: float, controller_index: int }
+        """
+        from unreal_mcp_server import get_unreal_connection
+
+        unreal = get_unreal_connection()
+        if not unreal:
+            return {"status": "error", "error": "No Unreal connection"}
+
+        response = unreal.send_command(
+            "screen_click",
+            {
+                "x": x,
+                "y": y,
+                "button": button,
+                "controller_index": controller_index,
+                "normalized": normalized,
+            },
+        )
+        return response or {"status": "error", "error": "No response"}
+
+    logger.info("Registered PIE / UMG automation tools (pie_*, find_widget, wait_for_widget, click_widget_by_name, get_widget_tree, simulate_key, screen_click, tick_world, wait_for_condition)")

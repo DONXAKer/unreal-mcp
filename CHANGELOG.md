@@ -17,6 +17,39 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [3.4.0] — 2026-06-02
+
+Новая команда `screen_click` — настоящий клик мышью по экранным координатам PIE
+через Slate hit-testing.
+
+### Added
+
+- **`screen_click`** (`FPIECommands::HandleScreenClick`, `PIECommands.cpp`;
+  Python tool `screen_click` в `tools/pie_tools.py`). Инъектирует реальное
+  mouse-событие (`FSlateApplication::ProcessMouseButtonDownEvent` +
+  `...UpEvent`) по координатам игрового вьюпорта PIE. Параметры:
+  `x`, `y` (пиксели вьюпорта или 0..1 при `normalized=true`),
+  `button` ("Left"/"Right"/"Middle", default Left), `controller_index`
+  (мульти-PIE окно), `normalized` (bool). Резолв окна/геометрии переиспользует
+  путь `pie_screenshot` (`GameViewport->GetWindow()` /
+  `FUnrealMCPPIEUtils::GetPIEWorldForClient`); перевод viewport-пикселей в
+  абсолютные десктопные координаты — через геометрию widget'а вьюпорта
+  (`GetAbsolutePosition` + `GetAbsoluteSize`, учитывает позицию окна и DPI).
+  Ответ: `{ ok, button, screen_x, screen_y, abs_x, abs_y, controller_index }`.
+
+### Why
+
+- Для авто-тестирования UI/мировых кликов нужен клик, проходящий Slate
+  hit-testing: проверить, что виджет с `SelfHitTestInvisible` пропускает клик
+  в мир (в клетку поля), а кнопки — перехватывают. Существующая
+  `click_widget_by_name` для динамически созданных виджетов (NewObject, не
+  BindWidget) даёт геометрию 0,0 и кликает в (0,0) — мимо. А `simulate_key`
+  инъектит на уровне `APlayerController::InputKey`, минуя Slate, поэтому не
+  тестирует UI hit-test/перехват кликов. `screen_click` кликает по конкретным
+  пикселям ЧЕРЕЗ Slate, как реальная мышь.
+
+---
+
 ## [3.3.1] — 2026-06-01
 
 Фикс readback в `pie_screenshot`: кадр рендерился на экране, но захват писал

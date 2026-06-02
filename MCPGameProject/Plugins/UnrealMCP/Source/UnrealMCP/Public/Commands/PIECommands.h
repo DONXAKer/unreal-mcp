@@ -86,6 +86,27 @@ private:
     TSharedPtr<FJsonObject> HandleSimulateKey(const TSharedPtr<FJsonObject>& Params);
 
     /**
+     * Inject a REAL mouse click at viewport-pixel coordinates THROUGH Slate
+     * hit-testing (unlike simulate_key, which bypasses Slate via InputKey).
+     *
+     * Converts (x, y) — pixels relative to the PIE game viewport — into
+     * absolute desktop coordinates using the game viewport's SWindow geometry
+     * (window position + DPI), moves the cursor there, then dispatches
+     * ProcessMouseButtonDownEvent + ProcessMouseButtonUpEvent. The click flows
+     * through Slate: SelfHitTestInvisible widgets pass it to the world (game
+     * viewport), buttons intercept it — exactly like a physical mouse.
+     *
+     * Params:
+     *   x (required, float)         — viewport-relative X in pixels (or 0..1 if normalized).
+     *   y (required, float)         — viewport-relative Y in pixels (or 0..1 if normalized).
+     *   button (opt, default "Left")— "Left" | "Right" | "Middle".
+     *   controller_index (opt, int) — which PIE client window (multi-PIE).
+     *   normalized (opt, bool)      — if true, x/y are fractions 0..1 of viewport size.
+     * Returns: { ok, button, screen_x, screen_y, abs_x, abs_y }
+     */
+    TSharedPtr<FJsonObject> HandleScreenClick(const TSharedPtr<FJsonObject>& Params);
+
+    /**
      * Manually advance the PIE world simulation by N synchronous ticks.
      * Useful for deterministic e2e tests that should not depend on wall-clock time.
      *
