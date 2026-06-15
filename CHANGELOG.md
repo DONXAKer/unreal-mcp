@@ -17,6 +17,38 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [3.7.0] — 2026-06-15
+
+### Fixed
+- `set_widget_property` для `Border` теперь применяет `BrushColor`, `Padding` и
+  `ContentColorAndOpacity` вместо ошибки `Failed to import value`. Раньше у
+  `UBorder` не было собственной ветки — эти свойства уходили в reflection-fallback,
+  где `ImportText` не понимает bare-CSV (`"0.5,0.5,0.5,1.0"`, `"2,2,2,2"`).
+  Это была причина частичных ошибок `build_umg_widget` (errors[] с
+  `BrushColor`/`Padding`), хотя дерево виджетов фактически строилось.
+
+### Changed
+- Reflection-fallback в `set_widget_property` теперь сам разбирает строковые
+  значения для struct-свойств `FLinearColor`, `FSlateColor`, `FMargin`,
+  `FVector2D` из формата CSV (`"R,G,B"` / `"R,G,B,A"`, `float` / `"H,V"` /
+  `"L,T,R,B"`, `"X,Y"`) ДО вызова `ImportText_Direct`. Так типовые цвета/отступы/
+  векторы, передаваемые MCP-клиентами строкой, применяются, а не падают на
+  парсинге parenthesised-литерала, который ожидает UE (`"(R=0.5,...)"`).
+- Сообщение об ошибке импорта теперь включает CPP-тип свойства
+  (`... for property 'X' (type 'Y')`) для облегчения диагностики.
+
+### Why
+- `build_umg_widget` (Python-оркестратор в `tools/umg_tools.py`) уже корректно
+  репортит partial build через `errors[]`/`log[]` и `success=False` — он НЕ
+  бросает необработанный exception. «Unknown failure / TOOL_FAILURE» в клиенте —
+  это Python-envelope, который маппит `success=False` в error-конверт. Истинная
+  первопричина непустого `errors[]` была в C++: невозможность распарсить
+  строковые `BrushColor`/`Padding`. Этот фикс устраняет именно её, так что
+  типовое дерево (`Border` с цветом и отступом, `ProgressBar.Percent`) строится с
+  `errors=[]` и `success=True`.
+
+---
+
 ## [3.6.1] — 2026-06-15
 
 ### Fixed

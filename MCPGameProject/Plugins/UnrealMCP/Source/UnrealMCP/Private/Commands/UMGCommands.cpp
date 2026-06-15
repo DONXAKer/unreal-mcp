@@ -1176,7 +1176,46 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleSetWidgetProperty(const TSh
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Reflection-based fallback: float, bool, int32 UPROPERTY fields
+    // Border properties
+    //   BrushColor : FLinearColor as "R,G,B" / "R,G,B,A"
+    //   Padding    : FMargin as float / "H,V" / "L,T,R,B"
+    //   ContentColorAndOpacity / BrushColor handled explicitly because the
+    //   reflection fallback's ImportText cannot parse bare-CSV struct literals.
+    // ─────────────────────────────────────────────────────────────────────────
+    else if (UBorder* Border = Cast<UBorder>(Widget))
+    {
+        if (PropertyName == TEXT("BrushColor"))
+        {
+            FLinearColor Color;
+            if (!UMGCommandsUtils::ParseLinearColor(PropertyValue, Color))
+                return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("BrushColor expects 'R,G,B' or 'R,G,B,A'"));
+            Border->SetBrushColor(Color);
+            bModified = true;
+        }
+        else if (PropertyName == TEXT("ContentColorAndOpacity"))
+        {
+            FLinearColor Color;
+            if (!UMGCommandsUtils::ParseLinearColor(PropertyValue, Color))
+                return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("ContentColorAndOpacity expects 'R,G,B' or 'R,G,B,A'"));
+            Border->SetContentColorAndOpacity(Color);
+            bModified = true;
+        }
+        else if (PropertyName == TEXT("Padding"))
+        {
+            FMargin Margin;
+            if (!UMGCommandsUtils::ParseMargin(PropertyValue, Margin))
+                return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Padding expects float, 'H,V' or 'L,T,R,B'"));
+            Border->SetPadding(Margin);
+            bModified = true;
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Reflection-based fallback: float, bool, int32, and common struct UPROPERTY
+    // fields. UE's ImportText for FLinearColor / FMargin / FVector2D / FSlateColor
+    // expects parenthesised literals like "(R=0.5,G=0.5,...)"; MCP callers pass
+    // bare CSV ("0.5,0.5,0.5,1.0"). Pre-parse those struct types from CSV so the
+    // typical color/margin/vector cases succeed instead of failing ImportText.
     // ─────────────────────────────────────────────────────────────────────────
     else
     {
@@ -1184,16 +1223,69 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleSetWidgetProperty(const TSh
         if (Prop)
         {
             void* ValuePtr = Prop->ContainerPtrToValuePtr<void>(Widget);
-            const TCHAR* ImportResult = Prop->ImportText_Direct(*PropertyValue, ValuePtr, Widget, PPF_None);
-            if (ImportResult != nullptr)
+            bool bHandled = false;
+
+            if (FStructProperty* StructProp = CastField<FStructProperty>(Prop))
+            {
+                const FName StructName = StructProp->Struct ? StructProp->Struct->GetFName() : NAME_None;
+
+                if (StructName == NAME_LinearColor)
+                {
+                    FLinearColor Color;
+                    if (UMGCommandsUtils::ParseLinearColor(PropertyValue, Color))
+                    {
+                        *static_cast<FLinearColor*>(ValuePtr) = Color;
+                        bHandled = true;
+                    }
+                }
+                else if (StructName == TEXT("SlateColor"))
+                {
+                    FLinearColor Color;
+                    if (UMGCommandsUtils::ParseLinearColor(PropertyValue, Color))
+                    {
+                        *static_cast<FSlateColor*>(ValuePtr) = FSlateColor(Color);
+                        bHandled = true;
+                    }
+                }
+                else if (StructName == TEXT("Margin"))
+                {
+                    FMargin Margin;
+                    if (UMGCommandsUtils::ParseMargin(PropertyValue, Margin))
+                    {
+                        *static_cast<FMargin*>(ValuePtr) = Margin;
+                        bHandled = true;
+                    }
+                }
+                else if (StructName == NAME_Vector2D)
+                {
+                    FVector2D Vec;
+                    if (UMGCommandsUtils::ParseVector2D(PropertyValue, Vec))
+                    {
+                        *static_cast<FVector2D*>(ValuePtr) = Vec;
+                        bHandled = true;
+                    }
+                }
+            }
+
+            if (!bHandled)
+            {
+                const TCHAR* ImportResult = Prop->ImportText_Direct(*PropertyValue, ValuePtr, Widget, PPF_None);
+                if (ImportResult != nullptr)
+                {
+                    bHandled = true;
+                }
+            }
+
+            if (bHandled)
             {
                 bModified = true;
             }
             else
             {
                 return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
-                    FString::Printf(TEXT("Failed to import value '%s' for property '%s'"),
-                        *PropertyValue, *PropertyName));
+                    FString::Printf(TEXT("Failed to import value '%s' for property '%s' (type '%s')"),
+                        *PropertyValue, *PropertyName,
+                        *Prop->GetCPPType()));
             }
         }
         else
