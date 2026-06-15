@@ -55,6 +55,7 @@ public class UnrealMCP : ModuleRules
 			{
 				"EditorScriptingUtilities",
 				"EditorSubsystem",
+				"RenderCore",       // For FlushRenderingCommands (pie_screenshot forced redraw, 3.2.1)
 				"Slate",
 				"SlateCore",
 				"Kismet",

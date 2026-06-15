@@ -17,6 +17,42 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [3.6.0] — 2026-06-02
+
+### Added
+- `simulate_key` получил параметр `action`: `"press"` (Pressed+Released в одном
+  тике, дефолт), `"down"` (только нажатие), `"up"` (только отпускание). Python-tool
+  `simulate_key(..., action=...)`.
+
+### Why
+- Для тестирования игрового ввода через Enhanced Input: событие
+  `ETriggerEvent::Triggered` у экшена без явного триггера требует, чтобы клавиша
+  была актуирована ≥1 тик. `action="press"` (нажатие+отпускание в одном тике) не
+  даёт длительности → IA не срабатывает. Теперь:
+  `simulate_key(action="down")` → реальные тики (sleep) → `simulate_key(action="up")`.
+  `simulate_key` доходит до PlayerInput (в отличие от screen_click для мира),
+  поэтому удержание через тики реально драйвит Enhanced Input.
+
+---
+
+## [3.5.0] — 2026-06-02
+
+### Added
+- `screen_click` получил параметр `action`: `"click"` (down+up, дефолт — старое
+  поведение), `"down"` (только нажатие), `"up"` (только отпускание). Python-tool
+  `screen_click(..., action=...)`.
+
+### Why
+- Для тестирования игровых кликов по миру через Enhanced Input: событие
+  `ETriggerEvent::Triggered` порождается только когда кнопка «зажата» хотя бы один
+  тик. `action="click"` (down+up в одном кадре) этого не даёт — IA не срабатывает.
+  Теперь авто-клик по клетке/юниту делается так:
+  `screen_click(action="down")` → `tick_world(2)` → `screen_click(action="up")`,
+  и Enhanced Input видит зажатие → `Triggered` доходит до контроллера. Для UMG-кнопок
+  по-прежнему достаточно `action="click"`.
+
+---
+
 ## [3.4.0] — 2026-06-02
 
 Новая команда `screen_click` — настоящий клик мышью по экранным координатам PIE

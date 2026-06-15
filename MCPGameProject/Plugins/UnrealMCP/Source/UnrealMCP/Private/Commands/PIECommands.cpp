@@ -571,12 +571,23 @@ TSharedPtr<FJsonObject> FPIECommands::HandleSimulateKey(const TSharedPtr<FJsonOb
         return Response;
     }
 
-    PC->InputKey(FInputKeyEventArgs::CreateSimulated(Key, IE_Pressed,  /*AmountDepressed*/ 1.0f));
-    PC->InputKey(FInputKeyEventArgs::CreateSimulated(Key, IE_Released, /*AmountDepressed*/ 1.0f));
+    // action: "press" (Pressed+Released в одном тике, дефолт = старое поведение),
+    // "down" (только Pressed — удержание), "up" (только Released). down/up нужны для
+    // Enhanced Input: событие Triggered у экшена без явного триггера требует, чтобы
+    // клавиша была актуирована хотя бы один тик. Поэтому игровой ввод тестируется так:
+    // simulate_key(down) → подождать реальные тики → simulate_key(up).
+    FString Action = TEXT("press");
+    Params->TryGetStringField(TEXT("action"), Action);
+    const bool bDoDown = !Action.Equals(TEXT("up"), ESearchCase::IgnoreCase);
+    const bool bDoUp   = !Action.Equals(TEXT("down"), ESearchCase::IgnoreCase);
+
+    if (bDoDown) { PC->InputKey(FInputKeyEventArgs::CreateSimulated(Key, IE_Pressed,  /*AmountDepressed*/ 1.0f)); }
+    if (bDoUp)   { PC->InputKey(FInputKeyEventArgs::CreateSimulated(Key, IE_Released, /*AmountDepressed*/ 1.0f)); }
 
     TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
     Result->SetBoolField(TEXT("sent"), true);
     Result->SetStringField(TEXT("key"), KeyName);
+    Result->SetStringField(TEXT("action"), Action);
     Result->SetNumberField(TEXT("controller_index"), ControllerIndex);
     Result->SetStringField(TEXT("controller_name"), PC->GetName());
     return Result;
@@ -611,6 +622,15 @@ TSharedPtr<FJsonObject> FPIECommands::HandleScreenClick(const TSharedPtr<FJsonOb
 
     bool bNormalized = false;
     Params->TryGetBoolField(TEXT("normalized"), bNormalized);
+
+    // action: "click" (down+up, дефолт), "down" (только нажатие), "up" (только отпускание).
+    // Разделение нужно для Enhanced Input: ETriggerEvent::Triggered порождается только
+    // когда клавиша «зажата» хотя бы один тик. Поэтому игровой клик по миру делается так:
+    // screen_click(action=down) → tick_world(N) → screen_click(action=up).
+    FString Action = TEXT("click");
+    Params->TryGetStringField(TEXT("action"), Action);
+    const bool bDoDown = !Action.Equals(TEXT("up"), ESearchCase::IgnoreCase);
+    const bool bDoUp   = !Action.Equals(TEXT("down"), ESearchCase::IgnoreCase);
 
     int32 ControllerIndex = 0;
     const bool bHasControllerIdx = Params->TryGetNumberField(TEXT("controller_index"), ControllerIndex);
@@ -678,6 +698,7 @@ TSharedPtr<FJsonObject> FPIECommands::HandleScreenClick(const TSharedPtr<FJsonOb
 
     SlateApp.SetCursorPos(AbsPos);
 
+    if (bDoDown)
     {
         FPointerEvent MouseDown(
             0,                  // PointerIndex (primary mouse)
@@ -689,12 +710,17 @@ TSharedPtr<FJsonObject> FPIECommands::HandleScreenClick(const TSharedPtr<FJsonOb
             ModifierKeys);
         SlateApp.ProcessMouseButtonDownEvent(TSharedPtr<FGenericWindow>(), MouseDown);
     }
+    if (bDoUp)
     {
+        // Для up-события набор уже-нажатых кнопок должен содержать отпускаемую
+        // (иначе часть обработчиков считает клик невалидным).
+        TSet<FKey> HeldButtons;
+        HeldButtons.Add(EffectingButton);
         FPointerEvent MouseUp(
             0,
             AbsPos,
             AbsPos,
-            EmptyPressed,
+            HeldButtons,
             EffectingButton,
             0.0f,
             ModifierKeys);

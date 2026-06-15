@@ -34,8 +34,16 @@ UNREAL_PORT = int(os.environ.get("UNREAL_PORT", "55557"))
 class UnrealConnection:
     """Connection to an Unreal Engine instance."""
     
-    def __init__(self) -> None:
-        """Initialize the connection."""
+    def __init__(self, host: str | None = None, port: int | None = None) -> None:
+        """Initialize the connection.
+
+        host/port default to the module-level UNREAL_HOST/UNREAL_PORT (env-driven)
+        so existing callers keep working. Pass explicit values to target a specific
+        Editor instance — used by the 2-player visual playtest harness, which talks
+        to two editors on 55557 and 55558.
+        """
+        self.host = host if host is not None else UNREAL_HOST
+        self.port = port if port is not None else UNREAL_PORT
         self.socket: socket.socket | None = None
         self.connected = False
     
@@ -50,7 +58,7 @@ class UnrealConnection:
                     pass
                 self.socket = None
             
-            logger.info(f"Connecting to Unreal at {UNREAL_HOST}:{UNREAL_PORT}...")
+            logger.info(f"Connecting to Unreal at {self.host}:{self.port}...")
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.settimeout(5)  # 5 second timeout
             
@@ -62,7 +70,7 @@ class UnrealConnection:
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 65536)
             
-            self.socket.connect((UNREAL_HOST, UNREAL_PORT))
+            self.socket.connect((self.host, self.port))
             self.connected = True
             logger.info("Connected to Unreal Engine")
             return True

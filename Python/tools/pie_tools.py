@@ -478,21 +478,24 @@ def register_pie_tools(mcp: FastMCP) -> None:
         ctx: Context[Any, Any, Any],
         key: str,
         controller_index: int = 0,
+        action: str = "press",
     ) -> dict[str, Any]:
-        """Simulate a key press+release on a PIE PlayerController.
-
-        Uses APlayerController::InputKey under the hood (Pressed then Released
-        in the same call, single tick). For mouse buttons prefer
-        `click_widget_by_name`.
+        """Simulate a key on a PIE PlayerController via APlayerController::InputKey.
 
         Args:
             key: Engine key name — e.g. "SpaceBar", "E", "Enter",
                  "LeftMouseButton" (see EKeys::* identifiers in UE source).
             controller_index: MCP-PLUGIN-003 — which PIE client receives the
                               key. Default 0 (legacy behaviour: first PC).
+            action: "press" (Pressed+Released в одном тике, дефолт), "down"
+                    (только нажатие — удержание) или "up" (только отпускание).
+                    Для Enhanced Input (экшен без явного триггера → событие
+                    Triggered нужно удержание ≥1 тик) тестируй так:
+                    simulate_key(key, action="down") → tick'и реального времени →
+                    simulate_key(key, action="up").
 
         Returns:
-            { sent: bool, key: str, controller_index: int, controller_name: str }
+            { sent: bool, key: str, action: str, controller_index: int, controller_name: str }
         """
         from unreal_mcp_server import get_unreal_connection
 
@@ -502,7 +505,7 @@ def register_pie_tools(mcp: FastMCP) -> None:
 
         response = unreal.send_command(
             "simulate_key",
-            {"key": key, "controller_index": controller_index},
+            {"key": key, "controller_index": controller_index, "action": action},
         )
         return response or {"status": "error", "error": "No response"}
 
@@ -514,6 +517,7 @@ def register_pie_tools(mcp: FastMCP) -> None:
         button: str = "Left",
         controller_index: int = 0,
         normalized: bool = False,
+        action: str = "click",
     ) -> dict[str, Any]:
         """Inject a REAL mouse click at PIE viewport pixel coords through Slate.
 
@@ -537,11 +541,18 @@ def register_pie_tools(mcp: FastMCP) -> None:
             controller_index: Which PIE client window (multi-PIE). Default 0.
             normalized: If True, x/y are 0..1 fractions of the viewport size
                         (e.g. center = 0.5, 0.5). Default False.
+            action: "click" (down+up, default), "down" (press only) or "up"
+                    (release only). To drive WORLD clicks через Enhanced Input
+                    (ETriggerEvent::Triggered нужен зажатый хотя бы 1 тик):
+                    screen_click(..., action="down") → tick_world(2) →
+                    screen_click(..., action="up"). Для UMG-кнопок хватает
+                    "click".
 
         Examples:
             screen_click(640, 360)                       # pixel click, left button
             screen_click(0.5, 0.5, normalized=True)      # exact viewport center
             screen_click(100, 50, button="Right")        # right-click near top-left
+            screen_click(0.6, 0.5, normalized=True, action="down")  # world press
 
         Returns:
             { ok: bool, button: str, screen_x: float, screen_y: float,
@@ -561,6 +572,7 @@ def register_pie_tools(mcp: FastMCP) -> None:
                 "button": button,
                 "controller_index": controller_index,
                 "normalized": normalized,
+                "action": action,
             },
         )
         return response or {"status": "error", "error": "No response"}
