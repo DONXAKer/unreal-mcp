@@ -17,6 +17,41 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [3.6.1] — 2026-06-15
+
+### Fixed
+- Резолв ассетов в команлах больше не зависит от того, загружен ли уже объект.
+  `asset_exists`, `delete_asset`, `create_material_instance` (резолв
+  `parentMaterial`), `set_material_instance_params` (резолв `assetPath`),
+  текстурный параметр материала и material-override меша теперь подгружают
+  ассет с диска через find-then-load, а не возвращают miss.
+- `asset_exists("/Game/Art/Textures/T_CardArt_1")` теперь возвращает
+  `exists:true` для реально существующего ассета (раньше — `false`).
+- `create_material_instance(parentMaterial="/Game/Maps/Materials/M_Cell")` и
+  `parentMaterial="/Engine/BasicShapes/BasicShapeMaterial"` больше не падают с
+  `PARENT_MATERIAL_NOT_FOUND` для существующих материалов.
+- Добавлены helper'ы `FAssetCommonUtils::NormalizeToObjectPath` (package-path
+  `/Game/X/Foo` → object-path `/Game/X/Foo.Foo`) и
+  `FAssetCommonUtils::LoadAssetObject` (StaticFindObject → StaticLoadObject,
+  работает для `/Game/`, `/Engine/` и plugin-mount'ов). `FindAssetByPath`,
+  `AssetExistsInRegistry`, `GetAssetClassName` переведены на них.
+
+### Why
+- Прежний код резолва ассетов использовал `UEditorAssetLibrary::LoadAsset` /
+  `DoesAssetExist` / `FSoftObjectPath` напрямую с **package-path** на входе
+  (`/Game/X/Foo` без суффикса `.Foo`). В UE 5.7 эти API ожидают **object-path**:
+  bare package path даёт registry-miss и null-load. Из-за этого валились все
+  операции над незагруженными ассетами в `/Game/` и `/Engine/`, хотя в
+  Content Browser / AssetRegistry они присутствуют. Нормализация
+  package→object path + явный StaticLoadObject устраняют расхождение.
+  Коды ошибок (`PARENT_MATERIAL_NOT_FOUND` и т.п.) сохранены — срабатывают
+  только если ассет действительно не грузится.
+
+### Note
+- Сигнатуры команд и Python-обёртки не изменены — bugfix-only, поэтому patch.
+
+---
+
 ## [3.6.0] — 2026-06-02
 
 ### Added

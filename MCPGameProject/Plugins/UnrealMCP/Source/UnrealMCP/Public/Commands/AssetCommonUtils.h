@@ -30,6 +30,33 @@ public:
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
+     * Normalizes an asset path into a fully-qualified object path.
+     *
+     * Accepts either a package path ("/Game/X/Foo") or an object path
+     * ("/Game/X/Foo.Foo"). If the input has no '.' separator, appends
+     * ".<AssetName>" derived from the last path segment so it becomes a valid
+     * object path. Inputs that already contain '.' are returned unchanged.
+     *
+     * This matters because UE 5.7 FSoftObjectPath / StaticLoadObject /
+     * UEditorAssetLibrary expect object paths; bare package paths fail to
+     * resolve (registry miss / null load), which previously made
+     * asset_exists report false and create_material_instance fail with
+     * PARENT_MATERIAL_NOT_FOUND even for assets that exist.
+     */
+    static FString NormalizeToObjectPath(const FString& AssetPath);
+
+    /**
+     * Resolves a UObject from an asset path with a find-then-load strategy:
+     *   1. Normalize package path → object path (see NormalizeToObjectPath).
+     *   2. StaticFindObject — return it if already loaded (cheap).
+     *   3. StaticLoadObject — force-load the unloaded asset from disk.
+     *
+     * Returns nullptr only when the asset genuinely cannot be loaded. Works for
+     * any root (/Game/, /Engine/, plugin mounts). Does NOT log on miss.
+     */
+    static UObject* LoadAssetObject(const FString& AssetPath);
+
+    /**
      * Loads and returns the UObject at AssetPath, or nullptr if missing.
      * Does NOT log on miss. Accepts short paths (e.g. "/Game/Cards/T_Foo").
      */

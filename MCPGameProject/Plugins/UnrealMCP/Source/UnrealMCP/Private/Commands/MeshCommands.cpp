@@ -320,7 +320,7 @@ TSharedPtr<FJsonObject> FMeshCommands::HandleImportStaticMesh(const TSharedPtr<F
                 continue;
             }
 
-            UMaterialInterface* Loaded = Cast<UMaterialInterface>(UEditorAssetLibrary::LoadAsset(MatPath));
+            UMaterialInterface* Loaded = Cast<UMaterialInterface>(FAssetCommonUtils::LoadAssetObject(MatPath));
             if (!Loaded)
             {
                 SkippedOverrides.Add(MakeShared<FJsonValueString>(SlotName));

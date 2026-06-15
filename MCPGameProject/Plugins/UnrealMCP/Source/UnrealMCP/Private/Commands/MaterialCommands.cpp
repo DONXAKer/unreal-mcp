@@ -112,7 +112,7 @@ namespace
             if (Value->Type == EJson::String)
             {
                 const FString TexturePath = Value->AsString();
-                UObject* Obj = UEditorAssetLibrary::LoadAsset(TexturePath);
+                UObject* Obj = FAssetCommonUtils::LoadAssetObject(TexturePath);
                 UTexture* Tex = Cast<UTexture>(Obj);
                 if (!Tex)
                 {
@@ -215,7 +215,7 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleCreateMaterialInstance(const TS
             TEXT("Required param 'parentMaterial' is missing or empty"));
     }
 
-    UObject* ParentObj = UEditorAssetLibrary::LoadAsset(ParentPath);
+    UObject* ParentObj = FAssetCommonUtils::LoadAssetObject(ParentPath);
     UMaterialInterface* Parent = Cast<UMaterialInterface>(ParentObj);
     if (!Parent)
     {
@@ -346,7 +346,7 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleSetMaterialInstanceParams(const
         }
     }
 
-    UObject* Obj = UEditorAssetLibrary::LoadAsset(AssetPath);
+    UObject* Obj = FAssetCommonUtils::LoadAssetObject(AssetPath);
     UMaterialInstanceConstant* MI = Cast<UMaterialInstanceConstant>(Obj);
     if (!MI)
     {

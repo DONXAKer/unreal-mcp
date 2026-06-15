@@ -5,6 +5,7 @@
 #include "AssetRegistry/AssetData.h"
 #include "EditorAssetLibrary.h"
 #include "UObject/Object.h"
+#include "UObject/UObjectGlobals.h"
 #include "UObject/Class.h"
 #include "UObject/SoftObjectPath.h"
 #include "Dom/JsonObject.h"
@@ -17,15 +18,57 @@
 // Asset Registry / lookup
 // ─────────────────────────────────────────────────────────────────────────────
 
-UObject* FAssetCommonUtils::FindAssetByPath(const FString& AssetPath)
+FString FAssetCommonUtils::NormalizeToObjectPath(const FString& AssetPath)
+{
+    if (AssetPath.IsEmpty())
+    {
+        return AssetPath;
+    }
+
+    // Already an object path ("/Game/X/Foo.Foo") — leave as-is.
+    if (AssetPath.Contains(TEXT(".")))
+    {
+        return AssetPath;
+    }
+
+    // Package path ("/Game/X/Foo") — append ".<AssetName>" so it becomes a
+    // valid object path that StaticLoadObject / FSoftObjectPath can resolve.
+    int32 LastSlash = INDEX_NONE;
+    if (AssetPath.FindLastChar(TCHAR('/'), LastSlash) && LastSlash >= 0 && LastSlash < AssetPath.Len() - 1)
+    {
+        const FString AssetName = AssetPath.Mid(LastSlash + 1);
+        return FString::Printf(TEXT("%s.%s"), *AssetPath, *AssetName);
+    }
+
+    return AssetPath;
+}
+
+UObject* FAssetCommonUtils::LoadAssetObject(const FString& AssetPath)
 {
     if (AssetPath.IsEmpty())
     {
         return nullptr;
     }
-    // UEditorAssetLibrary::LoadAsset is the standard editor-side loader; it
-    // returns nullptr silently when the asset does not exist.
-    return UEditorAssetLibrary::LoadAsset(AssetPath);
+
+    const FString ObjectPath = NormalizeToObjectPath(AssetPath);
+
+    // 1. Already loaded? Cheap find first, no disk I/O.
+    if (UObject* Found = StaticFindObject(UObject::StaticClass(), nullptr, *ObjectPath))
+    {
+        return Found;
+    }
+
+    // 2. Force-load from disk. Works for /Game/, /Engine/ and plugin mounts.
+    //    LOAD_NoWarn|LOAD_Quiet keeps the log clean on expected misses.
+    return StaticLoadObject(UObject::StaticClass(), nullptr, *ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+}
+
+UObject* FAssetCommonUtils::FindAssetByPath(const FString& AssetPath)
+{
+    // Find-then-load via object-path normalization. Replaces the old
+    // UEditorAssetLibrary::LoadAsset call, which silently failed for bare
+    // package paths and for non-/Game/ roots.
+    return LoadAssetObject(AssetPath);
 }
 
 bool FAssetCommonUtils::AssetExistsInRegistry(const FString& AssetPath)
@@ -35,9 +78,24 @@ bool FAssetCommonUtils::AssetExistsInRegistry(const FString& AssetPath)
         return false;
     }
 
-    // UEditorAssetLibrary::DoesAssetExist hits the Asset Registry without
-    // forcing a load, which is cheaper than FindAssetByPath for pure checks.
-    return UEditorAssetLibrary::DoesAssetExist(AssetPath);
+    // Registry-only check (no forced load) keyed by a normalized object path.
+    // The registry stores assets by object path, so a bare package path would
+    // otherwise miss.
+    const FString ObjectPath = NormalizeToObjectPath(AssetPath);
+
+    FAssetRegistryModule& AssetRegistryModule =
+        FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+    IAssetRegistry& Registry = AssetRegistryModule.Get();
+
+    FAssetData Data = Registry.GetAssetByObjectPath(FSoftObjectPath(ObjectPath));
+    if (Data.IsValid())
+    {
+        return true;
+    }
+
+    // Fallback: registry may not have scanned this path yet (e.g. /Engine
+    // content). A successful load is authoritative proof of existence.
+    return LoadAssetObject(AssetPath) != nullptr;
 }
 
 FString FAssetCommonUtils::GetAssetClassName(const FString& AssetPath)
@@ -52,7 +110,7 @@ FString FAssetCommonUtils::GetAssetClassName(const FString& AssetPath)
         FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
     IAssetRegistry& Registry = AssetRegistryModule.Get();
 
-    FSoftObjectPath SoftPath(AssetPath);
+    FSoftObjectPath SoftPath(NormalizeToObjectPath(AssetPath));
     FAssetData Data = Registry.GetAssetByObjectPath(SoftPath);
     if (Data.IsValid())
     {
@@ -62,7 +120,7 @@ FString FAssetCommonUtils::GetAssetClassName(const FString& AssetPath)
     }
 
     // Fallback: load the object and report its class.
-    if (UObject* Loaded = UEditorAssetLibrary::LoadAsset(AssetPath))
+    if (UObject* Loaded = LoadAssetObject(AssetPath))
     {
         return Loaded->GetClass()->GetName();
     }
