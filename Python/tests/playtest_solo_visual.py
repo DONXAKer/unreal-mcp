@@ -157,11 +157,13 @@ def main() -> int:
         changed = {_key(u) for u in before} != {_key(u) for u in after}
         _add_check(manifest, "board_changed_after_moves", changed, f"rounds={rounds}")
 
-        # Прогрев рендера (фоновое окно сходится не с первого кадра) → захват.
+        # Прогрев рендера (фоновое new_window-окно троттлит редрав и сходится не с
+        # первого кадра) → захват. Прогрев обильный: иначе именованный скриншот
+        # пишется позже файлового дедлайна _capture (png MISSING).
         print("\n--- 5c/6 capture battle frames ---")
-        _warm_render(conns, rounds=5)
+        _warm_render(conns, rounds=10)
         _capture("p1", conn, "battle", run_dir, manifest, show_ui=True, do_diff=False)
-        _warm_render(conns, rounds=2)
+        _warm_render(conns, rounds=4)
         _capture("p1", conn, "battle_field", run_dir, manifest, show_ui=False, do_diff=False)
 
         print("\n--- 6/6 surrender -> GameResult ---")

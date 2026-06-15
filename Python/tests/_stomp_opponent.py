@@ -304,6 +304,7 @@ class OpponentBot:
         self.my_picks: list[str] = []
         self._readied_phases: set[str] = set()
         self._deployed = False
+        self._pulse_started = False
         self._reached_battle = threading.Event()
         self._verbose = verbose
         self._lock = threading.Lock()
@@ -396,7 +397,26 @@ class OpponentBot:
             return data["phase"]
         return None
 
+    def _ensure_draft_pulse(self) -> None:
+        """Запустить периодический phase-ready на время драфта (один раз). Сервер в
+        DRAFT по phase-ready ре-броадкастит draft-update (FIX-DRAFT-SYNC) → оба клиента
+        освежают чей ход, и пропустивший апдейт UE-клиент восстанавливается (топик
+        /draft-update не реплеится). Стартуем по первому draft-update — игра уже в
+        DRAFT, поэтому нет гонки со start-game (которой опасается _delayed_kick)."""
+        if self._pulse_started or not self.game_id:
+            return
+        self._pulse_started = True
+        self._draft_pulse(self.game_id)
+
+    def _draft_pulse(self, gid: str) -> None:
+        # Стоп, когда драфт закончился (наступил DEPLOYMENT) или игра сменилась.
+        if self.game_id != gid or self._deployed:
+            return
+        self.stomp.send_json("/app/game/phase-ready", {"gameId": gid, "phase": "DRAFT"})
+        threading.Timer(3.0, self._draft_pulse, args=(gid,)).start()
+
     def _on_draft_update(self, body: dict[str, Any]) -> None:
+        self._ensure_draft_pulse()
         with self._lock:
             pick_number = body.get("pickNumber", 0)
             current = body.get("currentPickPlayerId", "")
