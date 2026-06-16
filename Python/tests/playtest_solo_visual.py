@@ -50,6 +50,14 @@ PORT = 55557
 
 def _start_pie_new_window(conn: UnrealConnection) -> bool:
     """PIE n=1 в отдельном окне (new_window) — обязательно для не-чёрного 3D-кадра."""
+    # Reuse уже запущенного PIE (например, поднятого вручную через MCP) — обходит
+    # транзиентный флак pie_start на «оседающем» редакторе. Если PIE уже бежит и у
+    # клиента есть виджет (обычно WBP_Login_C) — драйвим прямо его.
+    st0 = _send(conn, "pie_status", {}) or {}
+    cs0 = st0.get("clients") or []
+    if st0.get("is_running") and cs0 and cs0[0].get("current_widget"):
+        print(f"  PIE уже запущен — переиспользуем, widget={cs0[0].get('current_widget')}")
+        return True
     _send(conn, "pie_stop", {})
     dl = time.monotonic() + 25
     while time.monotonic() < dl:
