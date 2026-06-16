@@ -1298,6 +1298,7 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleSetWidgetProperty(const TSh
 
     FBlueprintEditorUtils::MarkBlueprintAsModified(WidgetBlueprint);
     WidgetBlueprint->MarkPackageDirty();
+    UEditorAssetLibrary::SaveAsset(BlueprintPath, /*bOnlyIfIsDirty=*/false);
 
     TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
     Result->SetStringField(TEXT("widget_name"), WidgetName);

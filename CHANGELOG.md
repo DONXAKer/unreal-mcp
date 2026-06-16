@@ -17,6 +17,20 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [3.7.1] — 2026-06-17
+
+### Fixed
+- `set_widget_property` теперь сохраняет Widget Blueprint на диск (`UEditorAssetLibrary::SaveAsset`)
+  сразу после применения изменения. До этого изменения оставались только в памяти Editor'а и
+  не записывались в `.uasset` до ручного Ctrl+S или закрытия Editor'а. Это приводило к тому,
+  что изменения слотов (Anchors, Offsets, AutoSize) не отражались в git после компиляции.
+
+### Why
+- Вызов `MarkBlueprintAsModified` + `MarkPackageDirty` без `SaveAsset` — неполная операция
+  для MCP-сценариев (CI, batch-модификации); явный save завершает транзакцию.
+
+---
+
 ## [3.7.0] — 2026-06-15
 
 ### Fixed
