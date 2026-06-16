@@ -32,13 +32,18 @@ sys.path.insert(0, str(__file__.rsplit("\\tests", 1)[0]))
 
 import json
 import logging
+
 logging.getLogger("UnrealMCP").setLevel(logging.ERROR)
 
 from tests._fixtures import ensure_test_user, get_test_jwt
 from tests._stomp_opponent import OpponentBot
 from tests.smoke_pie_full_game import (
-    _send, _draft_entries, _deploy_client, _has_uw_any, _suffix,
     UNITS_TO_PICK,
+    _deploy_client,
+    _draft_entries,
+    _has_uw_any,
+    _send,
+    _suffix,
 )
 from unreal_mcp_server import UnrealConnection
 
@@ -74,8 +79,19 @@ def _ue_battle_round(conn, my_side: str) -> tuple[bool, int, int]:
     occupied = {(u["gridX"], u["gridY"]) for u in units}
     moves_ok = attacks_ok = 0
 
+    # FIX-TURN-001: перепроверяем «мой ход» перед КАЖДОЙ командой. Клиентский bIsMyTurn
+    # синхронизируется по надёжному /state; при потере хода (ход ушёл оппоненту) клиент
+    # это подхватывает за тик-другой. Без перепроверки тест слал бы всю пачку команд по
+    # устаревшему my_turn и ловил серверные «не ваш ход». Перепроверка останавливает
+    # отправку, как только ход реально не наш.
+    def _still_my_turn() -> bool:
+        st_now = _send(conn, "wc_get_battle_state", {"controller_index": 0})
+        return bool(st_now.get("my_turn"))
+
     # 1) Сначала попытка атак: атаковать может каждый свой юнит в диапазоне.
     for u in mine:
+        if not _still_my_turn():
+            break
         nearest = min(enemies, key=lambda e: abs(e["gridX"] - u["gridX"]) + abs(e["gridY"] - u["gridY"]))
         r = _send(conn, "wc_attack", {"controller_index": 0,
                                        "attacker_unit_id": u["unitId"], "target_unit_id": nearest["unitId"],
@@ -85,6 +101,8 @@ def _ue_battle_round(conn, my_side: str) -> tuple[bool, int, int]:
 
     # 2) Движение: ищем своего юнита, у которого есть свободная клетка вперёд (+x к врагу).
     for u in mine:
+        if not _still_my_turn():
+            break
         nx, ny = u["gridX"] + 1, u["gridY"]  # red → +x; для blue было бы -1, но мы red
         if 0 <= nx <= 7 and 0 <= ny <= 7 and (nx, ny) not in occupied:
             r = _send(conn, "wc_free_move", {"controller_index": 0, "unit_id": u["unitId"], "x": nx, "y": ny})
@@ -93,7 +111,9 @@ def _ue_battle_round(conn, my_side: str) -> tuple[bool, int, int]:
                 print(f"    UE move: {u['unitId']} ({u['gridX']},{u['gridY']}) -> ({nx},{ny})")
                 break
 
-    _send(conn, "wc_end_turn", {"controller_index": 0})
+    # end-turn только если ход всё ещё наш (иначе сервер отклонит «не ваш ход»).
+    if _still_my_turn():
+        _send(conn, "wc_end_turn", {"controller_index": 0})
     print(f"    UE turn: атак ok={attacks_ok}, движений ok={moves_ok}")
     return (True, moves_ok, attacks_ok)
 
