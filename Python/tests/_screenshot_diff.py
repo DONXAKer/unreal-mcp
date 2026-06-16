@@ -50,6 +50,14 @@ class BaselineMissing(FileNotFoundError):
     """Нет baseline для этого filename. Создай через save_baseline() или WC_UPDATE_BASELINES=1."""
 
 
+class BlankFrame(AssertionError):
+    """Кадр распознан как пустой/чёрный/одноцветный — деградация захвата.
+
+    TEST-VISUAL-001: раньше чёрный кадр vs чёрный baseline давал similarity 1.0
+    и тест молча «проходил». Теперь пустой кадр — явный fail, а не ложный успех.
+    """
+
+
 def _resolve_actual(filename: str) -> Path:
     """Найти actual screenshot. UE кладёт в Saved/Screenshots/<flat> или
     Saved/Screenshots/<platform>/<name>.png — проверяем оба варианта."""
@@ -76,6 +84,39 @@ def _file_hash(path: Path) -> str:
     h = hashlib.sha256()
     h.update(path.read_bytes())
     return h.hexdigest()
+
+
+def is_blank_frame(
+    path: Path,
+    dark_threshold: int = 16,
+    dark_fraction: float = 0.995,
+) -> bool:
+    """TEST-VISUAL-001: распознать пустой/чёрный/одноцветный кадр (деградация захвата).
+
+    Критерии «пустоты» (любой → True):
+      * почти весь кадр около-чёрный: доля пикселей с яркостью < dark_threshold
+        составляет >= dark_fraction (по умолчанию 99.5% темнее 16/255);
+      * кадр практически одноцветный: гистограмма яркости имеет <= 2 ненулевых
+        бинов (плоская заливка — типичный признак не отрисованного/cold-capture кадра).
+
+    Без Pillow попиксельный анализ невозможен → возвращаем False (детектор
+    выключен; покрытие тогда обеспечивает только hash-diff). Установи Pillow,
+    чтобы guard работал: `uv add pillow` / `pip install Pillow`.
+    """
+    if not _HAS_PIL:
+        return False
+    img = Image.open(path).convert("L")
+    hist = img.histogram()  # 256 бинов яркости
+    total = sum(hist)
+    if total == 0:
+        return True
+    dark = sum(hist[:dark_threshold])
+    if dark / total >= dark_fraction:
+        return True
+    nonzero_bins = sum(1 for count in hist if count > 0)
+    if nonzero_bins <= 2:
+        return True
+    return False
 
 
 def _compare_pillow(actual_path: Path, baseline_path: Path) -> tuple[float, str]:
@@ -128,6 +169,17 @@ def assert_screenshot_matches(filename: str, threshold: float = 0.95) -> None:
     """
     actual = _resolve_actual(filename)
     baseline = BASELINE_DIR / filename
+
+    # TEST-VISUAL-001: guard на пустой/чёрный кадр ДО сравнения и ДО записи
+    # baseline — иначе деградация захвата либо проходит как similarity 1.0
+    # (чёрный vs чёрный), либо сидирует пустой baseline.
+    if is_blank_frame(actual):
+        raise BlankFrame(
+            f"{filename}: кадр пустой/чёрный/одноцветный — деградация захвата "
+            f"(не отрисовался / cold-capture), а не реальный кадр.\n"
+            f"  actual: {actual}\n"
+            f"  Проверь pie_start(mode='new_window') и прогрев рендера перед захватом."
+        )
 
     if os.environ.get("WC_UPDATE_BASELINES") == "1":
         save_baseline(filename)
