@@ -1,0 +1,2 @@
+- [Art Direction style guide](reference_style_guide.md) — путь к стиль-гайду + опорные палитра/шрифты/размеры для ревью
+- [Playtest run layout](reference_playtest_run_layout.md) — структура run-папки, канон 9 фаз, фаза→widget, namepd плейсхолдеры
