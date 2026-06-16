@@ -279,6 +279,20 @@ def main() -> int:
         print(f"  UE deployed: {n}/{UNITS_TO_PICK}")
         _send(conn, "wc_confirm_deployment", {"controller_index": 0})
 
+        print("\n--- 4b/6 mulligan: UE accepts hand ---")
+        # FIX-MULLIGAN-001: SendGamePhaseReady больше не посылает авто-ready для
+        # MULLIGAN — игрок должен нажать «Принять руку». Ждём WBP_Mulligan, кликаем.
+        # Таймаут 30s: сервер переходит DICE_ROLL_2 → MULLIGAN, виджет появляется.
+        mulligan_seen = _wait_pie_widget(conn, ("Mulligan",), 30, "mulligan")
+        if mulligan_seen:
+            time.sleep(1.5)  # дать время руке прогрузиться (OnHandCardsUpdated)
+            _send(conn, "invoke_button_click", {"widget_name": "AcceptHandButton", "controller_index": 0})
+            print("  AcceptHandButton кликнут [OK]")
+        else:
+            print("  WBP_Mulligan не появился — пробуем через wc_phase_ready (fallback)")
+            # Fallback: если виджет так и не показался (напр. кадр пропущен), смотрим
+            # по current_widget; если уже в бою — mulligan проскочил раньше.
+
         print("\n--- 5/6 wait BATTLE HUD on UE client ---")
         # Используем pie_status.current_widget (лёгкий ответ) вместо get_widget_tree:
         # последний даёт многоКБ JSON и режется UTF-8 декодером в боевом состоянии.
