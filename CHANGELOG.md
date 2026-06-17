@@ -15,6 +15,17 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.8.3] — 2026-06-17
+
+### Fixed
+- **UE 5.8 build break** (hard errors): мигрированы 6 точек с устаревшего `FJsonObject` API под новый тип ключа `UE::FSharedString`. В UE 5.8 `FJsonObject::Values` теперь `TMap<UE::FSharedString, ...>` (а не `TMap<FString, ...>`):
+  - `BPVariables.cpp` (×2): `Params->Values.FindRef("default_value")` → `Params->TryGetField(TEXT("default_value"))` (char*-ключ больше не принимается — C2665).
+  - `DataAssetCommands.cpp`, `LevelCommands.cpp`, `MeshCommands.cpp`, `NiagaraCommands.cpp`: `const FString& Key = Pair.Key;` → `const FString Key = *Pair.Key;` (ключ `FSharedString` не биндится в `const FString&` — C2440; берём копию через `operator*` → `const TCHAR*`).
+- **UE 5.8 deprecations** (C4996, future-proof): обёрнуты в `TEXT(...)` ключи 59 вызовов `Set{String,Number,Bool,Array,Object}Field("...", ...)` с ANSI-литералом в `BPConnector.cpp` и `BPVariables.cpp` → биндятся на `FStringView`-перегрузку вместо deprecated `const ANSICHAR*`. Остальной плагин уже использовал `TEXT()`-ключи. Сейчас это были предупреждения, но в следующем релизе UE стали бы ошибками.
+
+### Why
+- Бинарная установка UE 5.8 скомпилирована с новым `FSharedString`-layout ключей JSON; legacy-workaround `UE_JSONOBJECT_LEGACY_STRING_KEYS=1` неприменим (ABI-рассинхрон с готовым движком + блокируется shared build environment), поэтому код плагина мигрирован на новый API полностью — и hard errors, и deprecated-вызовы.
+
 ## [3.8.2] — 2026-06-17
 
 ### Fixed

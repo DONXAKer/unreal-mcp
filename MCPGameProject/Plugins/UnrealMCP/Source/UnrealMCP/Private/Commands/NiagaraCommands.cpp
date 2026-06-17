@@ -196,7 +196,7 @@ TSharedPtr<FJsonObject> FNiagaraCommands::HandleSetNiagaraParameters(const TShar
 
     for (const auto& Pair : ParamsObj->Values)
     {
-        const FString& RawParamName = Pair.Key;
+        const FString RawParamName = *Pair.Key;
         const TSharedPtr<FJsonValue>& Val = Pair.Value;
         if (!Val.IsValid())
         {
