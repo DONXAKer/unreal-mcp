@@ -15,6 +15,14 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.7.5] — 2026-06-17
+
+### Added
+- **`parent_name` параметр в `add_text_block_to_widget`, `add_button_to_widget`, `add_panel_widget_to_widget`** — необязательный параметр `parent_name` позволяет добавлять виджеты в именованный `UPanelWidget` (VerticalBox, HorizontalBox, и т.д.) вместо root `CanvasPanel`. Если `parent_name` не задан или виджет с таким именем не найден — поведение прежнее (добавление в root CanvasPanel). Добавлен helper `FindParentPanelWidget()` в `UMGCommandsUtils`.
+
+### Why
+- Построить вложенную UMG-иерархию (VerticalBox → Button → TextBlock) было невозможно через MCP: все три команды жёстко добавляли в root `CanvasPanel`. Команда `add_panel_widget_to_widget` с `widget_name=/Game/.../WBP_X` + `parent_name=RootBox` теперь добавляет панель внутрь `RootBox`.
+
 ---
 
 ## [3.7.4] — 2026-06-17

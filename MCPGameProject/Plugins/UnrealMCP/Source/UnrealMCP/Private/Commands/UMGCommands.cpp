@@ -218,6 +218,19 @@ namespace UMGCommandsUtils
         return Cast<UCanvasPanel>(WB->WidgetTree->RootWidget);
     }
 
+
+    /**
+     * Find a UPanelWidget inside the WidgetTree by name.
+     * Supports optional parent_name param in add_*_to_widget commands.
+     * Returns nullptr if name is empty or widget is not a panel.
+     */
+    static UPanelWidget* FindParentPanelWidget(UWidgetBlueprint* WB, const FString& ParentName)
+    {
+        if (!WB || !WB->WidgetTree || ParentName.IsEmpty()) return nullptr;
+        UWidget* Found = WB->WidgetTree->FindWidget(FName(*ParentName));
+        return Found ? Cast<UPanelWidget>(Found) : nullptr;
+    }
+
     /** Persist Widget Blueprint: mark dirty + save package to disk. */
     static void MarkAndSaveWidgetBlueprint(UWidgetBlueprint* WB)
     {
@@ -441,12 +454,18 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddTextBlockToWidget(const 
 
     if (!WB->WidgetTree)
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Widget Blueprint has no WidgetTree"));
-
-    // ── Ensure root canvas panel ─────────────────────────────────────────────
-    UCanvasPanel* CanvasPanel = EnsureRootCanvasPanel(WB);
-    if (!CanvasPanel)
-        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
-            TEXT("Widget Blueprint's root is not a CanvasPanel; cannot place TextBlock by absolute position"));
+    // -- Optional parent_name: add to named panel instead of root canvas
+    FString TBParentName;
+    Params->TryGetStringField(TEXT("parent_name"), TBParentName);
+    UPanelWidget* ParentPanel = FindParentPanelWidget(WB, TBParentName);
+    if (!ParentPanel)
+    {
+        UCanvasPanel* CanvasPanel = EnsureRootCanvasPanel(WB);
+        if (!CanvasPanel)
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                TEXT("Widget Blueprint's root is not a CanvasPanel; cannot place TextBlock"));
+        ParentPanel = CanvasPanel;
+    }
 
     // ── Name uniqueness ──────────────────────────────────────────────────────
     if (WB->WidgetTree->FindWidget(FName(*TextBlockName)))
@@ -472,7 +491,7 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddTextBlockToWidget(const 
     NewText->SetColorAndOpacity(FSlateColor(Color));
 
     // ── Add to canvas and configure slot ─────────────────────────────────────
-    UPanelSlot* RawSlot = CanvasPanel->AddChild(NewText);
+    UPanelSlot* RawSlot = ParentPanel->AddChild(NewText);
     UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(RawSlot);
     if (CanvasSlot)
     {
@@ -547,12 +566,18 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddButtonToWidget(const TSh
 
     if (!WB->WidgetTree)
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Widget Blueprint has no WidgetTree"));
-
-    // ── Ensure root canvas panel ─────────────────────────────────────────────
-    UCanvasPanel* CanvasPanel = EnsureRootCanvasPanel(WB);
-    if (!CanvasPanel)
-        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
-            TEXT("Widget Blueprint's root is not a CanvasPanel; cannot place Button by absolute position"));
+    // -- Optional parent_name: add to named panel instead of root canvas
+    FString BtnParentName;
+    Params->TryGetStringField(TEXT("parent_name"), BtnParentName);
+    UPanelWidget* ParentPanel = FindParentPanelWidget(WB, BtnParentName);
+    if (!ParentPanel)
+    {
+        UCanvasPanel* CanvasPanel = EnsureRootCanvasPanel(WB);
+        if (!CanvasPanel)
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                TEXT("Widget Blueprint's root is not a CanvasPanel; cannot place Button"));
+        ParentPanel = CanvasPanel;
+    }
 
     // ── Name uniqueness ──────────────────────────────────────────────────────
     if (WB->WidgetTree->FindWidget(FName(*ButtonName)))
@@ -588,7 +613,7 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddButtonToWidget(const TSh
     }
 
     // ── Add button to canvas and configure slot ──────────────────────────────
-    UPanelSlot* RawSlot = CanvasPanel->AddChild(NewButton);
+    UPanelSlot* RawSlot = ParentPanel->AddChild(NewButton);
     UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(RawSlot);
     if (CanvasSlot)
     {
@@ -681,12 +706,18 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddPanelWidgetToWidget(cons
 
     if (!WB->WidgetTree)
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Widget Blueprint has no WidgetTree"));
-
-    // ── Ensure root canvas panel ─────────────────────────────────────────────
-    UCanvasPanel* CanvasPanel = EnsureRootCanvasPanel(WB);
-    if (!CanvasPanel)
-        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
-            TEXT("Widget Blueprint's root is not a CanvasPanel; cannot place panel by absolute position"));
+    // -- Optional parent_name: add to named panel instead of root canvas
+    FString PanelParentName;
+    Params->TryGetStringField(TEXT("parent_name"), PanelParentName);
+    UPanelWidget* ParentPanel = FindParentPanelWidget(WB, PanelParentName);
+    if (!ParentPanel)
+    {
+        UCanvasPanel* CanvasPanel = EnsureRootCanvasPanel(WB);
+        if (!CanvasPanel)
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                TEXT("Widget Blueprint's root is not a CanvasPanel; cannot place panel"));
+        ParentPanel = CanvasPanel;
+    }
 
     // ── Name uniqueness ──────────────────────────────────────────────────────
     if (WB->WidgetTree->FindWidget(FName(*PanelName)))
@@ -701,7 +732,7 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddPanelWidgetToWidget(cons
     NewPanel->bIsVariable = true;  // required for BindWidget auto-binding
 
     // ── Add to root canvas and configure slot ────────────────────────────────
-    UPanelSlot* RawSlot = CanvasPanel->AddChild(NewPanel);
+    UPanelSlot* RawSlot = ParentPanel->AddChild(NewPanel);
     UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(RawSlot);
     if (CanvasSlot)
     {
