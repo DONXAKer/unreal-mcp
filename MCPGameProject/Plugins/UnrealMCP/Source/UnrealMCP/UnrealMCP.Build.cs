@@ -63,6 +63,8 @@ public class UnrealMCP : ModuleRules
 				"AssetRegistry",
 				"AssetTools",       // For UTextureFactory + UMaterialInstanceConstantFactoryNew (MCP-CONTENT-002)
 				"MaterialEditor",   // For UMaterialEditingLibrary (MCP-CONTENT-002)
+				"MeshDescription",        // For FMeshDescription (generate_box_static_mesh, v3.7.4)
+				"StaticMeshDescription",  // For FStaticMeshAttributes + FStaticMeshOperations (v3.7.4)
 				// UCSVImportFactory — in UnrealEd (already in PublicDependencyModuleNames)
 				"AudioEditor",      // For USoundFactory (Factories/SoundFactory.h)
 				"Niagara",          // For UNiagaraSystem (NiagaraCommands)

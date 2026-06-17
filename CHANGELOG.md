@@ -17,6 +17,22 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [3.7.4] — 2026-06-17
+
+### Added
+- `generate_box_static_mesh`: programmatically creates a box `UStaticMesh` via `FMeshDescription` + `FStaticMeshAttributes` API — no file import required.
+  Params: `assetPath` (required), `halfExtentX/Y/Z` (float, cm, default 50), `ifExists` (skip|overwrite|update|fail).
+  Response meta: `trianglesCount`, `verticesCount`, `halfExtentX/Y/Z`, `collision` ("Simple"), `materialSlots`.
+  Added `MeshDescription` + `StaticMeshDescription` to `UnrealMCP.Build.cs` private deps.
+
+### Why
+- `import_static_mesh` с OBJ-файлами вызывает EXCEPTION_ACCESS_VIOLATION / deadlock в UE 5.7: Interchange framework
+  запускает пайплайн на GameThread'е, который уже занят MCP-dispatch'ем (`AsyncTask(GameThread)`), что приводит к
+  рекурсивной блокировке TaskGraph. Новая команда создаёт геометрию полностью программно через `FMeshDescription` API,
+  минуя импорт-пайплайн полностью.
+
+---
+
 ## [3.7.3] — 2026-06-17
 
 ### Fixed

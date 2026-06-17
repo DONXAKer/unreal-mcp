@@ -294,7 +294,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.7.3"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.7.4"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -391,7 +391,8 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 ResultJson = MaterialCommands->HandleCommand(CommandType, Params);
             }
             // Mesh Pipeline Commands (MCP-CONTENT-003a)
-            else if (CommandType == TEXT("import_static_mesh"))
+            else if (CommandType == TEXT("import_static_mesh") ||
+                     CommandType == TEXT("generate_box_static_mesh"))
             {
                 ResultJson = MeshCommands->HandleCommand(CommandType, Params);
             }
