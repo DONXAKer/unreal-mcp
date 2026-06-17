@@ -231,6 +231,34 @@ namespace UMGCommandsUtils
         return Found ? Cast<UPanelWidget>(Found) : nullptr;
     }
 
+    /**
+     * UE 5.8: компилятор WidgetBlueprint теперь ensure'ит, что у каждого виджета в дереве
+     * есть запись в UWidgetBlueprint::WidgetVariableNameToGuidMap (WidgetBlueprintCompiler.cpp:781),
+     * а у удалённых переменных — нет осиротевшей записи (стр. 815). MCP-команды добавления/удаления
+     * виджетов писались под 5.7 (карты не было), поэтому каждый MCP-созданный виджет ловил
+     * non-fatal ensure (под отладчиком — breakpoint). Эти helper'ы держат карту в актуальном
+     * состоянии — ровно как движок на стр. 783 / 1046.
+     */
+    static void RegisterWidgetGuid(UWidgetBlueprint* WB, const UWidget* W)
+    {
+#if WITH_EDITOR
+        if (!WB || !W) return;
+        const FName WidgetFName = W->GetFName();
+        if (!WB->WidgetVariableNameToGuidMap.Contains(WidgetFName))
+        {
+            WB->WidgetVariableNameToGuidMap.Add(WidgetFName, FGuid::NewGuid());
+        }
+#endif
+    }
+
+    static void UnregisterWidgetGuid(UWidgetBlueprint* WB, const UWidget* W)
+    {
+#if WITH_EDITOR
+        if (!WB || !W) return;
+        WB->WidgetVariableNameToGuidMap.Remove(W->GetFName());
+#endif
+    }
+
     /** Persist Widget Blueprint: mark dirty + save package to disk. */
     static void MarkAndSaveWidgetBlueprint(UWidgetBlueprint* WB)
     {
@@ -398,6 +426,9 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddWidgetToUMG(const TShare
         ParentPanel->AddChild(NewWidget);
     }
 
+    // UE 5.8: зарегистрировать GUID для нового виджета до compile (иначе ensure 781).
+    UMGCommandsUtils::RegisterWidgetGuid(WidgetBlueprint, NewWidget);
+
     FBlueprintEditorUtils::MarkBlueprintAsModified(WidgetBlueprint);
     WidgetBlueprint->MarkPackageDirty();
     // Persist to disk synchronously — the Editor autosave is async and misses
@@ -498,6 +529,9 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddTextBlockToWidget(const 
         CanvasSlot->SetPosition(Position);
         CanvasSlot->SetSize(Size);
     }
+
+    // UE 5.8: зарегистрировать GUID для нового виджета до compile (иначе ensure 781).
+    RegisterWidgetGuid(WB, NewText);
 
     // ── Persist ──────────────────────────────────────────────────────────────
     MarkAndSaveWidgetBlueprint(WB);
@@ -610,6 +644,9 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddButtonToWidget(const TSh
         Label->SetColorAndOpacity(FSlateColor(TextColor));
 
         NewButton->AddChild(Label);
+
+        // UE 5.8: вложенный Label тоже добавлен в дерево — регистрируем его GUID (иначе ensure 781).
+        RegisterWidgetGuid(WB, Label);
     }
 
     // ── Add button to canvas and configure slot ──────────────────────────────
@@ -620,6 +657,9 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddButtonToWidget(const TSh
         CanvasSlot->SetPosition(Position);
         CanvasSlot->SetSize(Size);
     }
+
+    // UE 5.8: зарегистрировать GUID для кнопки до compile (иначе ensure 781).
+    RegisterWidgetGuid(WB, NewButton);
 
     // ── Persist ──────────────────────────────────────────────────────────────
     MarkAndSaveWidgetBlueprint(WB);
@@ -739,6 +779,9 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddPanelWidgetToWidget(cons
         CanvasSlot->SetPosition(Position);
         CanvasSlot->SetSize(Size);
     }
+
+    // UE 5.8: зарегистрировать GUID для нового панели до compile (иначе ensure 781).
+    RegisterWidgetGuid(WB, NewPanel);
 
     // ── Persist ──────────────────────────────────────────────────────────────
     MarkAndSaveWidgetBlueprint(WB);
@@ -1816,6 +1859,15 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleDeleteWidgetFromUMG(const T
     if (!Target)
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
             FString::Printf(TEXT("Widget not found: %s"), *WidgetName));
+
+    // UE 5.8: убрать GUID-записи всего удаляемого поддерева ДО detach, иначе остаются
+    // осиротевшие записи в WidgetVariableNameToGuidMap (WidgetBlueprintCompiler.cpp:815).
+    // Цель может быть панелью — ForWidgetAndChildren обходит саму цель и всех потомков.
+    WB->WidgetTree->ForWidgetAndChildren(Target,
+        [WB](UWidget* Sub)
+        {
+            UMGCommandsUtils::UnregisterWidgetGuid(WB, Sub);
+        });
 
     // ── Detach from parent or clear root ─────────────────────────────────────
     // If the widget is a panel, all descendants stay parented to it; once we drop

@@ -15,6 +15,17 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.9.0] — 2026-06-18
+
+### Changed
+- **UE 5.8: UMG-команды поддерживают `UWidgetBlueprint::WidgetVariableNameToGuidMap`.** UE 5.8 добавила эту карту (`TMap<FName,FGuid>`) и компилятор теперь ensure'ит её консистентность (`WidgetBlueprintCompiler.cpp:781` — у каждого добавленного виджета есть GUID; стр. 815 — нет осиротевших GUID'ов от удалённых переменных). MCP-команды писались под 5.7 (карты не было) → каждый MCP-созданный виджет ловил non-fatal ensure (под отладчиком — breakpoint 0x80000003).
+  - **При добавлении** (`add_widget_to_umg`, `add_text_block_to_widget`, `add_button_to_widget` + его вложенный Label, `add_panel_widget_to_widget`): после `AddChild` и до compile регистрируем GUID через новый helper `UMGCommandsUtils::RegisterWidgetGuid` — ровно как движок на стр. 783 (`Add(W->GetFName(), FGuid::NewGuid())`).
+  - **При удалении** (`delete_widget_from_umg`): до detach обходим удаляемое поддерево через `WidgetTree->ForWidgetAndChildren` и снимаем GUID-записи (`UnregisterWidgetGuid`), чтобы не плодить осиротевшие GUID'ы (ensure 815).
+  - Обёрнуто в `#if WITH_EDITOR`; `WidgetVariableNameToGuidMap` — публичное поле `UWidgetBlueprint` (модуль UMGEditor уже в зависимостях).
+
+### Why
+- После перехода проекта на UE 5.8 каждая компиляция WidgetBlueprint'а, созданного/изменённого через MCP, сыпала ensure'ы; под отладчиком это выглядело как краш. Теперь MCP сам поддерживает карту GUID'ов в актуальном состоянии, и компилятору нечего чинить.
+
 ## [3.8.4] — 2026-06-17
 
 ### Changed
