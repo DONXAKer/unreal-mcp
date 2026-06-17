@@ -15,6 +15,20 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.8.0] — 2026-06-17
+
+### Added
+- `material_create` — создаёт новый UMaterial (мастер-материал) с выбором domain (`Surface` / `UserInterface`); поддерживает `ifExists`: skip | overwrite | fail.
+- `material_add_node` — добавляет expression-ноду (Constant, Constant3Vector, ScalarParameter, VectorParameter, TextureSample, TextureSampleParameter2D, Lerp, Multiply, Add, Panner, Noise) в граф мастер-материала; ID ноды хранится в поле `Desc` для последующей адресации.
+- `material_connect` — соединяет выход expression → вход другой expression (`ConnectMaterialExpressions`) или корневое свойство материала (`ConnectMaterialProperty`): BaseColor, EmissiveColor, Opacity, Roughness, Metallic, Normal. Возвращает `PIN_NOT_FOUND` если пин не найден вместо краша.
+- `material_set_node_param` — устанавливает типозависимые параметры expression-ноды: `R` у Constant, `Constant` (RGBA-массив) у Constant3Vector, `ParameterName`/`DefaultValue` у ScalarParameter/VectorParameter/TextureSampleParameter2D, `Texture` у TextureSample*, `Scale`/`Levels` у Noise. Неизвестные ключи попадают в `meta.skipped`.
+- Python `@mcp.tool()` обёртки: `material_create`, `material_add_node`, `material_connect`, `material_set_node_param` в `Python/tools/material_tools.py`.
+
+### Why
+- FEAT-MAT-001: построение master-материалов (M_Panel, M_BG и т.д.) через MCP без ручного открытия Material Editor; устраняет ограничение «только Material Instance» предыдущих команд (`create_material_instance`, `set_material_instance_params`).
+
+---
+
 ## [3.7.5] — 2026-06-17
 
 ### Added

@@ -299,4 +299,199 @@ def register_material_tools(mcp: FastMCP) -> None:
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    # ── Master Material graph commands (FEAT-MAT-001 / v3.8.0) ──────────────
+
+    @mcp.tool()
+    def material_create(
+        ctx: Context[Any, Any, Any],
+        assetPath: str,
+        domain: str = "Surface",
+        ifExists: str = "fail",
+    ) -> dict[str, Any]:
+        """
+        Create a new master UMaterial asset.
+
+        Args:
+            assetPath: Full /Game/... path for the new UMaterial asset.
+            domain: Material domain — "Surface" (default) or "UserInterface".
+            ifExists: Idempotency mode — "skip" | "overwrite" | "fail" (default).
+
+        Example:
+            material_create(assetPath="/Game/Materials/M_Panel", domain="Surface")
+            material_create(assetPath="/Game/UI/M_HUD", domain="UserInterface", ifExists="skip")
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            payload: dict[str, Any] = {
+                "assetPath": assetPath,
+                "domain": domain,
+                "ifExists": ifExists,
+            }
+            logger.info(f"Creating master material: {payload}")
+            response = unreal.send_command("material_create", payload)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error creating master material: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def material_add_node(
+        ctx: Context[Any, Any, Any],
+        assetPath: str,
+        nodeType: str,
+        nodeId: str,
+        posX: int = 0,
+        posY: int = 0,
+    ) -> dict[str, Any]:
+        """
+        Add an expression node to a master material graph.
+
+        Args:
+            assetPath: Full /Game/... path to the UMaterial asset.
+            nodeType: Node type — one of: Constant | Constant3Vector | ScalarParameter |
+                VectorParameter | TextureSample | TextureSampleParameter2D |
+                Lerp | Multiply | Add | Panner | Noise.
+            nodeId: Unique string ID stored in the node Desc field for later reference.
+            posX: X position in the graph editor (default 0).
+            posY: Y position in the graph editor (default 0).
+
+        Example:
+            material_add_node(assetPath="/Game/Materials/M_Panel", nodeType="VectorParameter",
+                              nodeId="color_param", posX=-200, posY=0)
+            material_add_node(assetPath="/Game/Materials/M_Panel", nodeType="Lerp",
+                              nodeId="lerp_blend", posX=0, posY=100)
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            payload: dict[str, Any] = {
+                "assetPath": assetPath,
+                "nodeType": nodeType,
+                "nodeId": nodeId,
+                "posX": posX,
+                "posY": posY,
+            }
+            logger.info(f"Adding material node: {payload}")
+            response = unreal.send_command("material_add_node", payload)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error adding material node: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def material_connect(
+        ctx: Context[Any, Any, Any],
+        assetPath: str,
+        fromNodeId: str,
+        fromOutput: str = "",
+        toNodeId: str = None,
+        toInput: str = "BaseColor",
+    ) -> dict[str, Any]:
+        """
+        Connect a material expression output to another expression input or root material property.
+
+        Args:
+            assetPath: Full /Game/... path to the UMaterial asset.
+            fromNodeId: Desc (nodeId) of the source expression.
+            fromOutput: Output pin name on the source node; empty string = first output.
+            toNodeId: Desc (nodeId) of the target expression. If None, connects to the
+                root material property specified by toInput.
+            toInput: When toNodeId is None — root material property name:
+                BaseColor | EmissiveColor | Opacity | Roughness | Metallic | Normal.
+                When toNodeId is set — input pin name on the target expression.
+
+        Example:
+            material_connect(assetPath="/Game/Materials/M_Panel",
+                             fromNodeId="color_param", toInput="BaseColor")
+            material_connect(assetPath="/Game/Materials/M_Panel",
+                             fromNodeId="color_param", toNodeId="lerp_blend", toInput="A")
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            payload: dict[str, Any] = {
+                "assetPath": assetPath,
+                "fromNodeId": fromNodeId,
+                "fromOutput": fromOutput,
+                "toInput": toInput,
+            }
+            if toNodeId is not None:
+                payload["toNodeId"] = toNodeId
+            logger.info(f"Connecting material nodes: {payload}")
+            response = unreal.send_command("material_connect", payload)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error connecting material nodes: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def material_set_node_param(
+        ctx: Context[Any, Any, Any],
+        assetPath: str,
+        nodeId: str,
+        params: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Set parameters on a material expression node identified by its nodeId (Desc).
+
+        Supported params by node type:
+          - Constant:                R (float)
+          - Constant3Vector:         Constant ([r, g, b, a])
+          - ScalarParameter:         ParameterName (str), DefaultValue (float)
+          - VectorParameter:         ParameterName (str), DefaultValue ([r, g, b, a])
+          - TextureSample:           Texture (str, /Game/... asset path)
+          - TextureSampleParameter2D: Texture (str), ParameterName (str)
+          - Noise:                   Scale (float), Levels (int)
+
+        Args:
+            assetPath: Full /Game/... path to the UMaterial asset.
+            nodeId: Desc string of the target expression node.
+            params: Dict of parameter name → value.
+
+        Example:
+            material_set_node_param(
+                assetPath="/Game/Materials/M_Panel",
+                nodeId="color_param",
+                params={"ParameterName": "PanelColor", "DefaultValue": [0.1, 0.1, 0.15, 1.0]})
+            material_set_node_param(
+                assetPath="/Game/Materials/M_Panel",
+                nodeId="base_const",
+                params={"R": 0.5})
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            payload: dict[str, Any] = {
+                "assetPath": assetPath,
+                "nodeId": nodeId,
+                "params": params,
+            }
+            logger.info(f"Setting material node params: assetPath={assetPath}, nodeId={nodeId}")
+            response = unreal.send_command("material_set_node_param", payload)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting material node params: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Material tools registered successfully")

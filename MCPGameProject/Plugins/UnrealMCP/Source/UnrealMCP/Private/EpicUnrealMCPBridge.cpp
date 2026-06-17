@@ -294,7 +294,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.7.5"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.8.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -384,9 +384,13 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             {
                 ResultJson = TextureCommands->HandleCommand(CommandType, Params);
             }
-            // Material Pipeline Commands (MCP-CONTENT-002)
+            // Material Pipeline Commands (MCP-CONTENT-002 + FEAT-MAT-001 v3.8.0)
             else if (CommandType == TEXT("create_material_instance") ||
-                     CommandType == TEXT("set_material_instance_params"))
+                     CommandType == TEXT("set_material_instance_params") ||
+                     CommandType == TEXT("material_create") ||
+                     CommandType == TEXT("material_add_node") ||
+                     CommandType == TEXT("material_connect") ||
+                     CommandType == TEXT("material_set_node_param"))
             {
                 ResultJson = MaterialCommands->HandleCommand(CommandType, Params);
             }

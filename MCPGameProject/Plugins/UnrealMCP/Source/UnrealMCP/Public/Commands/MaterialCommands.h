@@ -50,4 +50,57 @@ private:
      *   - ifMissing (string, optional): skip | fail, default fail.
      */
     TSharedPtr<FJsonObject> HandleSetMaterialInstanceParams(const TSharedPtr<FJsonObject>& Params);
+
+    // ─── Master Material graph commands (FEAT-MAT-001 / v3.8.0) ─────────────
+
+    /**
+     * material_create — creates a new UMaterial (master material) asset.
+     *
+     * Params:
+     *   - assetPath (string, required): /Game/... destination path.
+     *   - domain    (string, optional): "Surface" (default) | "UserInterface".
+     *   - ifExists  (string, optional): "skip" | "overwrite" | "fail" (default).
+     */
+    TSharedPtr<FJsonObject> HandleMaterialCreate(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * material_add_node — adds an expression node to a master material graph.
+     *
+     * Params:
+     *   - assetPath (string, required): /Game/... path to UMaterial.
+     *   - nodeType  (string, required): Constant | Constant3Vector | ScalarParameter |
+     *                                   VectorParameter | TextureSample |
+     *                                   TextureSampleParameter2D | Lerp | Multiply |
+     *                                   Add | Panner | Noise.
+     *   - nodeId    (string, required): unique ID stored in Desc field.
+     *   - posX      (number, optional): graph X position (default 0).
+     *   - posY      (number, optional): graph Y position (default 0).
+     */
+    TSharedPtr<FJsonObject> HandleMaterialAddNode(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * material_connect — connects expression output → expression input or root property.
+     *
+     * Params:
+     *   - assetPath  (string, required): /Game/... path to UMaterial.
+     *   - fromNodeId (string, required): Desc of source expression.
+     *   - fromOutput (string, optional): output pin name; empty = first output.
+     *   - toNodeId   (string, optional): Desc of target expression; omit → connect to root.
+     *   - toInput    (string, optional): input pin name or root property
+     *                                    (BaseColor|EmissiveColor|Opacity|Roughness|Metallic|Normal).
+     */
+    TSharedPtr<FJsonObject> HandleMaterialConnect(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * material_set_node_param — sets parameters on a material expression node.
+     *
+     * Params:
+     *   - assetPath (string, required): /Game/... path to UMaterial.
+     *   - nodeId    (string, required): Desc of target expression.
+     *   - params    (object, required): { paramName: value } — type-dependent.
+     */
+    TSharedPtr<FJsonObject> HandleMaterialSetNodeParam(const TSharedPtr<FJsonObject>& Params);
+
+    /** Find a UMaterialExpression in Mat->GetExpressions() by its Desc field. */
+    static UMaterialExpression* FindExprByDesc(UMaterial* Mat, const FString& Desc);
 };
