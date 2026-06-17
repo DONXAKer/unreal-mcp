@@ -65,6 +65,13 @@ def _result_to_dict(result: Any) -> dict[str, Any]:
     # Сервер заворачивает возврат UFunction в {"returnValue": <value>}.
     if isinstance(payload, dict) and set(payload.keys()) == {"returnValue"}:
         inner = payload["returnValue"]
+        # Делегирующие тулы (Фаза 2) возвращают FString с JSON внутри — распарсим.
+        if isinstance(inner, str):
+            try:
+                parsed = json.loads(inner)
+                return parsed if isinstance(parsed, dict) else {"result": parsed}
+            except json.JSONDecodeError:
+                return {"result": inner}
         return inner if isinstance(inner, dict) else {"result": inner}
     return payload if isinstance(payload, dict) else {"result": payload}
 

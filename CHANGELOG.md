@@ -15,6 +15,14 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.8.4] — 2026-06-17
+
+### Changed
+- `FPIECommands` помечен `UNREALMCP_API` (экспорт из модуля). Нужно для миграции MCP на офиц. сервер UE 5.8 (Фаза 2): toolset-классы в плагине WarCardMCP делегируют PIE-команды (`pie_*`/`simulate_key`/`screen_click`/`tick_world`) в существующую боевую логику `FPIECommands` через cross-module вызов вместо переписывания.
+
+### Why
+- Стратегия миграции — делегирование: офиц. MCP-сервер вызывает тонкие `UToolsetDefinition`-обёртки, которые переиспользуют выверенные handler'ы (особенно Slate-readback в `pie_screenshot`). Для линковки из другого модуля класс должен быть экспортирован.
+
 ## [3.8.3] — 2026-06-17
 
 ### Fixed
