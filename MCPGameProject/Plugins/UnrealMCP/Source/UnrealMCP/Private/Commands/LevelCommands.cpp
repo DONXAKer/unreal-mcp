@@ -202,7 +202,7 @@ namespace
         UClass* Cls = Actor->GetClass();
         for (const auto& Pair : PropsObj->Values)
         {
-            const FString& Key = Pair.Key;
+            const FString Key = *Pair.Key;
             const TSharedPtr<FJsonValue>& Val = Pair.Value;
 
             FProperty* Prop = FindFProperty<FProperty>(Cls, *Key);

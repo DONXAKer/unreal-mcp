@@ -15,6 +15,18 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+- **TODO (миграция UE 5.8 JSON API):** заменить deprecated `FJsonObject::SetStringField/SetBoolField/SetNumberField/SetObjectField(const char*/ANSICHAR*, ...)` (C4996) на `FStringView`/`TEXT(...)`-перегрузки по всему плагину. Сейчас компилируется как warning, но в следующем релизе UE станет ошибкой.
+
+## [3.8.3] — 2026-06-17
+
+### Fixed
+- **UE 5.8 build break**: мигрированы 6 точек с устаревшего `FJsonObject` API под новый тип ключа `UE::FSharedString`. В UE 5.8 `FJsonObject::Values` теперь `TMap<UE::FSharedString, ...>` (а не `TMap<FString, ...>`):
+  - `BPVariables.cpp` (×2): `Params->Values.FindRef("default_value")` → `Params->TryGetField(TEXT("default_value"))` (char*-ключ больше не принимается — C2665).
+  - `DataAssetCommands.cpp`, `LevelCommands.cpp`, `MeshCommands.cpp`, `NiagaraCommands.cpp`: `const FString& Key = Pair.Key;` → `const FString Key = *Pair.Key;` (ключ `FSharedString` не биндится в `const FString&` — C2440; берём копию через `operator*` → `const TCHAR*`).
+
+### Why
+- Бинарная установка UE 5.8 скомпилирована с новым `FSharedString`-layout ключей JSON; legacy-workaround `UE_JSONOBJECT_LEGACY_STRING_KEYS=1` неприменим (ABI-рассинхрон с готовым движком + блокируется shared build environment), поэтому код плагина мигрирован на новый API. Полная зачистка deprecated SetField-вызовов (C4996) — в Unreleased TODO.
+
 ## [3.8.2] — 2026-06-17
 
 ### Fixed
