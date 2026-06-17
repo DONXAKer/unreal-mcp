@@ -644,7 +644,7 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialAddNode(const TSharedPt
 UMaterialExpression* FMaterialCommands::FindExprByDesc(UMaterial* Mat, const FString& Desc)
 {
     if (!Mat) return nullptr;
-    for (UMaterialExpression* E : Mat->Expressions)
+    for (UMaterialExpression* E : Mat->GetExpressions())
     {
         if (E && E->Desc == Desc) return E;
     }
