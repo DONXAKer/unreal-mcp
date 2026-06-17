@@ -15,6 +15,16 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.8.1] — 2026-06-17
+
+### Fixed
+- `material_add_node`: заменён `LoadObject<UClass>(nullptr, classPath)` на прямые `UMaterialExpressionXxx::StaticClass()` для всех поддерживаемых типов нод. Устраняет зависание (timeout >120 s) при добавлении `Panner` и других нод, чей `LoadObject` инициировал длинный lookup в asset registry.
+
+### Why
+- `UMaterialExpressionPanner::StaticClass()` мгновенен (класс уже включён через `.h`); `LoadObject<UClass>(nullptr, ...)` создавал задержку при первом обращении к Panner из-за lazy-load механизма (особенно для классов, не находящихся в таблице eager-load движка).
+
+---
+
 ## [3.8.0] — 2026-06-17
 
 ### Added

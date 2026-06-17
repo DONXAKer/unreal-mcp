@@ -575,23 +575,21 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialAddNode(const TSharedPt
             Details);
     }
 
-    // Map nodeType string → /Script/Engine class path (without 'U' prefix)
-    static const TMap<FString, FString> NodeTypeToClassPath = {
-        { TEXT("Constant"),                 TEXT("/Script/Engine.MaterialExpressionConstant") },
-        { TEXT("Constant3Vector"),          TEXT("/Script/Engine.MaterialExpressionConstant3Vector") },
-        { TEXT("ScalarParameter"),          TEXT("/Script/Engine.MaterialExpressionScalarParameter") },
-        { TEXT("VectorParameter"),          TEXT("/Script/Engine.MaterialExpressionVectorParameter") },
-        { TEXT("TextureSample"),            TEXT("/Script/Engine.MaterialExpressionTextureSample") },
-        { TEXT("TextureSampleParameter2D"), TEXT("/Script/Engine.MaterialExpressionTextureSampleParameter2D") },
-        { TEXT("Lerp"),                     TEXT("/Script/Engine.MaterialExpressionLinearInterpolate") },
-        { TEXT("Multiply"),                 TEXT("/Script/Engine.MaterialExpressionMultiply") },
-        { TEXT("Add"),                      TEXT("/Script/Engine.MaterialExpressionAdd") },
-        { TEXT("Panner"),                   TEXT("/Script/Engine.MaterialExpressionPanner") },
-        { TEXT("Noise"),                    TEXT("/Script/Engine.MaterialExpressionNoise") },
-    };
+    // Resolve UClass* via StaticClass() — avoids slow LoadObject for known types.
+    UClass* NodeClass = nullptr;
+    if      (NodeType == TEXT("Constant"))                 NodeClass = UMaterialExpressionConstant::StaticClass();
+    else if (NodeType == TEXT("Constant3Vector"))          NodeClass = UMaterialExpressionConstant3Vector::StaticClass();
+    else if (NodeType == TEXT("ScalarParameter"))          NodeClass = UMaterialExpressionScalarParameter::StaticClass();
+    else if (NodeType == TEXT("VectorParameter"))          NodeClass = UMaterialExpressionVectorParameter::StaticClass();
+    else if (NodeType == TEXT("TextureSample"))            NodeClass = UMaterialExpressionTextureSample::StaticClass();
+    else if (NodeType == TEXT("TextureSampleParameter2D")) NodeClass = UMaterialExpressionTextureSampleParameter2D::StaticClass();
+    else if (NodeType == TEXT("Lerp"))                     NodeClass = UMaterialExpressionLinearInterpolate::StaticClass();
+    else if (NodeType == TEXT("Multiply"))                 NodeClass = UMaterialExpressionMultiply::StaticClass();
+    else if (NodeType == TEXT("Add"))                      NodeClass = UMaterialExpressionAdd::StaticClass();
+    else if (NodeType == TEXT("Panner"))                   NodeClass = UMaterialExpressionPanner::StaticClass();
+    else if (NodeType == TEXT("Noise"))                    NodeClass = UMaterialExpressionNoise::StaticClass();
 
-    const FString* ClassPathPtr = NodeTypeToClassPath.Find(NodeType);
-    if (!ClassPathPtr)
+    if (!NodeClass)
     {
         TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
         Details->SetStringField(TEXT("nodeType"), NodeType);
@@ -599,18 +597,6 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialAddNode(const TSharedPt
             TEXT("user"),
             TEXT("UNKNOWN_NODE_TYPE"),
             FString::Printf(TEXT("Unsupported nodeType '%s'"), *NodeType),
-            Details);
-    }
-
-    UClass* NodeClass = LoadObject<UClass>(nullptr, **ClassPathPtr);
-    if (!NodeClass)
-    {
-        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
-        Details->SetStringField(TEXT("classPath"), *ClassPathPtr);
-        return FAssetCommonUtils::MakeFailureResponse(
-            TEXT("ue_internal"),
-            TEXT("NODE_CLASS_NOT_FOUND"),
-            FString::Printf(TEXT("Could not load UClass for '%s'"), **ClassPathPtr),
             Details);
     }
 
