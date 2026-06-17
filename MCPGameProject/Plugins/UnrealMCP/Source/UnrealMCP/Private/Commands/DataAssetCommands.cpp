@@ -468,19 +468,35 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleImportSoundWave(const TSharedP
             FString::Printf(TEXT("Cannot split '%s' into package+name"), *AssetPath), D);
     }
 
+    // ImportAssets names the asset after the WAV filename.
+    // Copy the source WAV to a temp file named AssetName.wav so the import produces the right name.
+    const FString TempDir = FPaths::ProjectIntermediateDir() / TEXT("MCPImport");
+    IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+    PlatformFile.CreateDirectoryTree(*TempDir);
+    const FString TempWavPath = TempDir / (AssetName + TEXT(".wav"));
+    if (!PlatformFile.CopyFile(*TempWavPath, *WavPath))
+    {
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("io"), TEXT("TEMP_COPY_FAILED"),
+            FString::Printf(TEXT("Could not create temp WAV copy at '%s'"), *TempWavPath));
+    }
+
     USoundFactory* Factory = NewObject<USoundFactory>();
     Factory->AddToRoot();
 
     IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 
     TArray<UObject*> Imported = AssetTools.ImportAssets(
-        TArray<FString>{ WavPath },
+        TArray<FString>{ TempWavPath },
         PackagePath,
         Factory,
         /*bSyncToBrowser=*/false
     );
 
     Factory->RemoveFromRoot();
+
+    // Clean up the temp file regardless of import result
+    PlatformFile.DeleteFile(*TempWavPath);
 
     if (Imported.Num() == 0 || !Imported[0])
     {
@@ -495,15 +511,6 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleImportSoundWave(const TSharedP
         return FAssetCommonUtils::MakeFailureResponse(
             TEXT("ue_internal"), TEXT("SOUND_CAST_FAILED"),
             TEXT("Imported object is not a USoundWave"));
-    }
-
-    // ImportAssets names the asset after the WAV filename, not the requested AssetName.
-    // Rename to the requested name if they differ.
-    if (!SoundWave->GetName().Equals(AssetName, ESearchCase::IgnoreCase))
-    {
-        TArray<FAssetRenameData> RenameData;
-        RenameData.Add(FAssetRenameData(SoundWave, PackagePath, AssetName));
-        AssetTools.RenameAssets(RenameData);
     }
 
     const FString PackageName = SoundWave->GetPackage()->GetName();

@@ -17,6 +17,21 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [3.7.3] — 2026-06-17
+
+### Fixed
+- `import_sound_wave`: вместо RenameAssets (вызывало UE crash) теперь копируем исходный WAV
+  во временный файл `Intermediate/MCPImport/<AssetName>.wav` перед импортом.
+  Так factory видит правильное имя файла и создаёт ассет с нужным именем сразу.
+  Temp-файл удаляется после import'а.
+
+### Why
+- `AssetTools.RenameAssets()` вызывал EXCEPTION_ACCESS_VIOLATION в Engine при вызове
+  из MCP-контекста (неверный state object'а сразу после ImportAssets). Подход с temp-копией
+  обходит rename полностью.
+
+---
+
 ## [3.7.2] — 2026-06-17
 
 ### Fixed
