@@ -644,7 +644,7 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialAddNode(const TSharedPt
 UMaterialExpression* FMaterialCommands::FindExprByDesc(UMaterial* Mat, const FString& Desc)
 {
     if (!Mat) return nullptr;
-    for (UMaterialExpression* E : Mat->GetExpressions())
+    for (UMaterialExpression* E : Mat->Expressions)
     {
         if (E && E->Desc == Desc) return E;
     }
@@ -737,7 +737,7 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialConnect(const TSharedPt
                 Details);
         }
 
-        bool bOk = UMaterialEditingLibrary::ConnectMaterialProperty(SrcExpr, FName(*FromOutput), *PropPtr);
+        bool bOk = UMaterialEditingLibrary::ConnectMaterialProperty(SrcExpr, FromOutput, *PropPtr);
         if (!bOk)
         {
             TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
@@ -766,7 +766,7 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialConnect(const TSharedPt
                 Details);
         }
 
-        bool bOk = UMaterialEditingLibrary::ConnectMaterialExpressions(SrcExpr, FName(*FromOutput), DstExpr, FName(*ToInput));
+        bool bOk = UMaterialEditingLibrary::ConnectMaterialExpressions(SrcExpr, FromOutput, DstExpr, ToInput);
         if (!bOk)
         {
             TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();

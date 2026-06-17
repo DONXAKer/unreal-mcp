@@ -101,6 +101,6 @@ private:
      */
     TSharedPtr<FJsonObject> HandleMaterialSetNodeParam(const TSharedPtr<FJsonObject>& Params);
 
-    /** Find a UMaterialExpression in Mat->GetExpressions() by its Desc field. */
+    /** Find a UMaterialExpression in Mat->Expressions by its Desc field. */
     static UMaterialExpression* FindExprByDesc(UMaterial* Mat, const FString& Desc);
 };
