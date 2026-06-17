@@ -15,6 +15,16 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.8.2] — 2026-06-17
+
+### Fixed
+- `material_set_node_param`: добавлена поддержка `UMaterialExpressionPanner` — поля `SpeedX` (float) и `SpeedY` (float). Ранее Panner пропускал все параметры в `Skipped[]`, оставляя UV статичными (SpeedX=0 → анимации не было).
+
+### Why
+- Обработчик `HandleMaterialSetNodeParam` содержал кейсы для Constant/Constant3Vector/ScalarParam/VectorParam/Texture/Noise, но Panner был пропущен. Дополнено вместе с задачей ENV-WATER-001 (animated UV river shader).
+
+---
+
 ## [3.8.1] — 2026-06-17
 
 ### Fixed

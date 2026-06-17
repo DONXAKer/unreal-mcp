@@ -974,6 +974,24 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialSetNodeParam(const TSha
             }
         }
 
+        // UMaterialExpressionPanner: SpeedX (float), SpeedY (float)
+        if (!bHandled)
+        {
+            if (UMaterialExpressionPanner* Panner = Cast<UMaterialExpressionPanner>(Expr))
+            {
+                if (Key == TEXT("SpeedX") && Val->Type == EJson::Number)
+                {
+                    Panner->SpeedX = static_cast<float>(Val->AsNumber());
+                    bHandled = true;
+                }
+                else if (Key == TEXT("SpeedY") && Val->Type == EJson::Number)
+                {
+                    Panner->SpeedY = static_cast<float>(Val->AsNumber());
+                    bHandled = true;
+                }
+            }
+        }
+
         if (bHandled)
         {
             Applied.Add(Key);
