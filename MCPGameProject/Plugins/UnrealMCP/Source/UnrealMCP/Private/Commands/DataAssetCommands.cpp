@@ -249,7 +249,7 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleSetDataTableRow(const TSharedP
     TArray<FString> Skipped;
     for (const auto& Pair : RowJsonObj->Values)
     {
-        const FString& FieldName = Pair.Key;
+        const FString FieldName = *Pair.Key;
         const TSharedPtr<FJsonValue>& Val = Pair.Value;
 
         FProperty* Prop = FindFProperty<FProperty>(RowStruct, *FieldName);

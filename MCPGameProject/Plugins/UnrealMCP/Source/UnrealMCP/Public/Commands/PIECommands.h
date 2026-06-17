@@ -15,7 +15,7 @@
  *   pie_stop   — request end of the currently active PIE session
  *   pie_status — return { is_running, world_name, elapsed_seconds }
  */
-class FPIECommands
+class UNREALMCP_API FPIECommands
 {
 public:
     FPIECommands();

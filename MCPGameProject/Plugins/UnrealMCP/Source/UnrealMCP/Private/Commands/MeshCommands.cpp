@@ -305,7 +305,7 @@ TSharedPtr<FJsonObject> FMeshCommands::HandleImportStaticMesh(const TSharedPtr<F
         TArray<FStaticMaterial>& Materials = Mesh->GetStaticMaterials();
         for (const auto& Pair : (*MaterialOverridesObj)->Values)
         {
-            const FString& SlotName = Pair.Key;
+            const FString SlotName = *Pair.Key;
             FString MatPath;
             if (!Pair.Value.IsValid() || !Pair.Value->TryGetString(MatPath) || MatPath.IsEmpty())
             {
