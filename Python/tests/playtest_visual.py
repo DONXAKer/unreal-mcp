@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import sys
 import time
@@ -92,6 +93,54 @@ EXPECTED_WIDGET = {
     "game_result": "WBP_GameResult",
 }
 
+
+# Ожидаемые визуальные факты по каждой фазе (per-phase VLM contract).
+# Используются _run_vlm_checks(): каждый пункт — проверяемое утверждение о кадре.
+VISUAL_CHECKS: dict[str, list[str]] = {
+    "login": [
+        "Поля ввода логина и пароля видны и не обрезаны",
+        "Кнопка входа (LoginButton) видна",
+        "Нет устаревших виджетов других экранов поверх экрана логина",
+    ],
+    "main_menu": [
+        "Кнопка поиска игры (FindGame) видна и не обрезана",
+        "Нет устаревших виджетов поверх главного меню",
+    ],
+    "matchmaking": [
+        "Виден индикатор/текст поиска игры",
+        "Нет устаревших виджетов поверх экрана матчмейкинга",
+    ],
+    "draft": [
+        "Список юнитов для выбора содержит карточки — не пустой скроллбокс",
+        "Карточки юнитов содержат имя (не плейсхолдер 'Text Block')",
+        "Нет устаревших виджетов других экранов поверх драфта",
+    ],
+    "deployment": [
+        "Сетка расстановки (GameBoard) видна — не чёрный прямоугольник",
+        "Список юнитов для расстановки виден в боковой панели",
+        "Нет устаревших виджетов поверх экрана расстановки",
+    ],
+    "mulligan": [
+        "Карты в руке видны (не пустой экран без карт)",
+        "Кнопки AcceptHand или ConfirmMulligan видны",
+        "Нет устаревших виджетов поверх экрана муллигана",
+    ],
+    "battle": [
+        "AP-счётчик (очки действия) виден и содержит числовое значение",
+        "Индикатор хода (My Turn / Opponent's Turn) виден",
+        "Кнопка EndTurn видна",
+        "Нет устаревших виджетов других экранов поверх HUD боя",
+    ],
+    "battle_field": [
+        "Поле боя (сетка 8×8) видно — не чёрный экран",
+        "Юниты-актёры присутствуют на сетке",
+    ],
+    "game_result": [
+        "Заголовок результата (Victory / Defeat / Победа / Поражение) виден",
+        "Кнопка возврата в главное меню видна",
+        "Нет устаревших виджетов поверх экрана результата",
+    ],
+}
 
 # ────────────────────────────────────────────────────────────────────────
 # Single-connection (controller 0) хелперы — в каждом редакторе один клиент.
@@ -259,6 +308,98 @@ def _warm_render(conns: dict[str, UnrealConnection], rounds: int = 4) -> None:
 def _add_check(manifest: dict[str, Any], name: str, passed: bool, detail: str = "") -> None:
     manifest["logic_checks"].append({"name": name, "passed": bool(passed), "detail": detail})
     print(f"  CHECK {'PASS' if passed else 'FAIL'}: {name} {('— ' + detail) if detail else ''}")
+
+
+def _run_vlm_checks(run_dir: Path, manifest: dict[str, Any]) -> None:  # noqa: ARG001
+    """VLM-ревью каждой фазы через Anthropic SDK (claude-haiku).
+
+    Для каждой пары (phase, side) со скриншотом отправляет изображение +
+    список пунктов из VISUAL_CHECKS. Полученные вердикты
+    [{check, phase, pass, evidence}] дописываются в manifest['logic_checks'].
+    Если anthropic не установлен — вердикты пропускаются (graceful skip).
+    """
+    try:
+        import anthropic
+        import base64
+    except ImportError:
+        print("  [VLM] anthropic SDK не установлен — VLM-чеки пропущены "
+              "(установи: uv add anthropic --dev)")
+        return
+
+    client = anthropic.Anthropic()
+    checked = 0
+
+    for entry in manifest["phases"]:
+        phase = entry["phase"]
+        side = entry["side"]
+        checks = VISUAL_CHECKS.get(phase)
+        if not checks or not entry.get("screenshot_present"):
+            continue
+
+        png_path = Path(entry.get("screenshot") or "")
+        if not png_path.is_file():
+            _add_check(manifest, f"vlm:{side}:{phase}:screenshot_missing", False,
+                       f"файл не найден: {png_path}")
+            continue
+
+        with png_path.open("rb") as fh:
+            image_b64 = base64.standard_b64encode(fh.read()).decode()
+
+        checks_text = "\n".join(f"- {c}" for c in checks)
+        prompt = (
+            f"Фаза игры: {phase}, сторона: {side}.\n"
+            f"Проверь следующие пункты на скриншоте.\n"
+            f"Верни ТОЛЬКО JSON-массив без markdown и без пояснений:\n"
+            f'[{{"check":"...","phase":"{phase}","pass":true/false,"evidence":"..."}}]\n\n'
+            f"Пункты для проверки:\n{checks_text}"
+        )
+
+        try:
+            resp = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=1024,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": image_b64,
+                            },
+                        },
+                        {"type": "text", "text": prompt},
+                    ],
+                }],
+            )
+        except Exception as exc:  # noqa: BLE001
+            _add_check(manifest, f"vlm:{side}:{phase}:api_error", False, str(exc)[:200])
+            continue
+
+        raw = resp.content[0].text.strip() if resp.content else ""
+        # Модель иногда оборачивает JSON в ```json ... ``` — извлекаем массив.
+        m = re.search(r"\[.*?\]", raw, re.DOTALL)
+        if not m:
+            _add_check(manifest, f"vlm:{side}:{phase}:parse_error", False,
+                       f"VLM не вернул JSON-массив: {raw[:200]}")
+            continue
+
+        try:
+            verdicts: list[dict[str, Any]] = json.loads(m.group(0))
+        except json.JSONDecodeError as exc:
+            _add_check(manifest, f"vlm:{side}:{phase}:json_error", False,
+                       f"{exc}: {raw[:200]}")
+            continue
+
+        for v in verdicts:
+            check_name = f"vlm:{side}:{phase}:{v.get('check', '')[:50]}"
+            _add_check(manifest, check_name,
+                       bool(v.get("pass", False)),
+                       v.get("evidence", ""))
+        checked += len(verdicts)
+
+    print(f"  [VLM] итого {checked} VLM-вердиктов записано в logic_checks")
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -494,6 +635,10 @@ def main() -> int:
         result_ok = _wait_uw_all(conns, "WBP_GameResult", timeout=30)
         _add_check(manifest, "game_result_reached_both", result_ok)
         _capture_both(conns, "game_result", run_dir, manifest)
+
+        # VLM-ревью скриншотов: дописывает вердикты в manifest["logic_checks"].
+        print("\n--- VLM visual checks ---")
+        _run_vlm_checks(run_dir, manifest)
 
         passed = all(c["passed"] for c in manifest["logic_checks"])
         manifest["summary"] = {
