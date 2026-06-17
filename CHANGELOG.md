@@ -17,6 +17,19 @@ Pending work; will be cut into the next minor or patch release.
 
 ---
 
+## [3.7.2] — 2026-06-17
+
+### Fixed
+- `import_sound_wave`: после импорта asset переименовывается в запрошённый `AssetName` из пути.
+  `AssetTools.ImportAssets` называет ассет по имени исходного WAV-файла (например, `_placeholder`),
+  игнорируя запрошённое имя. Добавлен шаг `AssetTools.RenameAssets` если имена не совпадают.
+
+### Why
+- Импорт нескольких SFX из одного WAV-плейсхолдера создавал только `_placeholder.uasset` вместо
+  `SFX_UI_Click.uasset`, `SFX_UI_Hover.uasset` и т.д. — все перезаписывали друг друга.
+
+---
+
 ## [3.7.1] — 2026-06-17
 
 ### Fixed

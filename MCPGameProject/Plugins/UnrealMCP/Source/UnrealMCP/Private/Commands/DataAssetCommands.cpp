@@ -497,6 +497,15 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleImportSoundWave(const TSharedP
             TEXT("Imported object is not a USoundWave"));
     }
 
+    // ImportAssets names the asset after the WAV filename, not the requested AssetName.
+    // Rename to the requested name if they differ.
+    if (!SoundWave->GetName().Equals(AssetName, ESearchCase::IgnoreCase))
+    {
+        TArray<FAssetRenameData> RenameData;
+        RenameData.Add(FAssetRenameData(SoundWave, PackagePath, AssetName));
+        AssetTools.RenameAssets(RenameData);
+    }
+
     const FString PackageName = SoundWave->GetPackage()->GetName();
     UEditorAssetLibrary::SaveAsset(PackageName, /*bOnlyIfIsDirty=*/false);
 
