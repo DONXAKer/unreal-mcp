@@ -64,4 +64,49 @@ def register_mesh_tools(mcp: FastMCP) -> None:
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    @mcp.tool()
+    def generate_box_static_mesh(
+        ctx: Context[Any, Any, Any],
+        assetPath: str,
+        halfExtentX: float = 50.0,
+        halfExtentY: float = 50.0,
+        halfExtentZ: float = 50.0,
+        ifExists: str = None,
+    ) -> dict[str, Any]:
+        """
+        Programmatically create a box UStaticMesh without file import.
+
+        Avoids Interchange GameThread deadlock that crashes the Editor when
+        importing OBJ files in UE 5.7. Geometry is built via FMeshDescription.
+
+        Args:
+            assetPath: Full /Game/... path for the resulting UStaticMesh.
+            halfExtentX: Half-size along X axis in Unreal units (cm). Default 50.
+            halfExtentY: Half-size along Y axis in Unreal units (cm). Default 50.
+            halfExtentZ: Half-size along Z axis in Unreal units (cm). Default 50.
+            ifExists: Idempotency mode ("skip" | "fail" | "overwrite" | "update").
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {
+                "assetPath": assetPath,
+                "halfExtentX": halfExtentX,
+                "halfExtentY": halfExtentY,
+                "halfExtentZ": halfExtentZ,
+            }
+            if ifExists is not None:
+                params["ifExists"] = ifExists
+            logger.info(f"Generating box static mesh: {params}")
+            response = unreal.send_command("generate_box_static_mesh", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error generating box static mesh: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Mesh tools registered successfully")

@@ -487,7 +487,7 @@ TSharedPtr<FJsonObject> FMeshCommands::HandleGenerateBoxStaticMesh(const TShared
         {-X, -Y,  Z}, { X, -Y,  Z}, { X,  Y,  Z}, {-X,  Y,  Z}
     };
 
-    TAttributesSet<FVertexID>& VertexPositions = Attributes.GetVertexPositions();
+    auto VertexPositions = Attributes.GetVertexPositions();
 
     TArray<FVertexID> VIDs;
     VIDs.Reserve(8);
@@ -509,8 +509,8 @@ TSharedPtr<FJsonObject> FMeshCommands::HandleGenerateBoxStaticMesh(const TShared
         {3, 0, 4, 7}   // left    (-X face)
     };
 
-    TAttributesSet<FVertexInstanceID>& UVs      = Attributes.GetVertexInstanceUVs();
-    TAttributesSet<FVertexInstanceID>& Normals   = Attributes.GetVertexInstanceNormals();
+    auto UVs     = Attributes.GetVertexInstanceUVs();
+    auto Normals = Attributes.GetVertexInstanceNormals();
 
     // Simple per-face UV layout: each quad maps [0..1] x [0..1]
     const FVector2f FaceUVs[4] = {
