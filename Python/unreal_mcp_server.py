@@ -281,6 +281,7 @@ from tools.data_asset_tools import register_data_asset_tools
 from tools.editor_tools import register_editor_tools
 from tools.enhanced_input_tools import register_enhanced_input_tools
 from tools.graph_builder import register_graph_builder_tool
+from tools.landscape_tools import register_landscape_tools
 from tools.level_tools import register_level_tools
 from tools.material_tools import register_material_tools
 from tools.mesh_tools import register_mesh_tools
@@ -309,6 +310,7 @@ register_niagara_tools(mcp)
 register_pie_tools(mcp)  # v2.4.0 — Playwright-like e2e: PIE lifecycle + UMG automation
 register_console_tools(mcp)  # v2.6.0 — arbitrary console-command execution (Automation RunTests, CVars, etc.)
 register_enhanced_input_tools(mcp)  # v2.10.0 — UE5.7 Enhanced Input (MCP-PLUGIN-004)
+register_landscape_tools(mcp)  # v3.10.1 — create_landscape (ALandscape::Import from 16-bit PNG heightmap)
 # NOTE: project-specific wc_* tools НЕ регистрируются здесь — они вынесены в
 # отдельный server клиента (client/Scripts/mcp/warcard_mcp_server.py), который
 # импортирует этот general-server и доустанавливает WarCard tools. Это держит

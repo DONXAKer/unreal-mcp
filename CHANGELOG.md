@@ -15,6 +15,17 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.10.1] — 2026-06-18
+
+### Fixed
+- **Python wrapper for `create_landscape` was missing** — v3.10.0 добавила C++
+  реализацию `FLandscapeCommands::HandleCreateLandscape` и зарегистрировала её
+  в outer bridge, но забыла создать Python MCP tool. Добавлены:
+  - `Python/tools/landscape_tools.py` — `register_landscape_tools(mcp)` с
+    `@mcp.tool() create_landscape(...)`, документация + логирование.
+  - Регистрация в `unreal_mcp_server.py` (import + вызов `register_landscape_tools`).
+  Команда `create_landscape` теперь доступна как MCP tool через stdio и HTTP серверы.
+
 ## [3.10.0] — 2026-06-18
 
 ### Added
