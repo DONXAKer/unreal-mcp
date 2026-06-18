@@ -15,6 +15,35 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.10.0] — 2026-06-18
+
+### Added
+- **`create_landscape`** — новая команда в `FLandscapeCommands` (новые файлы
+  `LandscapeCommands.h` / `LandscapeCommands.cpp`). Создаёт полноценный
+  `ALandscape` actor из 16-bit grayscale PNG heightmap через `ALandscape::Import`.
+  Python/generic spawn_actor создавал только LandscapePlaceholder без компонентов;
+  этот путь использует нативный C++ Import API.
+  - Параметры: `heightmap_path` (обязательный, абс. путь к PNG), `section_size`
+    (def 63), `sections_per_component` (def 1), `components_x`/`components_y`
+    (def 32), `scale_x`/`scale_y`/`scale_z` (def 100), `material_path` (опц.),
+    `actor_label` (def "Landscape").
+  - Размер PNG проверяется: ожидается `(components_x * sections_per_component *
+    section_size + 1) x (components_y * sections_per_component * section_size + 1)`.
+  - Landscape центрируется на (0,0) через offset `-(width-1)/2`.
+  - После Import сохраняет текущий уровень через `UEditorLoadingAndSavingUtils::SaveMap`.
+  - Ответ содержит: `actor_label`, `width`, `height`, `components` (NxM),
+    `section_size`, `scale`, `location`.
+
+### Build deps added
+- `Landscape` (runtime) — `ALandscape`, `FLandscapeImportLayerInfo`
+- `LandscapeEditor` (editor-only) — `ALandscape::Import` живёт в editor модуле
+- `ImageWrapper` (runtime) — 16-bit PNG decode через `IImageWrapperModule`
+
+### Why
+- Python UE 5.8 нет нативного API создания Landscape с heightmap; единственный
+  путь — C++ `ALandscape::Import`. Нужно для автоматического создания terrain из
+  процедурно-генерированных heightmap'ов через MCP-пайплайн.
+
 ## [3.9.0] — 2026-06-18
 
 ### Changed

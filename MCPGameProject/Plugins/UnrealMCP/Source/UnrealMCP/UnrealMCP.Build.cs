@@ -71,7 +71,10 @@ public class UnrealMCP : ModuleRules
 				"NiagaraEditor",    // For Niagara editor utilities (NiagaraCommands)
 				// Phase 3B (v1.16.0) — Animation Blueprint support (AnimationBPCommands)
 				"AnimGraph",        // UAnimGraphNode_StateMachine / SequencePlayer / BlendSpacePlayer, UAnimStateNode, UAnimStateTransitionNode, UAnimationStateMachineGraph, UAnimationGraph, schemas
-				"AnimGraphRuntime"  // FAnimNode_BlendSpacePlayer setters (ANIMGRAPHRUNTIME_API)
+				"AnimGraphRuntime", // FAnimNode_BlendSpacePlayer setters (ANIMGRAPHRUNTIME_API)
+				// v3.10.0 — create_landscape: PNG heightmap import + ALandscape::Import
+				"Landscape",        // ALandscape, ALandscapeProxy, ULandscapeInfo, FLandscapeImportLayerInfo
+				"ImageWrapper"      // IImageWrapperModule / IImageWrapper — 16-bit PNG decode
 			}
 		);
 		
@@ -84,7 +87,8 @@ public class UnrealMCP : ModuleRules
 					"ToolMenus",           // For editor UI
 					"BlueprintEditorLibrary", // For Blueprint utilities
 					"UMGEditor",           // For UWidgetBlueprintFactory
-					"UMG"                  // For UUserWidget
+					"UMG",                 // For UUserWidget
+					"LandscapeEditor"      // For ALandscape::Import (v3.10.0 — create_landscape)
 				}
 			);
 

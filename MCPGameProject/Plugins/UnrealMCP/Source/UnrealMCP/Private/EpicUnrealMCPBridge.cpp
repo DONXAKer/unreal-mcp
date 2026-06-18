@@ -74,6 +74,7 @@
 #include "Commands/UMGTestCommands.h"
 #include "Commands/UMGRuntimeCommands.h"
 #include "Commands/EnhancedInputCommands.h"
+#include "Commands/LandscapeCommands.h"
 
 // Default settings
 #define MCP_SERVER_HOST "127.0.0.1"
@@ -99,6 +100,7 @@ UEpicUnrealMCPBridge::UEpicUnrealMCPBridge()
     UMGRuntimeCommands = MakeShared<FUMGRuntimeCommands>();
     EnhancedInputCommands = MakeShared<FEnhancedInputCommands>();
     ConsoleCommands = MakeShared<FUnrealMCPConsoleCommands>();
+    LandscapeCommands = MakeShared<FLandscapeCommands>();
 }
 
 UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
@@ -121,6 +123,7 @@ UEpicUnrealMCPBridge::~UEpicUnrealMCPBridge()
     UMGRuntimeCommands.Reset();
     EnhancedInputCommands.Reset();
     ConsoleCommands.Reset();
+    LandscapeCommands.Reset();
 }
 
 // Initialize subsystem
@@ -294,7 +297,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.8.3"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.10.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -410,6 +413,11 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("list_actors_in_level"))
             {
                 ResultJson = LevelCommands->HandleCommand(CommandType, Params);
+            }
+            // Landscape Commands (v3.10.0)
+            else if (CommandType == TEXT("create_landscape"))
+            {
+                ResultJson = LandscapeCommands->HandleCommand(CommandType, Params);
             }
             // Data Asset + Sound Pipeline Commands
             else if (CommandType == TEXT("import_datatable_from_csv") ||
