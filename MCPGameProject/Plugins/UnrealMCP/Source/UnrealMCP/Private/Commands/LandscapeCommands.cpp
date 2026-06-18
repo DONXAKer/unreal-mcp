@@ -300,16 +300,17 @@ TSharedPtr<FJsonObject> FLandscapeCommands::HandleCreateLandscape(const TSharedP
 
     Landscape->Import(
         LandscapeGuid,
-        OffsetX,                         // MinX (quads)
-        OffsetY,                         // MinY (quads)
-        OffsetX + Width  - 1,            // MaxX (quads)
-        OffsetY + Height - 1,            // MaxY (quads)
-        SectionsPerComponent,            // InNumSubsections
-        SectionSize,                     // InSubsectionSizeQuads
+        OffsetX,                                   // MinX (quads)
+        OffsetY,                                   // MinY (quads)
+        OffsetX + Width  - 1,                      // MaxX (quads)
+        OffsetY + Height - 1,                      // MaxY (quads)
+        SectionsPerComponent,                      // InNumSubsections
+        SectionSize,                               // InSubsectionSizeQuads
         HeightDataPerLayer,
-        nullptr,                         // HeightmapFileName (optional display name)
+        nullptr,                                   // InHeightmapFileName (display only)
         MaterialLayerInfo,
-        ELandscapeImportAlphamapType::Additive
+        ELandscapeImportAlphamapType::Additive,
+        TArrayView<const FLandscapeLayer>{}        // InImportLayers — UE 5.8 added param
     );
 
     // ── Optional material assignment ──────────────────────────────────────────
