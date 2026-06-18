@@ -15,6 +15,34 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.10.4] — 2026-06-19
+
+### Fixed
+- **`create_landscape` crash: `Pair != nullptr` в `LandscapeEdit.cpp:3230`** — `ALandscapeProxy::Import()` в UE 5.8 ищет данные по `FGuid()` (пустой GUID, "final layer"), а не по GUID ландшафта. Строка 3229 исходника:
+  ```cpp
+  const FGuid FinalLayerGuid = FGuid();
+  HeightData = InImportHeightData.FindChecked(FinalLayerGuid);
+  ```
+  Предыдущие версии добавляли данные в карту с ключом `LandscapeGuid` (GUID актора), который не совпадал с `FGuid()`, что вызывало `Assertion failed: Pair != nullptr`.
+  - Исправление: ключи `HeightDataPerLayer.Add(FGuid(), ...)` и `MaterialLayerInfo.Add(FGuid(), ...)` заменены на пустой GUID.
+  - Первый аргумент `Import(LandscapeGuid, ...)` остаётся GUID'ом актора (для `check(InGuid.IsValid())`).
+
+### Why
+- UE5 различает "landscape actor GUID" (первый аргумент Import) и "layer data key" (ключ в картах). Base layer (финальный) всегда ключируется пустым `FGuid()`.
+
+---
+
+## [3.10.3] — 2026-06-19
+
+### Fixed
+- **`create_landscape` crash: `InGuid.IsValid()` assertion in `LandscapeEdit.cpp:3128`** — предыдущий фикс (3.10.2) использовал `Landscape->GetLandscapeGuid()`, но `ALandscape` не назначает GUID сразу после `SpawnActor`. `GetLandscapeGuid()` возвращает `FGuid()` (невалидный), что приводило к `Assertion failed: InGuid.IsValid()` при вызове `CreateLandscapeInfo()`.
+  - Исправление: генерируем `FGuid::NewGuid()` и ПРИСВАИВАЕМ его актору через `Landscape->LandscapeGuid = LandscapeGuid` ДО вызова `Import()`. Это гарантирует: (а) GUID валиден (`IsValid() == true`), (б) все три места (карта `HeightDataPerLayer`, первый аргумент `Import()`, поле актора) используют один и тот же GUID.
+
+### Why
+- `ALandscapeProxy::LandscapeGuid` инициализируется в `FGuid()` при конструировании и назначается только через редактор или явно. После `SpawnActor` в editor-контексте без вызова `RegisterAllComponents()` GUID остаётся невалидным.
+
+---
+
 ## [3.10.2] — 2026-06-18
 
 ### Fixed

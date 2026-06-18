@@ -290,17 +290,23 @@ TSharedPtr<FJsonObject> FLandscapeCommands::HandleCreateLandscape(const TSharedP
     }
 
     // ── Import heightmap data ─────────────────────────────────────────────────
-    // Use the GUID already assigned to the spawned ALandscape actor.
-    // ALandscape::Import internally does FindChecked(GetLandscapeGuid()) on the
-    // HeightDataPerLayer map, so the key MUST match the actor's own GUID —
-    // passing a freshly-generated GUID causes a Map.h assertion crash (line 638).
-    const FGuid LandscapeGuid = Landscape->GetLandscapeGuid();
+    // UE 5.8 ALandscapeProxy::Import() requires:
+    //  (a) InGuid (1st arg) must be a valid FGuid — it's the landscape actor GUID
+    //      and must satisfy check(InGuid.IsValid()).  After SpawnActor, the actor's
+    //      own LandscapeGuid is still FGuid() (unset), so we generate+assign it.
+    //  (b) HeightDataPerLayer and MaterialLayerInfo must be keyed by FGuid() (empty),
+    //      NOT by the landscape GUID.  Inside Import(), line 3229:
+    //          const FGuid FinalLayerGuid = FGuid();
+    //          HeightData = InImportHeightData.FindChecked(FinalLayerGuid);
+    //      So the data map key is always the empty GUID — it means "base/final layer".
+    FGuid LandscapeGuid = FGuid::NewGuid();
+    Landscape->SetLandscapeGuid(LandscapeGuid);
 
     TMap<FGuid, TArray<uint16>> HeightDataPerLayer;
-    HeightDataPerLayer.Add(LandscapeGuid, HeightData);
+    HeightDataPerLayer.Add(FGuid(), HeightData);   // key = empty GUID (final layer)
 
     TMap<FGuid, TArray<FLandscapeImportLayerInfo>> MaterialLayerInfo;
-    MaterialLayerInfo.Add(LandscapeGuid, TArray<FLandscapeImportLayerInfo>());
+    MaterialLayerInfo.Add(FGuid(), TArray<FLandscapeImportLayerInfo>());  // same
 
     Landscape->Import(
         LandscapeGuid,
