@@ -15,6 +15,18 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.10.2] — 2026-06-18
+
+### Fixed
+- **`create_landscape` crash: Map.h assertion in `ALandscape::Import`** — `LandscapeCommands.cpp` использовал `FGuid::NewGuid()` для ключа в `HeightDataPerLayer` и `MaterialLayerInfo`, но `ALandscape::Import` внутри делает `FindChecked(Landscape->GetLandscapeGuid())` — т.е. ищет данные по GUID'у, уже присвоенному spawned-актору, а не по переданному первым аргументом. Несовпадение GUID'ов приводило к `Assertion failed: Pair != nullptr [Map.h.inl:638]` и крашу редактора.
+  - Заменено: `FGuid::NewGuid()` → `Landscape->GetLandscapeGuid()` (вызывается после `SpawnActor`, до заполнения TMap).
+  - Оба ключа `HeightDataPerLayer.Add` и `MaterialLayerInfo.Add` теперь используют правильный GUID актора.
+
+### Why
+- `ALandscape::Import` в UE 5.8 делает `FindChecked` по собственному GUID'у актора (не по параметру `InGuid`): актор уже имеет GUID от SpawnActor, и Import ищет именно его в переданных TMap'ах. Передача случайного GUID гарантированно вызывает assert.
+
+---
+
 ## [3.10.1] — 2026-06-18
 
 ### Fixed

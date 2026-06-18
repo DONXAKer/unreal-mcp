@@ -290,7 +290,11 @@ TSharedPtr<FJsonObject> FLandscapeCommands::HandleCreateLandscape(const TSharedP
     }
 
     // ── Import heightmap data ─────────────────────────────────────────────────
-    const FGuid LandscapeGuid = FGuid::NewGuid();
+    // Use the GUID already assigned to the spawned ALandscape actor.
+    // ALandscape::Import internally does FindChecked(GetLandscapeGuid()) on the
+    // HeightDataPerLayer map, so the key MUST match the actor's own GUID —
+    // passing a freshly-generated GUID causes a Map.h assertion crash (line 638).
+    const FGuid LandscapeGuid = Landscape->GetLandscapeGuid();
 
     TMap<FGuid, TArray<uint16>> HeightDataPerLayer;
     HeightDataPerLayer.Add(LandscapeGuid, HeightData);
