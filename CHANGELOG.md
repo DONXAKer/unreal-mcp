@@ -37,6 +37,7 @@ Pending work; will be cut into the next minor or patch release.
 ### Build deps added
 - `Landscape` (runtime) — `ALandscape`, `FLandscapeImportLayerInfo`
 - `LandscapeEditor` (editor-only) — `ALandscape::Import` живёт в editor модуле
+- `Foliage` (runtime) — `AInstancedFoliageActor`, транзитивно требуется `LandscapeEdit.h`
 - `ImageWrapper` (runtime) — 16-bit PNG decode через `IImageWrapperModule`
 
 ### Why

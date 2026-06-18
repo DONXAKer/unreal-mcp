@@ -74,6 +74,7 @@ public class UnrealMCP : ModuleRules
 				"AnimGraphRuntime", // FAnimNode_BlendSpacePlayer setters (ANIMGRAPHRUNTIME_API)
 				// v3.10.0 — create_landscape: PNG heightmap import + ALandscape::Import
 				"Landscape",        // ALandscape, ALandscapeProxy, ULandscapeInfo, FLandscapeImportLayerInfo
+				"Foliage",          // AInstancedFoliageActor — pulled in by LandscapeEdit.h
 				"ImageWrapper"      // IImageWrapperModule / IImageWrapper — 16-bit PNG decode
 			}
 		);
