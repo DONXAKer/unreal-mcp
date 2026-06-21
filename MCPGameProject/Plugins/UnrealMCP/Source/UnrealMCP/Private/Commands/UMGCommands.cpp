@@ -1106,6 +1106,35 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleSetWidgetProperty(const TSh
             TextBlock->SetFont(FontInfo);
             bModified = true;
         }
+        else if (PropertyName == TEXT("FontObject"))
+        {
+            UObject* FontObj = LoadObject<UObject>(nullptr, *PropertyValue);
+            if (!FontObj)
+                return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                    FString::Printf(TEXT("FontObject: asset '%s' not found"), *PropertyValue));
+            FSlateFontInfo FontInfo = TextBlock->GetFont();
+            FontInfo.FontObject = FontObj;
+            TextBlock->SetFont(FontInfo);
+            bModified = true;
+        }
+        else if (PropertyName == TEXT("Font"))
+        {
+            // Format: "/Game/UI/Fonts/Font_Impact,28"
+            FString FontPath, SizeStr;
+            if (!PropertyValue.Split(TEXT(","), &FontPath, &SizeStr))
+                return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Font expects '<asset_path>,<size>'"));
+            FontPath.TrimStartAndEndInline();
+            SizeStr.TrimStartAndEndInline();
+            UObject* FontObj = LoadObject<UObject>(nullptr, *FontPath);
+            if (!FontObj)
+                return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                    FString::Printf(TEXT("Font: asset '%s' not found"), *FontPath));
+            FSlateFontInfo FontInfo = TextBlock->GetFont();
+            FontInfo.FontObject = FontObj;
+            FontInfo.Size = FCString::Atoi(*SizeStr);
+            TextBlock->SetFont(FontInfo);
+            bModified = true;
+        }
         else if (PropertyName == TEXT("ColorAndOpacity"))
         {
             FLinearColor Color;

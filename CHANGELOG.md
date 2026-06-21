@@ -15,6 +15,25 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.11.0] — 2026-06-22
+
+### Added
+- **`set_widget_property`: свойства `FontObject` и `Font` для TextBlock** — два новых значения `property_name` в команде `set_widget_property`:
+  - `FontObject` — принимает строку с `/Game/...` путём до шрифтового ассета (например `/Game/UI/Fonts/Font_Impact`), загружает его через `LoadObject<UObject>` и назначает `FSlateFontInfo.FontObject`. Размер шрифта остаётся прежним.
+  - `Font` — combined-setter формата `"<asset_path>,<size>"` (например `/Game/UI/Fonts/Font_Impact,52`); в одном вызове устанавливает и `FontObject`, и `Size`.
+  - Обе ветки возвращают понятный `CreateErrorResponse` если ассет не найден или входная строка некорректна.
+
+### Why
+Позволяет менять гарнитуру шрифта (не только размер) у TextBlock виджетов через MCP без ручного открытия Designer.
+
+## [3.10.5] — 2026-06-19
+
+### Fixed
+- **`generate_box_static_mesh` → `MESHDESC_CREATE_FAILED` на UE 5.8** — `UStaticMesh::CreateMeshDescription(0)` возвращал `null` потому что вызывался до `AddSourceModel()`. В UE 5.8 `CreateMeshDescription(idx)` требует чтобы соответствующий LOD (SourceModel) уже существовал. Исправление: переместить `AddSourceModel()` перед `CreateMeshDescription(0)` и убрать дублирующий вызов после построения геометрии.
+
+### Why
+Команда `generate_box_static_mesh` не работала в UE 5.8 (ART-TERRAIN-002: создание SM_Cell_Hill/River/Trench/Bridge для рельефа боевых ячеек).
+
 ## [3.10.4] — 2026-06-19
 
 ### Fixed
