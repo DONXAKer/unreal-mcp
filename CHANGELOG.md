@@ -15,6 +15,31 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.12.0] — 2026-06-24
+
+### Added
+- **`set_nanite_enabled`** — включает или отключает Nanite на существующем `UStaticMesh` ассете.
+  Параметры: `assetPath` (required), `enabled` (bool, default `true`).
+  Ответ содержит `meta.naniteEnabled` и `meta.trianglesCount` (LOD 0).
+  Использует `UStaticMesh::NaniteSettings.bEnabled` + `PostEditChange` + `SaveAsset`.
+- **`import_skeletal_mesh`** — импортирует FBX-файл с арматурой/скелетом как `USkeletalMesh`.
+  Параметры: `assetPath` (required), `sourcePath` (required, .fbx only), `ifExists` (skip|overwrite|fail|update, default skip).
+  Применяет тот же Interchange-bypass CVar (`Interchange.FeatureFlags.Import.FBX=0`) что и `import_static_mesh` — предотвращает GameThread TaskGraph re-entry в UE 5.8.
+  `UFbxFactory` авто-определяет тип меша по содержимому FBX (скелет → SkeletalMesh).
+  Ответ: `meta.verticesCount`, `meta.boneCount`, `meta.materialSlots[]`, `meta.sourcePath`.
+- **Python wrappers** в `Python/tools/mesh_tools.py`: `set_nanite_enabled` и `import_skeletal_mesh` зарегистрированы через `@mcp.tool()`.
+
+### Why
+Необходимы для AutoGen3D Pipeline (`gen3d_pipeline.py`): Nanite-контроль для LOD-оптимизации terrain tiles; skeletal mesh import для персонажей/юнитов с риггом без обходных путей через ручной Editor.
+
+## [3.11.1] — 2026-06-24
+
+### Fixed
+- **`import_static_mesh`: UE 5.8 RecursionGuard crash при FBX-импорте** — в UE 5.8 `ImportAssetsAutomated` направляет FBX через Interchange, что вызывает `Assertion failed: ++Queue(QueueIndex).RecursionGuard == 1` в `TaskGraph.cpp:705` (GameThread re-entrance из bridge-диспатча). Фикс: перед импортом устанавливаем `Interchange.FeatureFlags.Import.FBX=0` через `IConsoleManager`, после импорта восстанавливаем. `UFbxFactory` пиним в `ImportData->Factory` (belt-and-suspenders). Оба флага гарантируют синхронный legacy-путь без TaskGraph re-entry.
+
+### Why
+Terrain tile FBX-импорт через MCP роняет Editor в 5.8 из-за Interchange. Временное отключение CVar + pin factory — минимальный хирургический фикс без переписывания пайплайна.
+
 ## [3.11.0] — 2026-06-22
 
 ### Added

@@ -399,7 +399,9 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             }
             // Mesh Pipeline Commands (MCP-CONTENT-003a)
             else if (CommandType == TEXT("import_static_mesh") ||
-                     CommandType == TEXT("generate_box_static_mesh"))
+                     CommandType == TEXT("generate_box_static_mesh") ||
+                     CommandType == TEXT("set_nanite_enabled") ||
+                     CommandType == TEXT("import_skeletal_mesh"))
             {
                 ResultJson = MeshCommands->HandleCommand(CommandType, Params);
             }

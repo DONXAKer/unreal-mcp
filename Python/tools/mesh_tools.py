@@ -109,4 +109,86 @@ def register_mesh_tools(mcp: FastMCP) -> None:
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    @mcp.tool()
+    def set_nanite_enabled(
+        ctx: Context[Any, Any, Any],
+        assetPath: str,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Enable or disable Nanite on an existing UStaticMesh asset.
+
+        Args:
+            assetPath: /Game/... path to an existing UStaticMesh asset.
+            enabled: True to enable Nanite (default), False to disable.
+
+        Example:
+            set_nanite_enabled(assetPath="/Game/Maps/TerrainTiles/SM_Cell_Hill", enabled=True)
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {
+                "assetPath": assetPath,
+                "enabled": enabled,
+            }
+            logger.info(f"Setting Nanite enabled={enabled} on: {assetPath}")
+            response = unreal.send_command("set_nanite_enabled", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting Nanite on {assetPath}: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def import_skeletal_mesh(
+        ctx: Context[Any, Any, Any],
+        assetPath: str,
+        sourcePath: str,
+        ifExists: str = None,
+    ) -> dict[str, Any]:
+        """
+        Import an FBX file as a USkeletalMesh (with armature and animations).
+
+        The FBX must contain a skeleton/armature; the legacy UFbxFactory auto-detects
+        the mesh type. Uses the same Interchange-bypass CVar as import_static_mesh to
+        prevent GameThread TaskGraph re-entry in UE 5.8.
+
+        Args:
+            assetPath: /Game/... destination path for the resulting USkeletalMesh.
+            sourcePath: Absolute path to the .fbx file that contains a skeleton/armature.
+            ifExists: Idempotency mode — "skip" (default) | "fail" | "overwrite" | "update".
+
+        Example:
+            import_skeletal_mesh(
+                assetPath="/Game/Characters/SK_Soldier",
+                sourcePath="D:/Assets/soldier_rigged.fbx",
+                ifExists="overwrite",
+            )
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {
+                "assetPath": assetPath,
+                "sourcePath": sourcePath,
+            }
+            if ifExists is not None:
+                params["ifExists"] = ifExists
+            logger.info(f"Importing skeletal mesh: {assetPath} from {sourcePath}")
+            response = unreal.send_command("import_skeletal_mesh", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error importing skeletal mesh: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Mesh tools registered successfully")
