@@ -15,6 +15,22 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.12.1] — 2026-06-25
+
+### Fixed
+- **`add_blueprint_function_node`: пустые пины (`pins: [], count: 0`)** — `CreateCallFunctionNode` в `UtilityNodes.cpp` не мог разрешить `UClass` для целевых объектов из-за устаревшего `StaticFindObject(nullptr, path)` в UE 5.7/5.8. Фикс: многоуровневое разрешение класса:
+  - **Шаг 0** — прямое сравнение с известными библиотечными классами по короткому имени (`KismetMathLibrary`, `KismetSystemLibrary`) через `StaticClass()` (100% надёжно).
+  - **Шаг 1** — полный `/Script/...` путь через `LoadObject<UClass>` вместо устаревшего `StaticFindObject`.
+  - **Шаг 2** — перебор Package-префиксов (`/Script/Engine.`, `/Script/UMG.`, …) через `LoadObject<UClass>`.
+  - **Шаг 3** — `FindFirstObject<UClass>` как UE5 fallback.
+  - **Шаг 4** — **новый**: поиск компонента по имени через `Blueprint->SimpleConstructionScript->GetAllNodes()` с взятием `ComponentTemplate->GetClass()`. Позволяет передавать имя компонента (например `MainRotorMesh`) как `target` вместо имени класса.
+- `FindFunctionByName` теперь вызывается с `EIncludeSuperFlag::IncludeSuper` — ищет по цепочке наследования (нужно для методов родительских классов, например `AddRelativeRotation` из `USceneComponent`).
+- Устаревший `FindObject<UClass>(nullptr, ClassPath)` в else-ветке заменён на `LoadObject<UClass>` для UMG-классов.
+- Добавлены include: `Engine/Blueprint.h`, `Engine/SimpleConstructionScript.h`, `Engine/SCS_Node.h`.
+
+### Why
+`Multiply_FloatFloat`, `MakeRotator` (KismetMathLibrary) и `AddRelativeRotation` (StaticMeshComponent) не создавали пины после `AllocateDefaultPins()` / `ReconstructNode()` — потому что `UFunction` не резолвился и нода создавалась с `SetSelfMember` без реального указателя на функцию. После фикса `SetFromFunction(UFunction*)` вызывается корректно.
+
 ## [3.12.0] — 2026-06-24
 
 ### Added

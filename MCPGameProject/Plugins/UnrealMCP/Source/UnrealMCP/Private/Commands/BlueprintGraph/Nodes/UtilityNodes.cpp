@@ -6,6 +6,9 @@
 #include "EdGraphSchema_K2.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Kismet/KismetMathLibrary.h"
+#include "Engine/Blueprint.h"
+#include "Engine/SimpleConstructionScript.h"
+#include "Engine/SCS_Node.h"
 #include "Json.h"
 
 UK2Node* FUtilityNodeCreator::CreatePrintNode(UEdGraph* Graph, const TSharedPtr<FJsonObject>& Params)
@@ -82,25 +85,46 @@ UK2Node* FUtilityNodeCreator::CreateCallFunctionNode(UEdGraph* Graph, const TSha
 	{
 		UClass* TargetClass = nullptr;
 
-		// 1. Полный путь вида /Script/UMG.TextBlock — используем напрямую
-		if (ClassName.StartsWith(TEXT("/")))
+		// 0. Прямое сравнение с известными библиотечными классами по короткому имени.
+		//    Это надёжнее чем поиск через StaticFindObject, который в UE 5.7/5.8 устарел
+		//    и часто возвращает nullptr для Script-классов.
+		if (ClassName.Equals(TEXT("KismetMathLibrary"), ESearchCase::IgnoreCase) ||
+		    ClassName.Equals(TEXT("UKismetMathLibrary"), ESearchCase::IgnoreCase))
 		{
-			TargetClass = Cast<UClass>(StaticFindObject(UClass::StaticClass(), nullptr, *ClassName));
+			TargetClass = UKismetMathLibrary::StaticClass();
+		}
+		else if (ClassName.Equals(TEXT("KismetSystemLibrary"), ESearchCase::IgnoreCase) ||
+		         ClassName.Equals(TEXT("UKismetSystemLibrary"), ESearchCase::IgnoreCase))
+		{
+			TargetClass = UKismetSystemLibrary::StaticClass();
 		}
 
-		// 2. Короткое имя — ищем в популярных пакетах
+		// 1. Полный путь вида /Script/Engine.KismetMathLibrary — LoadObject надёжнее StaticFindObject
+		if (!TargetClass && ClassName.StartsWith(TEXT("/")))
+		{
+			TargetClass = LoadObject<UClass>(nullptr, *ClassName);
+			if (!TargetClass)
+			{
+				// Fallback для путей без суффикса класса
+				TargetClass = FindFirstObject<UClass>(*ClassName, EFindFirstObjectOptions::None, ELogVerbosity::Warning, TEXT("MCP CallFunction full-path lookup"));
+			}
+		}
+
+		// 2. Короткое имя — ищем через LoadObject по популярным пакетам (UE 5.7/5.8 safe)
 		if (!TargetClass)
 		{
 			const FString PackagePrefixes[] = {
-				TEXT("/Script/UMG."),
 				TEXT("/Script/Engine."),
+				TEXT("/Script/UMG."),
 				TEXT("/Script/SlateCore."),
 				TEXT("/Script/Slate."),
-				TEXT("/Script/CoreUObject.")
+				TEXT("/Script/CoreUObject."),
+				TEXT("/Script/AnimGraphRuntime."),
+				TEXT("/Script/GameplayAbilities.")
 			};
 			for (const FString& Prefix : PackagePrefixes)
 			{
-				TargetClass = Cast<UClass>(StaticFindObject(UClass::StaticClass(), nullptr, *(Prefix + ClassName)));
+				TargetClass = LoadObject<UClass>(nullptr, *(Prefix + ClassName));
 				if (TargetClass)
 				{
 					break;
@@ -108,20 +132,62 @@ UK2Node* FUtilityNodeCreator::CreateCallFunctionNode(UEdGraph* Graph, const TSha
 			}
 		}
 
-		// 3. Поиск по короткому имени через FindFirstObject (UE5 fallback)
+		// 3. FindFirstObject — поиск по короткому имени через глобальный реестр объектов (UE5 fallback)
 		if (!TargetClass)
 		{
 			TargetClass = FindFirstObject<UClass>(*ClassName, EFindFirstObjectOptions::None, ELogVerbosity::Warning, TEXT("MCP CallFunction class lookup"));
 		}
 
+		// 4. Компонент по имени в Blueprint — если ClassName не является UClass,
+		//    пробуем найти компонент с таким именем в SimpleConstructionScript и взять его класс.
+		//    Это позволяет передавать имя компонента (например "MainRotorMesh") как target.
+		if (!TargetClass)
+		{
+			UBlueprint* OwnerBP = Graph->GetTypedOuter<UBlueprint>();
+			if (OwnerBP && OwnerBP->SimpleConstructionScript)
+			{
+				for (USCS_Node* SCSNode : OwnerBP->SimpleConstructionScript->GetAllNodes())
+				{
+					if (SCSNode && SCSNode->ComponentTemplate)
+					{
+						FString VarName = SCSNode->GetVariableName().ToString();
+						// SCS variable name может не совпадать точно — сравниваем без суффикса _GEN_VARIABLE
+						FString CleanVarName = VarName.Replace(TEXT("_GEN_VARIABLE"), TEXT(""));
+						if (CleanVarName.Equals(ClassName, ESearchCase::IgnoreCase) ||
+						    VarName.Equals(ClassName, ESearchCase::IgnoreCase))
+						{
+							TargetClass = SCSNode->ComponentTemplate->GetClass();
+							UE_LOG(LogTemp, Display, TEXT("CreateCallFunctionNode: found component '%s' -> class '%s'"),
+								*ClassName, *TargetClass->GetName());
+							break;
+						}
+					}
+				}
+			}
+		}
+
 		if (TargetClass)
 		{
-			TargetFunc = TargetClass->FindFunctionByName(FName(*TargetFunction));
+			TargetFunc = TargetClass->FindFunctionByName(FName(*TargetFunction), EIncludeSuperFlag::IncludeSuper);
+			if (TargetFunc)
+			{
+				UE_LOG(LogTemp, Display, TEXT("CreateCallFunctionNode: found UFunction '%s' on class '%s'"),
+					*TargetFunction, *TargetClass->GetName());
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("CreateCallFunctionNode: UFunction '%s' NOT found on class '%s'"),
+					*TargetFunction, *TargetClass->GetName());
+			}
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("CreateCallFunctionNode: class or component '%s' NOT resolved"), *ClassName);
 		}
 	}
 	else
 	{
-		// Поиск по популярным Unreal-классам в порядке приоритета
+		// Нет target_class — ищем по популярным Unreal-классам в порядке приоритета
 		TargetFunc = UKismetSystemLibrary::StaticClass()->FindFunctionByName(FName(*TargetFunction));
 		if (!TargetFunc)
 		{
@@ -140,7 +206,7 @@ UK2Node* FUtilityNodeCreator::CreateCallFunctionNode(UEdGraph* Graph, const TSha
 			};
 			for (const TCHAR* ClassPath : UMGClassPaths)
 			{
-				UClass* UMGClass = FindObject<UClass>(nullptr, ClassPath);
+				UClass* UMGClass = LoadObject<UClass>(nullptr, ClassPath);
 				if (UMGClass)
 				{
 					TargetFunc = UMGClass->FindFunctionByName(FName(*TargetFunction));
