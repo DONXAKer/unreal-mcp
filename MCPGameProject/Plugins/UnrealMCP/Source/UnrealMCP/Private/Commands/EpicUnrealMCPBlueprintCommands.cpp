@@ -78,6 +78,10 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCommand(const FSt
     {
         return HandleCompileBlueprint(Params);
     }
+    else if (CommandType == TEXT("save_blueprint"))
+    {
+        return HandleSaveBlueprint(Params);
+    }
     else if (CommandType == TEXT("set_static_mesh_properties"))
     {
         return HandleSetStaticMeshProperties(Params);
@@ -717,9 +721,34 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleCompileBlueprint(
     // Compile the blueprint
     FKismetEditorUtilities::CompileBlueprint(Blueprint);
 
+    // v3.12.5: also save the asset to persist graph changes to disk
+    FString AssetPath = Blueprint->GetPathName();
+    UEditorAssetLibrary::SaveAsset(AssetPath, /*bOnlyIfIsDirty=*/false);
+
     TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
     ResultObj->SetStringField(TEXT("name"), BlueprintName);
     ResultObj->SetBoolField(TEXT("compiled"), true);
+    ResultObj->SetBoolField(TEXT("saved"), true);
+    return ResultObj;
+}
+
+TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSaveBlueprint(const TSharedPtr<FJsonObject>& Params)
+{
+    FString BlueprintName;
+    if (!Params->TryGetStringField(TEXT("blueprint_name"), BlueprintName))
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing blueprint_name"));
+    }
+    UBlueprint* Blueprint = FEpicUnrealMCPCommonUtils::FindBlueprint(BlueprintName);
+    if (!Blueprint)
+    {
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Blueprint not found: %s"), *BlueprintName));
+    }
+    FString AssetPath = Blueprint->GetPathName();
+    bool bSaved = UEditorAssetLibrary::SaveAsset(AssetPath, /*bOnlyIfIsDirty=*/false);
+    TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
+    ResultObj->SetStringField(TEXT("name"), BlueprintName);
+    ResultObj->SetBoolField(TEXT("saved"), bSaved);
     return ResultObj;
 }
 
@@ -2780,6 +2809,66 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetComponentPrope
     }
 
     void* PropertyAddr = Property->ContainerPtrToValuePtr<void>(ComponentTemplate);
+
+    // Special case: FClassProperty (TSubclassOf<X>) — ImportText_Direct cannot resolve
+    // Blueprint-generated classes that are not yet in memory. Use the same multi-path
+    // resolution logic as set_blueprint_property (LoadClass variants + LoadBlueprintByName).
+    if (FClassProperty* ClassProp = CastField<FClassProperty>(Property))
+    {
+        const FString ClassNameOrPath = StringValue;
+        UClass* FoundClass = nullptr;
+
+        const TArray<FString> ClassSearchPaths = {
+            ClassNameOrPath,
+            FString::Printf(TEXT("/Script/Engine.%s"), *ClassNameOrPath),
+            FString::Printf(TEXT("/Script/Client.%s"), *ClassNameOrPath),
+            FString::Printf(TEXT("/Script/UMG.%s"), *ClassNameOrPath),
+            FString::Printf(TEXT("/Script/GameplayAbilities.%s"), *ClassNameOrPath),
+        };
+
+        for (const FString& Path : ClassSearchPaths)
+        {
+            FoundClass = LoadClass<UObject>(nullptr, *Path);
+            if (FoundClass) break;
+        }
+
+        // Blueprint-generated class — search via AssetRegistry
+        if (!FoundClass)
+        {
+            UBlueprint* ValueBP = LoadBlueprintByName(ClassNameOrPath);
+            if (ValueBP && ValueBP->GeneratedClass)
+            {
+                FoundClass = ValueBP->GeneratedClass;
+            }
+        }
+
+        if (!FoundClass)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(
+                TEXT("Could not resolve class '%s' for ClassProperty '%s' on component '%s'"),
+                *ClassNameOrPath, *PropertyName, *ComponentName));
+        }
+
+        if (ClassProp->MetaClass && !FoundClass->IsChildOf(ClassProp->MetaClass))
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(
+                TEXT("Class '%s' is not a child of required meta class '%s' for property '%s'"),
+                *FoundClass->GetName(), *ClassProp->MetaClass->GetName(), *PropertyName));
+        }
+
+        ClassProp->SetObjectPropertyValue(PropertyAddr, FoundClass);
+        FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+
+        TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+        Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+        Result->SetStringField(TEXT("component_name"), ComponentName);
+        Result->SetStringField(TEXT("property_name"), PropertyName);
+        Result->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
+        Result->SetStringField(TEXT("value"), FoundClass->GetPathName());
+        Result->SetBoolField(TEXT("success"), true);
+        return Result;
+    }
+
     const TCHAR* ImportResult = Property->ImportText_Direct(*StringValue, PropertyAddr, ComponentTemplate, PPF_None);
     if (!ImportResult)
     {

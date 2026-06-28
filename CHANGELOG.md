@@ -15,6 +15,59 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.12.7] — 2026-06-28
+
+### Fixed
+- **`set_component_property` не мог устанавливать `TSubclassOf<X>` свойства Blueprint-классами** — `ImportText_Direct` не способен загружать Blueprint-generated классы, которых нет в памяти (возвращает `nullptr`). Добавлен специальный путь для `FClassProperty`: перед вызовом `ImportText_Direct` проверяем `CastField<FClassProperty>(Property)` и если совпадает — используем тот же алгоритм разрешения что и `set_blueprint_property` (несколько вариантов `LoadClass` по `/Script/*` путям + `LoadBlueprintByName` через AssetRegistry). Класс записывается через `ClassProp->SetObjectPropertyValue` напрямую, минуя `ImportText_Direct`. Добавлена проверка совместимости с `MetaClass`.
+
+### Why
+Вызов `set_component_property(blueprint_name, component_name, property_name="TankShotShakeClass", property_value="CS_TankShot")` падал с ошибкой `Failed to import value 'CS_TankShot' for property 'TankShotShakeClass'` потому что `ImportText_Direct` ищет класс только в уже загруженных пакетах. Blueprint-классы загружаются лениво и недоступны без явного `LoadClass`/`LoadBlueprintByName`.
+
+## [3.12.6] — 2026-06-25
+
+### Added
+- **save_blueprint** — новая команда в EpicUnrealMCPBlueprintCommands. Вызывает UEditorAssetLibrary::SaveAsset для сохранения Blueprint на диск. Параметры: blueprint_name. Возвращает {name, saved: bool}. Добавлена в allow-list EpicUnrealMCPBridge.cpp.
+- **compile_blueprint теперь сохраняет на диск** — HandleCompileBlueprint вызывает SaveAsset после CompileBlueprint (bOnlyIfIsDirty=false). Ответ дополнен полем saved: true. Предотвращает потерю изменений при краше Editor.
+
+### Fixed
+- **Изменения Blueprint не сохранялись между сессиями** — add_component_to_blueprint, add_blueprint_node, connect_nodes — не вызывали SaveAsset. После краша Editor все изменения терялись. Решение: compile_blueprint теперь всегда сохраняет.
+
+### Why
+При построении роторной анимации BP_mi24 Editor упал до вызова compile_blueprint, что привело к потере всех узлов EventGraph и SCS-компонентов. Добавление SaveAsset в compile и отдельная save_blueprint команда делают работу атомарной.
+
+## [3.12.5] — 2026-06-25
+
+### Fixed
+- ** (SCS component variables): пины пустые — вторая попытка** — 3.12.4 пытался использовать  вместо , но UE log показывал  при . Корневая причина:  не может разрешить SCS UPROPERTY потому что  резолвит переменную через skel-class, который не содержит SCS component properties напрямую. Фикс: используем  —  уже содержит SCS properties как UPROPERTY и доступен на момент создания ноды. Фолбэк на  если GeneratedClass недоступен или property не найдено.
+
+### Why
+ вызывает . Для  это ищет UPROPERTY в skel-class, который для SCS-компонентов содержит только forward-declarations без объектов. Для  резолюция идёт напрямую через  — что находит UPROPERTY реального компонента.
+
+## [3.12.4] — 2026-06-25
+
+### Fixed
+- **`add_blueprint_function_node` (non-static instance methods): `AddRelativeRotation` и другие component methods получают 0 пинов** — фикс 3.12.3 (PostPlacedNewNode + AllocateDefaultPins без ReconstructNode) работает для статических/чистых функций (KismetMathLibrary), но не для нестатических instance-методов на компонентах (USceneComponent::AddRelativeRotation). Для instance-методов `AllocateDefaultPins` без предшествующего `PostPlacedNewNode` не создаёт Target и exec пины. Фикс: два пути инициализации в `CreateCallFunctionNode` — (A) статические функции: PostPlacedNewNode + AllocateDefaultPins (как было в 3.12.3); (B) нестатические instance-методы (флаг `FUNC_Static` отсутствует или это компонент из SCS): `FNodeCreatorUtils::InitializeK2Node` (AllocateDefaultPins + ReconstructNode). Safety-fallback в обоих путях: если Pins.Num() == 0 после первичной инициализации — применяет обратную стратегию.
+- **`add_blueprint_variable_get_node` (SCS component variables): пины пустые** — `CreateVariableGetNode` использовал `InitializeK2Node` (AllocateDefaultPins + ReconstructNode). Для SCS компонентных переменных (MainRotorMesh, TailRotorMesh) `ReconstructNode` не мог разрешить VariableReference и очищал Pins[]. Фикс: заменён на PostPlacedNewNode + AllocateDefaultPins с fallback на ReconstructNode при 0 пинах.
+
+### Why
+Два разных сбоя инициализации: статические library-функции требуют PostPlacedNewNode+AllocateDefaultPins (без ReconstructNode), а нестатические component instance-методы требуют полного InitializeK2Node цикла (AllocateDefaultPins+ReconstructNode) для создания Target и exec пинов. Предыдущие фиксы (3.12.2-3.12.3) решали только один из двух случаев.
+
+## [3.12.3] — 2026-06-25
+
+### Fixed
+- **`add_blueprint_function_node`: пины по-прежнему пустые после 3.12.2** — `FNodeCreatorUtils::InitializeK2Node` вызывал `ReconstructNode()` после `AllocateDefaultPins()`. Для свежесозданного `K2Node_CallFunction` (особенно pure-функций) `ReconstructNode()` очищал `Pins[]` до завершения привязки `FunctionReference`, оставляя ноду без пинов. Фикс: заменил `InitializeK2Node` на явный вызов `PostPlacedNewNode() + AllocateDefaultPins()` — тот же паттерн что использует `FBlueprintNodeManager::CreateCallFunctionNode` (строки 617-624 NodeManager.cpp).
+
+### Why
+`FBlueprintNodeManager::CreateCallFunctionNode` никогда не вызывает `ReconstructNode()` на новой ноде — только `PostPlacedNewNode` + `AllocateDefaultPins`. Копирование этого паттерна в `FUtilityNodeCreator::CreateCallFunctionNode` устраняет гонку инициализации.
+
+## [3.12.2] — 2026-06-25
+
+### Fixed
+- **`add_blueprint_function_node`: пины по-прежнему пустые после 3.12.1** — `SetFromFunction` устанавливала флаги (`bIsPureFunc`, `bIsConstFunc`) корректно, но для actor-based Blueprint могла резолвить `FunctionReference` в `SetSelfMember` (function found on blueprint's own class, not the library class), что приводило к `GetTargetFunction() → nullptr` во время `AllocateDefaultPins()`. Фикс: вызываем `SetFromFunction(TargetFunc)` для копирования флагов, затем **явно** переписываем `FunctionReference.SetExternalMember(TargetFunc->GetFName(), TargetFunc->GetOwnerClass())`. `GetOwnerClass()` всегда возвращает правильный класс — без зависимости от scope `TargetClass`.
+
+### Why
+`Multiply_FloatFloat` (KismetMathLibrary), `AddRelativeRotation` (SceneComponent) — после 3.12.1 класс резолвился корректно и `UFunction*` находился, но `FunctionReference` всё равно указывал на self-member → `AllocateDefaultPins()` не создавал ни одного пина. `SetExternalMember` исправляет разрешение `GetTargetFunction()` через `ResolveMember<UFunction>(GetBlueprint())`.
+
 ## [3.12.1] — 2026-06-25
 
 ### Fixed

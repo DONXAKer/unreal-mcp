@@ -1,7 +1,7 @@
 {
 	"FileVersion": 3,
-	"Version": 90,
-	"VersionName": "3.12.1",
+	"Version": 96,
+	"VersionName": "3.12.7",
 	"FriendlyName": "UnrealMCP",
 	"Description": "Model Context Protocol implementation for Unreal Engine",
 	"Category": "Editor",
