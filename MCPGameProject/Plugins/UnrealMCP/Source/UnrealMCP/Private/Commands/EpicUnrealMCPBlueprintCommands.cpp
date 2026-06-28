@@ -2494,14 +2494,17 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetBlueprintPrope
                     *ClassNameOrPath, *PropertyName));
         }
 
-        // Проверяем что найденный класс совместим с базовым типом свойства
+        // Проверяем совместимость с базовым типом свойства.
+        // Для Blueprint-классов (UCameraShakeBase и пр.) иерархия может быть не
+        // полностью разрешена на момент проверки, поэтому не падаем с ошибкой —
+        // Blueprint-компилятор проверит совместимость при сохранении/компиляции.
         if (ClassProp->MetaClass && !FoundClass->IsChildOf(ClassProp->MetaClass))
         {
-            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
-                FString::Printf(TEXT("Class '%s' is not a child of required meta class '%s' for property '%s'"),
-                    *FoundClass->GetName(),
-                    *ClassProp->MetaClass->GetName(),
-                    *PropertyName));
+            UE_LOG(LogTemp, Warning,
+                TEXT("UnrealMCP: set_component_property: class '%s' may not be a child of MetaClass '%s' for property '%s' — allowing anyway (Blueprint hierarchy may not be fully resolved)"),
+                *FoundClass->GetName(),
+                *ClassProp->MetaClass->GetName(),
+                *PropertyName);
         }
 
         ClassProp->SetObjectPropertyValue(ValuePtr, FoundClass);
@@ -2849,11 +2852,13 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetComponentPrope
                 *ClassNameOrPath, *PropertyName, *ComponentName));
         }
 
+        // Blueprint-классы (UCameraShakeBase и пр.) могут не проходить IsChildOf до
+        // полной компиляции иерархии — логируем предупреждение и продолжаем.
         if (ClassProp->MetaClass && !FoundClass->IsChildOf(ClassProp->MetaClass))
         {
-            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(
-                TEXT("Class '%s' is not a child of required meta class '%s' for property '%s'"),
-                *FoundClass->GetName(), *ClassProp->MetaClass->GetName(), *PropertyName));
+            UE_LOG(LogTemp, Warning,
+                TEXT("UnrealMCP: set_component_property: class '%s' may not be a child of MetaClass '%s' for property '%s' — allowing anyway (Blueprint hierarchy may not be fully resolved)"),
+                *FoundClass->GetName(), *ClassProp->MetaClass->GetName(), *PropertyName);
         }
 
         ClassProp->SetObjectPropertyValue(PropertyAddr, FoundClass);

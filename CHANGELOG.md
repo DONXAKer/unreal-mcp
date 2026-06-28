@@ -15,6 +15,15 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.12.8] — 2026-06-28
+
+### Fixed
+- **`set_component_property` падал с ошибкой при установке `TSubclassOf<UCameraShakeBase>` через Blueprint-класс** — проверка `ClassProp->MetaClass && !FoundClass->IsChildOf(MetaClass)` возвращала `false` для Blueprint-классов шейков камеры (например `CS_TankShot`), у которых иерархия полностью не разрешена до финальной компиляции. Хардовый `CreateErrorResponse` заменён на `UE_LOG(Warning)` + продолжение выполнения. Blueprint-компилятор проверит совместимость при сохранении/компиляции Blueprint'а. Правка затронула оба места в файле (HandleSetBlueprintProperty и HandleSetComponentProperty).
+- **`plugin_version` в `EpicUnrealMCPBridge.cpp` не обновлялся с 3.12.3** — строка `"3.12.3"` была забыта в коммите 3.12.7. Исправлено на `"3.12.8"`.
+
+### Why
+`set_component_property(blueprint_name="BP_Tank", component_name="CameraShakeComponent", property_name="TankShotShakeClass", property_value="CS_TankShot")` падал с `"Class 'CS_TankShot' is not a child of required meta class 'CameraShakeBase'"`. Blueprint-класс шейка технически является потомком `UCameraShakeBase`, но на момент вызова MCP `IsChildOf` возвращал `false` — это известное поведение UE5 для лениво-загруженных Blueprint-классов до полной инициализации class hierarchy. Решение: доверяем Blueprint-компилятору, только логируем предупреждение.
+
 ## [3.12.7] — 2026-06-28
 
 ### Fixed

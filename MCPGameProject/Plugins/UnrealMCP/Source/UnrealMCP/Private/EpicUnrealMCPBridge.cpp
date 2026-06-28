@@ -297,7 +297,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.10.4"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.12.8"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -321,6 +321,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("add_component_to_blueprint") ||
                      CommandType == TEXT("set_physics_properties") ||
                      CommandType == TEXT("compile_blueprint") ||
+                     CommandType == TEXT("save_blueprint") ||
                      CommandType == TEXT("set_static_mesh_properties") ||
                      CommandType == TEXT("set_mesh_material_color") ||
                      CommandType == TEXT("get_available_materials") ||
