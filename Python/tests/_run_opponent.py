@@ -25,20 +25,28 @@ def main() -> int:
 
     bot = OpponentBot(jwt, name="bot", full_play=True)
     if not bot.start():
-        print("FAIL: бот не подключился к серверу")
+        print("FAIL: бот не подключился к серверу", flush=True)
         return 1
     print("BOT READY: в очереди матчмейкинга, жми 'Найти игру' в клиенте "
-          f"(живёт {minutes:.0f} мин)")
+          f"(живёт {minutes:.0f} мин)", flush=True)
 
     deadline = time.time() + minutes * 60.0
+    requeue_at = time.time() + 45.0
     try:
         while time.time() < deadline:
             time.sleep(5)
+            # Сервер вычищает очередь по queue-wait (cleanupExpiredSearches,
+            # раз в минуту) — пока матч не найден, переподставляемся в очередь
+            # каждые 45с (idempotent: «already in queue» сервер игнорирует).
+            if bot.game_id is None and time.time() >= requeue_at:
+                bot.stomp.send_json("/app/matchmaking/start", {})
+                print("BOT REQUEUE: повторная постановка в очередь", flush=True)
+                requeue_at = time.time() + 45.0
     except KeyboardInterrupt:
         pass
     finally:
         bot.close()
-    print("BOT EXIT")
+    print("BOT EXIT", flush=True)
     return 0
 
 
