@@ -405,6 +405,9 @@ class OpponentBot:
         self.stomp.subscribe("/user/queue/matchmaking/game-found")
         self.stomp.subscribe("/user/queue/matchmaking/available-units")
         self.stomp.subscribe("/user/queue/matchmaking/status")
+        # resume-hint: при активной игре сервер шлёт active-game вместо очереди
+        # (перезапуск бота посреди партии — вернуться и продолжить ходить)
+        self.stomp.subscribe("/user/queue/active-game")
         time.sleep(0.3)
         self.stomp.send_json("/app/matchmaking/start", {})
         self._log("matchmaking/start отправлен")
@@ -453,6 +456,20 @@ class OpponentBot:
     def _on_message(self, dest: str, body: dict[str, Any]) -> None:
         if dest.endswith("/turn-changed"):
             self._on_turn_changed(body)
+            return
+        if dest.endswith("/active-game"):
+            # Resume после перезапуска бота: подключаемся к идущей партии и
+            # запрашиваем снапшот (FIX-RESUME-001) — full_play продолжит ходить.
+            gid = body.get("gameId")
+            if gid and not self.game_id:
+                self.game_id = gid
+                self._log(f"resume active game: {gid} (phase={body.get('phase', '?')})")
+                for suffix in ("state", "result", "draft-update", "turn-changed"):
+                    self.stomp.subscribe(f"/topic/game/{gid}/{suffix}")
+                self.stomp.subscribe(f"/user/topic/game/{gid}/cards-update")
+                self._reached_battle.set()
+                time.sleep(0.3)
+                self.stomp.send_json("/app/game/request-state", {"gameId": gid})
             return
         if dest.endswith("/game-found"):
             gid = body.get("gameId")
