@@ -433,6 +433,10 @@ class OpponentBot:
         self._reached_battle.set()
         if active != self.my_id:
             return
+        # Тест-хук (smoke_mechanics_pie): внешний сценарий временно играет ЗА бота
+        # (bot_wound) — авто-пас подавлен, ход бота контролирует сценарий.
+        if getattr(self, "suppress_pass", False):
+            return
         gid = self.game_id
         if not gid:
             return
