@@ -306,6 +306,26 @@ def main() -> int:
         ue_spy.sub(bot.game_id)
         print(f"Игра: {bot.game_id}", flush=True)
 
+        # Серверное подтверждение фазы BATTLE (battle_ready опирается на
+        # клиентский стейт и ложно-срабатывает, если UE застрял в MULLIGAN,
+        # не успев отрисовать виджет — холодный старт редактора)
+        def server_phase() -> str:
+            spy.drain()
+            spy.ws.send_json("/app/game/request-state", {"gameId": bot.game_id})
+            s0 = spy.wait_state_until(lambda s_: True, 8)
+            return str((s0 or {}).get("gamePhase", "?"))
+
+        for _try in range(15):
+            ph = server_phase()
+            if ph == "BATTLE":
+                break
+            print(f"  [PHASE] сервер в {ph} — кликаем AcceptHandButton", flush=True)
+            _send(conn, "invoke_button_click", {"widget_name": "AcceptHandButton", "controller_index": 0})
+            time.sleep(2.5)
+        else:
+            print("FAIL: сервер так и не перешёл в BATTLE", flush=True)
+            return 1
+
         if not wait_my_turn(conn, 40):
             print("FAIL: ход UE не наступил", flush=True)
             return 1
@@ -326,6 +346,23 @@ def main() -> int:
 
         participated: set[str] = set()
         my_ids = [u["unitId"] for u in mine]
+
+        # ══ FIX-OWNERSHIP-001: выбор юнитов — только свои ══════════════════
+        # Полный клиентский путь выбора (SelectActiveUnit): свой живой юнит
+        # выделяется, вражеский — отклоняется (раньше «свой/чужой» определялся
+        # Atoi(UUID) и работал случайно).
+        r_own = _send(conn, "wc_select_battle_unit",
+                      {"controller_index": 0, "unit_id": mine[0]["unitId"]})
+        check("выбор СВОЕГО юнита",
+              f"{mine[0]['unitId']} выделен",
+              f"selected={r_own.get('selected')}",
+              bool(r_own.get("selected")))
+        r_foe = _send(conn, "wc_select_battle_unit",
+                      {"controller_index": 0, "unit_id": enemies[0]["unitId"]})
+        check("выбор ЧУЖОГО юнита отклонён",
+              f"{enemies[0]['unitId']} НЕ выделен",
+              f"selected={r_foe.get('selected')}",
+              not r_foe.get("selected"))
 
         def refresh() -> tuple[dict, dict[str, dict]]:
             s = spy.fresh_state(10) or spy.last_state or {}

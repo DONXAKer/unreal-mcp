@@ -96,12 +96,24 @@ def ensure_test_user(
         "password": password,
     })
     if status == 200:
+        _dev_set_level(login, 6)
         return {"created": True, "login": login}
     if status == 400:
         # Скорее всего юзер уже есть (registration failed: username taken).
         # Принимаем как success — login дальше подтвердит работоспособность.
+        _dev_set_level(login, 6)
         return {"created": False, "login": login, "register_response": body}
     raise FixtureError(f"Неожиданный статус регистрации {status}: {body}")
+
+
+def _dev_set_level(login: str, level: int) -> None:
+    """PROG-XP-001: тестовые аккаунты получают уровень 6 — полный ростер юнитов
+    (гейт прогрессии в драфте не должен ломать smoke/e2e-тесты).
+    Best-effort: dev-эндпоинт есть только при warcard.dev-tools.enabled=true."""
+    try:
+        _post_json("/api/dev/player/set-level", {"username": login, "level": level})
+    except Exception:
+        pass
 
 
 def get_test_jwt(
