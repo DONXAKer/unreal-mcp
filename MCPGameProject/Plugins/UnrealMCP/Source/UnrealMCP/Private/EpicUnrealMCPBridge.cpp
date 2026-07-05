@@ -297,7 +297,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.12.8"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.13.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -359,6 +359,8 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("add_button_to_widget") ||
                      CommandType == TEXT("add_panel_widget_to_widget") ||
                      CommandType == TEXT("delete_widget_from_umg") ||
+                     CommandType == TEXT("reorder_widget") ||
+                     CommandType == TEXT("reparent_widget") ||
                      CommandType == TEXT("set_widget_property") ||
                      CommandType == TEXT("get_umg_hierarchy") ||
                      CommandType == TEXT("create_umg_widget_blueprint") ||

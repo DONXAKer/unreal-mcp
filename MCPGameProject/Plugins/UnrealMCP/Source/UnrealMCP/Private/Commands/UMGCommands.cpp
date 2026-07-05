@@ -296,6 +296,8 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleCommand(const FString& Comm
     if (CommandType == TEXT("add_button_to_widget"))         return HandleAddButtonToWidget(Params);
     if (CommandType == TEXT("add_panel_widget_to_widget"))   return HandleAddPanelWidgetToWidget(Params);
     if (CommandType == TEXT("delete_widget_from_umg"))       return HandleDeleteWidgetFromUMG(Params);
+    if (CommandType == TEXT("reorder_widget"))               return HandleReorderWidget(Params);
+    if (CommandType == TEXT("reparent_widget"))              return HandleReparentWidget(Params);
     if (CommandType == TEXT("set_widget_property"))          return HandleSetWidgetProperty(Params);
     if (CommandType == TEXT("get_umg_hierarchy"))            return HandleGetUMGHierarchy(Params);
     if (CommandType == TEXT("create_umg_widget_blueprint"))  return HandleCreateUMGWidgetBlueprint(Params);
@@ -1931,5 +1933,209 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleDeleteWidgetFromUMG(const T
     Result->SetStringField(TEXT("widget_name"), WidgetName);
     Result->SetStringField(TEXT("blueprint_path"), BlueprintPath);
     Result->SetBoolField(TEXT("was_root"), bWasRoot);
+    return Result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// reorder_widget
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleReorderWidget(const TSharedPtr<FJsonObject>& Params)
+{
+    using namespace UMGCommandsUtils;
+
+    // ── Required params ──────────────────────────────────────────────────────
+    FString BlueprintPath;
+    if (!Params->TryGetStringField(TEXT("blueprint_path"), BlueprintPath))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_path' parameter"));
+
+    FString WidgetName;
+    if (!Params->TryGetStringField(TEXT("widget_name"), WidgetName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
+
+    int32 NewIndex = 0;
+    if (!Params->TryGetNumberField(TEXT("new_index"), NewIndex))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'new_index' parameter"));
+
+    // ── Load Widget Blueprint ────────────────────────────────────────────────
+    UWidgetBlueprint* WB = Cast<UWidgetBlueprint>(UEditorAssetLibrary::LoadAsset(BlueprintPath));
+    if (!WB)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Could not load Widget Blueprint: %s"), *BlueprintPath));
+
+    if (!WB->WidgetTree)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Widget Blueprint has no WidgetTree"));
+
+    // ── Locate target widget and its parent panel ────────────────────────────
+    UWidget* Target = WB->WidgetTree->FindWidget(FName(*WidgetName));
+    if (!Target)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget not found: %s"), *WidgetName));
+
+    UPanelWidget* ParentPanel = Target->GetParent();
+    if (!ParentPanel)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget '%s' has no parent panel (is it the root?) — cannot reorder"), *WidgetName));
+
+    const int32 OldIndex = ParentPanel->GetChildIndex(Target);
+    const int32 ClampedIndex = FMath::Clamp(NewIndex, 0, ParentPanel->GetChildrenCount() - 1);
+
+    // ShiftChild moves the UPanelSlot object itself inside the Slots array —
+    // all slot properties (alignment, padding, size rule) are preserved, unlike
+    // RemoveChild + InsertChildAt which destroys and recreates the slot.
+    if (OldIndex != ClampedIndex)
+    {
+        ParentPanel->Modify();
+        ParentPanel->ShiftChild(ClampedIndex, Target);
+    }
+
+    const int32 ResultIndex = ParentPanel->GetChildIndex(Target);
+
+    // ── Persist ──────────────────────────────────────────────────────────────
+    MarkAndSaveWidgetBlueprint(WB);
+
+    // ── Build response ───────────────────────────────────────────────────────
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("widget_name"), WidgetName);
+    Result->SetStringField(TEXT("parent_name"), ParentPanel->GetName());
+    Result->SetNumberField(TEXT("old_index"), OldIndex);
+    Result->SetNumberField(TEXT("new_index"), ResultIndex);
+    return Result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// reparent_widget
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleReparentWidget(const TSharedPtr<FJsonObject>& Params)
+{
+    using namespace UMGCommandsUtils;
+
+    // ── Required params ──────────────────────────────────────────────────────
+    FString BlueprintPath;
+    if (!Params->TryGetStringField(TEXT("blueprint_path"), BlueprintPath))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'blueprint_path' parameter"));
+
+    FString WidgetName;
+    if (!Params->TryGetStringField(TEXT("widget_name"), WidgetName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'widget_name' parameter"));
+
+    FString NewParentName;
+    if (!Params->TryGetStringField(TEXT("new_parent_name"), NewParentName))
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Missing 'new_parent_name' parameter"));
+
+    // ── Optional params ──────────────────────────────────────────────────────
+    int32 Index = -1;  // -1 = append at the end
+    Params->TryGetNumberField(TEXT("index"), Index);
+
+    // ── Load Widget Blueprint ────────────────────────────────────────────────
+    UWidgetBlueprint* WB = Cast<UWidgetBlueprint>(UEditorAssetLibrary::LoadAsset(BlueprintPath));
+    if (!WB)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Could not load Widget Blueprint: %s"), *BlueprintPath));
+
+    if (!WB->WidgetTree)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Widget Blueprint has no WidgetTree"));
+
+    // ── Locate target and new parent ─────────────────────────────────────────
+    UWidget* Target = WB->WidgetTree->FindWidget(FName(*WidgetName));
+    if (!Target)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget not found: %s"), *WidgetName));
+
+    if (WB->WidgetTree->RootWidget == Target)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("Widget '%s' is the root widget — cannot reparent the root"), *WidgetName));
+
+    UWidget* NewParentWidget = WB->WidgetTree->FindWidget(FName(*NewParentName));
+    if (!NewParentWidget)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("New parent widget not found: %s"), *NewParentName));
+
+    UPanelWidget* NewParent = Cast<UPanelWidget>(NewParentWidget);
+    if (!NewParent)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("New parent widget '%s' is not a panel widget"), *NewParentName));
+
+    if (NewParent == Target)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            TEXT("Cannot reparent a widget under itself"));
+
+    // Cycle guard: the new parent must not live inside the target's own subtree.
+    bool bCycle = false;
+    WB->WidgetTree->ForWidgetAndChildren(Target,
+        [NewParent, &bCycle](UWidget* Sub)
+        {
+            if (Sub == NewParent) { bCycle = true; }
+        });
+    if (bCycle)
+        return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+            FString::Printf(TEXT("New parent '%s' is a descendant of widget '%s' — would create a cycle"),
+                *NewParentName, *WidgetName));
+
+    UPanelWidget* OldParent = Target->GetParent();
+    const FString OldParentName = OldParent ? OldParent->GetName() : TEXT("(none)");
+
+    if (OldParent == NewParent)
+    {
+        // Same panel: this is a reorder, delegate semantics to ShiftChild to keep slot props.
+        if (Index >= 0)
+        {
+            OldParent->Modify();
+            OldParent->ShiftChild(FMath::Clamp(Index, 0, OldParent->GetChildrenCount() - 1), Target);
+        }
+    }
+    else
+    {
+        // ── Detach from old parent ────────────────────────────────────────────
+        if (OldParent)
+        {
+            OldParent->Modify();
+            if (!OldParent->RemoveChild(Target))
+                return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                    FString::Printf(TEXT("RemoveChild failed for widget '%s'"), *WidgetName));
+        }
+
+        // ── Attach to new parent ──────────────────────────────────────────────
+        NewParent->Modify();
+        UPanelSlot* NewSlot = nullptr;
+        if (Index >= 0 && Index < NewParent->GetChildrenCount())
+        {
+            NewSlot = NewParent->InsertChildAt(Index, Target);
+        }
+        else
+        {
+            NewSlot = NewParent->AddChild(Target);
+        }
+
+        if (!NewSlot)
+        {
+            // Panel refused the child (e.g. single-child panel already full).
+            // Best-effort restore into the old parent so the widget isn't orphaned.
+            if (OldParent)
+            {
+                OldParent->AddChild(Target);
+            }
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("Panel '%s' rejected the child (AddChild/InsertChildAt returned null — is it a full single-child panel?)"),
+                    *NewParentName));
+        }
+    }
+
+    const int32 FinalIndex = NewParent->GetChildIndex(Target);
+    const FString SlotType = (Target->Slot != nullptr) ? Target->Slot->GetClass()->GetName() : TEXT("(none)");
+
+    // ── Persist ──────────────────────────────────────────────────────────────
+    MarkAndSaveWidgetBlueprint(WB);
+
+    // ── Build response ───────────────────────────────────────────────────────
+    TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+    Result->SetBoolField(TEXT("success"), true);
+    Result->SetStringField(TEXT("widget_name"), WidgetName);
+    Result->SetStringField(TEXT("old_parent"), OldParentName);
+    Result->SetStringField(TEXT("new_parent"), NewParentName);
+    Result->SetNumberField(TEXT("index"), FinalIndex);
+    Result->SetStringField(TEXT("slot_type"), SlotType);
     return Result;
 }

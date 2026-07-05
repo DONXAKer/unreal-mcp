@@ -15,6 +15,32 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.13.0] — 2026-07-05
+
+### Added
+- **`reorder_widget`** — новая UMG-команда: перемещает существующий виджет на заданный индекс внутри его текущего родителя-панели. Параметры: `blueprint_path`, `widget_name`, `new_index`. Реализована через `UPanelWidget::ShiftChild`, который двигает сам объект `UPanelSlot` внутри массива Slots — **все свойства слота (alignment, padding, size rule) сохраняются**, в отличие от пары RemoveChild+InsertChildAt, уничтожающей слот. Индекс кламптся в `[0, child_count - 1]`. Ответ: `{success, widget_name, parent_name, old_index, new_index}`.
+- **`reparent_widget`** — новая UMG-команда: переносит существующий виджет под другого родителя-панель. Параметры: `blueprint_path`, `widget_name`, `new_parent_name`, `index` (default `-1` = append). Реализация: `RemoveChild` у старого родителя → `InsertChildAt(index)`/`AddChild` у нового. Защита от циклов (новый родитель не может быть потомком переносимого виджета), запрет на reparent корневого виджета; если новая панель отвергла child (single-child панель уже заполнена) — виджет best-effort возвращается старому родителю. Свойства старого слота теряются (новая панель создаёт слот своего типа — тип возвращается в `slot_type`, докрутить alignment/padding можно через `set_widget_property("Slot.*")`). Ответ: `{success, widget_name, old_parent, new_parent, index, slot_type}`.
+- Python-обёртки `reorder_widget` / `reparent_widget` в `Python/tools/umg_tools.py` (рядом с `add_widget_to_umg`/`delete_widget_from_umg`).
+
+### Why
+При сборке UMG-интерфейсов через MCP до сих пор не было способа изменить порядок детей в VerticalBox/HorizontalBox/Overlay или перенести готовый виджет в другую панель — любая ошибка компоновки требовала delete + пересоздание всего поддерева с потерей настроенных свойств. `reorder_widget`/`reparent_widget` закрывают этот пробел атомарными операциями над WidgetTree с сохранением слота при reorder.
+
+## [3.12.11] — 2026-06-29
+
+### Fixed
+- **`set_blueprint_property` падал с `unsupported type 'SoftObjectProperty'`** — добавлена ветка `FSoftObjectProperty` в `HandleSetBlueprintProperty`. Принимает строку `/Game/...` asset path, создаёт `FSoftObjectPtr(FSoftObjectPath(str))` и сохраняет в CDO. Нужно для назначения `TSoftObjectPtr<UDataTable>` и аналогичных soft-ref свойств из C++ через MCP без Blueprint-переменной. Добавлены includes `UObject/SoftObjectPath.h` + `UObject/SoftObjectPtr.h`.
+
+### Why
+`UnitInstanceLayoutTable` в `BasicUnit` определён как `TSoftObjectPtr<UDataTable>` (C++ UPROPERTY). `set_blueprint_property` не имел ветки для `FSoftObjectProperty` → `unsupported type`. Soft references — стандартный UE5-паттерн; отсутствие поддержки блокировало все назначения DataTable/Texture/Sound asset-ref через CDO.
+
+## [3.12.10] — 2026-06-29
+
+### Fixed
+- **`import_datatable_from_csv` зависал навсегда и роняет bridge (port 55557)** — `UCSVImportFactory` + `AssetTools.ImportAssets()` открывали UI-диалог выбора rowStruct в headless MCP-контексте (путь с F-префиксом `/Script/Client.FUnitInstanceLayoutRow` не матчился — в рефлексии UE5 struct называется `UnitInstanceLayoutRow` без `F`). `UDataTableFactory` + `IAssetTools::CreateAsset` тоже падал/блокировался. Итоговое решение: **полный обход factory pipeline** — `NewObject<UDataTable>(Pkg, *AssetName, RF_Public|RF_Standalone|RF_Transactional)` + `DataTable->RowStruct = RowStruct` + `UDataTable::CreateTableFromCSVString(CSVContent)` + `FAssetRegistryModule::AssetCreated` + `UEditorAssetLibrary::SaveAsset`. Добавлены includes `Factories/DataTableFactory.h` и `Misc/FileHelper.h`. `rowStruct` теперь обязательный параметр — без него `ROWSTRUCT_NOT_FOUND` вместо зависания.
+
+### Why
+Четыре падения bridge (port 55557) при попытках создать `DT_UnitInstanceLayout` через MCP. Корень: все factory-based API (`UCSVImportFactory`, `UDataTableFactory`, `IAssetTools::CreateAsset`) в MCP-контексте ведут к UI-блокировке или краш/дедлок. `NewObject<UDataTable>` + `CreateTableFromCSVString` — единственный путь без UI для headless DataTable import в UE5.8.
+
 ## [3.12.8] — 2026-06-28
 
 ### Fixed

@@ -76,6 +76,25 @@ private:
     TSharedPtr<FJsonObject> HandleDeleteWidgetFromUMG(const TSharedPtr<FJsonObject>& Params);
 
     /**
+     * Move an existing widget to a new index inside its current parent panel.
+     * Uses UPanelWidget::ShiftChild which moves the UPanelSlot object itself,
+     * so all slot properties (alignment, padding, size) survive the move.
+     * Params: blueprint_path (required), widget_name (required), new_index (int, required).
+     * Returns: { success, widget_name, parent_name, old_index, new_index }.
+     */
+    TSharedPtr<FJsonObject> HandleReorderWidget(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * Move an existing widget under a different parent panel.
+     * RemoveChild from the old parent, then InsertChildAt/AddChild on the new one.
+     * Old slot properties are lost (the new panel creates a slot of its own type).
+     * Params: blueprint_path (required), widget_name (required),
+     *         new_parent_name (required), index (int, opt, default -1 = append).
+     * Returns: { success, widget_name, old_parent, new_parent, index, slot_type }.
+     */
+    TSharedPtr<FJsonObject> HandleReparentWidget(const TSharedPtr<FJsonObject>& Params);
+
+    /**
      * Get the widget hierarchy of a Widget Blueprint as a JSON tree.
      * Params: blueprint_path
      */

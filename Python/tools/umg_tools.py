@@ -485,6 +485,99 @@ def register_umg_tools(mcp: FastMCP) -> None:
             return {"success": False, "message": error_msg}
 
     @mcp.tool()
+    def reorder_widget(
+        ctx: Context[Any, Any, Any],
+        blueprint_path: str,
+        widget_name: str,
+        new_index: int,
+    ) -> dict[str, Any]:
+        """
+        Move an existing widget to a new index inside its current parent panel.
+
+        Uses UPanelWidget::ShiftChild under the hood, so all slot properties
+        (alignment, padding, size rule) are preserved — only the ordering
+        changes. The index is clamped to [0, child_count - 1].
+
+        Args:
+            blueprint_path: Full /Game/... path of the Widget Blueprint.
+            widget_name: Name of the widget instance to move. Must have a
+                parent panel (the root widget cannot be reordered).
+            new_index: Target child index within the parent panel (0-based).
+
+        Returns:
+            {success, widget_name, parent_name, old_index, new_index}.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_path": blueprint_path,
+                "widget_name": widget_name,
+                "new_index": new_index,
+            }
+            logger.info(f"Reordering widget: {params}")
+            response = unreal.send_command("reorder_widget", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error reordering widget: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def reparent_widget(
+        ctx: Context[Any, Any, Any],
+        blueprint_path: str,
+        widget_name: str,
+        new_parent_name: str,
+        index: int = -1,
+    ) -> dict[str, Any]:
+        """
+        Move an existing widget under a different parent panel.
+
+        Detaches the widget from its current parent (RemoveChild) and inserts
+        it into the new panel (InsertChildAt at the given index, or AddChild
+        when index = -1 / out of range). Old slot properties are LOST — the new
+        panel creates a slot of its own type (returned as slot_type); re-apply
+        alignment/padding via set_widget_property("Slot.*") afterwards.
+
+        Args:
+            blueprint_path: Full /Game/... path of the Widget Blueprint.
+            widget_name: Name of the widget instance to move. Cannot be the
+                root widget, the new parent itself, or an ancestor of it.
+            new_parent_name: Name of an existing panel widget (VerticalBox,
+                Overlay, CanvasPanel, ...) to become the new parent.
+            index: Target child index in the new parent; -1 (default) appends
+                at the end.
+
+        Returns:
+            {success, widget_name, old_parent, new_parent, index, slot_type}.
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params = {
+                "blueprint_path": blueprint_path,
+                "widget_name": widget_name,
+                "new_parent_name": new_parent_name,
+                "index": index,
+            }
+            logger.info(f"Reparenting widget: {params}")
+            response = unreal.send_command("reparent_widget", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error reparenting widget: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
     def set_widget_property(
         ctx: Context[Any, Any, Any],
         blueprint_path: str,
