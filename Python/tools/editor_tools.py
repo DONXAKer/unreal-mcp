@@ -456,4 +456,327 @@ def register_editor_tools(mcp: FastMCP) -> None:
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    # ─────────────────────────────────────────────────────────────────────
+    # Lookdev / deterministic framing (v3.14.0)
+    # ─────────────────────────────────────────────────────────────────────
+
+    @mcp.tool()
+    def viewport_set_camera(
+        ctx: Context[Any, Any, Any],
+        location: list[float] = None,
+        rotation: list[float] = None,
+        fov: float = 0.0,
+    ) -> dict[str, Any]:
+        """Set the perspective level viewport camera to an exact pose.
+
+        Unlike `focus_viewport` (which frames a target and is therefore not
+        reproducible run-to-run), this sets absolute camera state — the
+        precondition for comparing two frames of the same shot.
+
+        Args:
+            location: world position [x, y, z] in UU. Omit to keep current.
+            rotation: [pitch, yaw, roll] in degrees. Omit to keep current.
+            fov: horizontal field of view in degrees. <=0 keeps current.
+
+        Example:
+            viewport_set_camera(location=[0, -2500, 2100], rotation=[-48, 90, 0], fov=60)
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {}
+            if location is not None:
+                params["location"] = location
+            if rotation is not None:
+                params["rotation"] = rotation
+            if fov and fov > 0:
+                params["fov"] = fov
+            response = unreal.send_command("viewport_set_camera", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting viewport camera: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def viewport_get_camera(ctx: Context[Any, Any, Any]) -> dict[str, Any]:
+        """Read the perspective level viewport camera pose.
+
+        Returns {"location": [x,y,z], "rotation": [pitch,yaw,roll], "fov": float}.
+        Use it to capture a pose you framed by hand and paste it into a shot
+        definition.
+
+        Example:
+            viewport_get_camera()
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("viewport_get_camera", {})
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error reading viewport camera: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def viewport_set_view_mode(
+        ctx: Context[Any, Any, Any],
+        mode: str = "lit",
+    ) -> dict[str, Any]:
+        """Set the level viewport view mode, including the Path Tracer.
+
+        Args:
+            mode: one of "lit", "unlit", "wireframe", "detaillighting",
+                "lightingonly", "shadercomplexity", "pathtracing".
+
+        Path tracing requires ray tracing enabled in project settings and needs
+        a few seconds to accumulate samples before a clean capture. Capture the
+        resulting frame with `take_screenshot` (it already supports hi-res via
+        resolution_x/resolution_y).
+
+        Example:
+            viewport_set_view_mode(mode="pathtracing")
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("viewport_set_view_mode", {"mode": mode})
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting view mode: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def viewport_capture(
+        ctx: Context[Any, Any, Any],
+        filename: str = "MCPViewport.png",
+    ) -> dict[str, Any]:
+        """Capture the level viewport synchronously to a PNG.
+
+        Use this instead of `take_screenshot` when the editor is NOT in PIE.
+        `take_screenshot` goes through FScreenshotRequest, which is serviced by
+        the game viewport — in a plain editor session it never fires and no file
+        is ever written. This command draws the level viewport and reads its
+        pixels immediately, so the file exists by the time the call returns and
+        the caller does not have to poll.
+
+        Args:
+            filename: PNG name written under <ProjectSaved>/Screenshots/.
+
+        The captured size follows the viewport, so it is not settable here — for
+        an exact output size use PIE plus `take_screenshot` with
+        resolution_x/resolution_y.
+
+        Example:
+            viewport_set_camera(location=[0, -2500, 2100], rotation=[-48, 90, 0])
+            viewport_capture(filename="board_overview.png")
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("viewport_capture", {"filename": filename})
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error capturing viewport: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def postprocess_get_params(
+        ctx: Context[Any, Any, Any],
+        actor_name: str = "",
+    ) -> dict[str, Any]:
+        """Read the overridden FPostProcessSettings of a PostProcessVolume.
+
+        Only OVERRIDDEN parameters are returned — a full dump of
+        FPostProcessSettings is hundreds of fields, of which a handful actually
+        affect the frame.
+
+        Args:
+            actor_name: name of the PostProcessVolume actor in the level.
+
+        Example:
+            postprocess_get_params(actor_name="PP_GameMap_Military")
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            response = unreal.send_command("postprocess_get_params", {"actor_name": actor_name})
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error reading post process params: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def postprocess_set_params(
+        ctx: Context[Any, Any, Any],
+        actor_name: str = "",
+        settings: dict = None,
+        unbound: bool = None,
+        priority: float = None,
+        blend_weight: float = None,
+    ) -> dict[str, Any]:
+        """Write FPostProcessSettings on a PostProcessVolume.
+
+        For every key written, the paired `bOverride_<Key>` flag is set to true.
+        Without that flag the engine silently ignores the value — which is why
+        generic `set_actor_property` appears to succeed while the frame does not
+        change.
+
+        Args:
+            actor_name: name of the PostProcessVolume actor in the level.
+            settings: {PropertyName: value}. Numbers for scalars; arrays of 3-4
+                numbers for FVector / FVector4 / FLinearColor properties.
+            unbound: optional — set the volume to infinite extent.
+            priority: optional volume priority.
+            blend_weight: optional blend weight.
+
+        Returns applied[] and failed[] so a partial write is visible.
+        The level is left dirty — call `save_level` to persist.
+
+        Example:
+            postprocess_set_params(
+                actor_name="PP_GameMap_Military",
+                settings={"ColorSaturation": [0.8, 0.8, 0.8, 1.0], "BloomIntensity": 0.35},
+            )
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {
+                "actor_name": actor_name,
+                "settings": settings if settings is not None else {},
+            }
+            if unbound is not None:
+                params["unbound"] = unbound
+            if priority is not None:
+                params["priority"] = priority
+            if blend_weight is not None:
+                params["blend_weight"] = blend_weight
+            response = unreal.send_command("postprocess_set_params", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error writing post process params: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def actor_get_component_properties(
+        ctx: Context[Any, Any, Any],
+        actor_name: str,
+        component_name: str = "",
+        filter: str = "",
+    ) -> dict[str, Any]:
+        """Read properties of a component on a level actor.
+
+        Without `component_name` the components are ENUMERATED instead (name +
+        class), so the caller can discover the right name rather than guess it —
+        e.g. a DirectionalLight actor keeps its settings on "LightComponent0",
+        not on the actor itself.
+
+        Args:
+            actor_name: name of the actor in the level.
+            component_name: component to inspect. Empty = list components.
+            filter: optional substring filter on property names. Strongly
+                recommended — UDirectionalLightComponent has hundreds of fields.
+
+        Example:
+            actor_get_component_properties(actor_name="SunLight")
+            actor_get_component_properties(
+                actor_name="SunLight", component_name="LightComponent0",
+                filter="Intensity")
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {"actor_name": actor_name}
+            if component_name:
+                params["component_name"] = component_name
+            if filter:
+                params["filter"] = filter
+            response = unreal.send_command("actor_get_component_properties", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error reading component properties: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def actor_set_component_property(
+        ctx: Context[Any, Any, Any],
+        actor_name: str,
+        component_name: str,
+        property_name: str,
+        property_value: Any,
+    ) -> dict[str, Any]:
+        """Write a property on a component of a level actor.
+
+        Use this — not `set_actor_property` — for lighting, fog and atmosphere:
+        those settings live on the COMPONENT, and the command issues
+        PostEditChangeProperty + MarkRenderStateDirty so the frame actually
+        updates instead of waiting for a random invalidation.
+
+        Args:
+            actor_name: name of the actor in the level.
+            component_name: component that owns the property (empty = root).
+            property_name: reflected property name (exact case).
+            property_value: number, bool, string, or array of numbers for
+                FVector / FRotator / FLinearColor properties.
+
+        Example:
+            actor_set_component_property(
+                actor_name="SunLight", component_name="LightComponent0",
+                property_name="Intensity", property_value=8.0)
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {
+                "actor_name": actor_name,
+                "component_name": component_name,
+                "property_name": property_name,
+                "property_value": property_value,
+            }
+            response = unreal.send_command("actor_set_component_property", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error writing component property: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Editor tools registered successfully")

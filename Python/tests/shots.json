@@ -1,0 +1,99 @@
+{
+  "_comment": [
+    "TOOL-SHOT-001 shot definitions. JSON rather than YAML: the Python env here",
+    "has no PyYAML and this config is not worth a new dependency.",
+    "",
+    "Shot types:",
+    "  static - one frame from an exact camera pose",
+    "  orbit  - N frames around a pivot; lets the reviewer judge proportions,",
+    "           silhouette and scale from every angle, not just one lucky one",
+    "",
+    "Target corridors come from the art direction reference: Broken Arrow",
+    "(modern military RTS, top-down tactical). Desaturated but not grey,",
+    "readable midtones, almost no blown highlights."
+  ],
+
+  "defaults": {
+    "level": "/Game/Maps/Levels/Game_Map",
+    "resolution": [1920, 1080],
+    "view_mode": "lit",
+    "targets": {
+      "brightness": [0.18, 0.55],
+      "contrast": [0.12, 0.35],
+      "saturation": [0.15, 0.45],
+      "overexposed": [0.0, 0.02],
+      "crushed_blacks": [0.0, 0.12]
+    }
+  },
+
+  "shots": [
+    {
+      "name": "board_overview",
+      "type": "static",
+      "description": "Whole 8x8 board from the standard tactical angle. The frame the player sees most.",
+      "camera": {
+        "location": [0, -2500, 2100],
+        "rotation": [-48, 90, 0],
+        "fov": 60
+      },
+      "reference": "lookdev/board_overview_target.png"
+    },
+    {
+      "name": "board_low_angle",
+      "type": "static",
+      "description": "Low tactical angle - exposes silhouettes against the sky and any flat lighting.",
+      "camera": {
+        "location": [0, -3200, 700],
+        "rotation": [-12, 90, 0],
+        "fov": 55
+      },
+      "reference": "lookdev/board_low_angle_target.png"
+    },
+    {
+      "name": "unit_orbit",
+      "type": "orbit",
+      "description": "Turntable around a single unit. Judges proportions, panel detail and scale versus the tile from all sides.",
+      "pivot": [0, 0, 60],
+      "radius": 420,
+      "height": 260,
+      "steps": 8,
+      "fov": 45,
+      "resolution": [1280, 1280],
+      "reference": "lookdev/unit_orbit_target.png",
+      "targets": {
+        "brightness": [0.15, 0.60],
+        "contrast": [0.10, 0.40],
+        "saturation": [0.10, 0.50],
+        "overexposed": [0.0, 0.03],
+        "crushed_blacks": [0.0, 0.20]
+      }
+    },
+    {
+      "name": "environment_orbit",
+      "type": "orbit",
+      "description": "Wide turntable around the board centre - terrain, props and the border ring from every side.",
+      "pivot": [0, 0, 0],
+      "radius": 3000,
+      "height": 1400,
+      "steps": 6,
+      "fov": 60,
+      "reference": "lookdev/environment_orbit_target.png"
+    }
+  ],
+
+  "mesh_audit": {
+    "_comment": [
+      "Numeric scale/quality audit via mesh_get_stats. Answers 'is the figure",
+      "the right size and good enough' without looking at a single pixel.",
+      "Thresholds come from ArtDirection_StyleGuide section 0."
+    ],
+    "tile_size": 100.0,
+    "thresholds": {
+      "min_triangles_lod0": 10000,
+      "min_texture_dim": 2048,
+      "max_size_in_tiles": 2.5,
+      "min_size_in_tiles": 0.25
+    },
+    "assets": []
+  }
+}

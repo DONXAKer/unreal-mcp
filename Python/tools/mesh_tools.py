@@ -191,4 +191,137 @@ def register_mesh_tools(mcp: FastMCP) -> None:
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    @mcp.tool()
+    def mesh_get_stats(
+        ctx: Context[Any, Any, Any],
+        assetPath: str = "",
+        tileSize: float = 100.0,
+    ) -> dict[str, Any]:
+        """Read-only size/quality audit of a UStaticMesh.
+
+        Answers "is this figure the right size and good enough?" with numbers
+        instead of a look: bounding size in UU and in board tiles, LOD0
+        triangles and vertices, LOD count, Nanite flag, and the maximum texture
+        resolution used per material slot.
+
+        Args:
+            assetPath: /Game/... path to an existing UStaticMesh.
+            tileSize: board tile size in UU used to express bounds in tiles.
+                Default 100. A unit wider than one tile almost always means an
+                import scale mistake.
+
+        Style-guide thresholds worth checking against the result:
+            trianglesLOD0 >= 10000 for vehicles, maxTextureDim >= 2048
+            (4096 for tanks), naniteEnabled true for static environment meshes.
+
+        Example:
+            mesh_get_stats(assetPath="/Game/Units/Meshes/T72/SM_t72", tileSize=100)
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {"assetPath": assetPath, "tileSize": tileSize}
+            response = unreal.send_command("mesh_get_stats", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error reading mesh stats: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def mesh_set_material(
+        ctx: Context[Any, Any, Any],
+        assetPath: str,
+        materialPath: str,
+        slot: int = -1,
+    ) -> dict[str, Any]:
+        """Assign a material to a slot of a UStaticMesh ASSET.
+
+        Use this instead of apply_material_to_actor when the mesh is spawned at
+        runtime (WarCard units, HISM decor): a level-actor override does not
+        survive into the game — the assignment has to live in the asset.
+
+        Args:
+            assetPath: /Game/... path to an existing UStaticMesh.
+            materialPath: /Game/... path to a UMaterialInterface.
+            slot: material slot index; -1 (default) assigns to ALL slots.
+                Index addressing is deliberate — AI-generated meshes have
+                unpredictable slot names like "tripo_mat_2304d4ef".
+
+        Example:
+            mesh_set_material(
+                assetPath="/Game/Environment/Meshes/SM_Env_Tree_Pine_A",
+                materialPath="/Game/Environment/Materials/MI_Tree_Pine")
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {
+                "assetPath": assetPath,
+                "materialPath": materialPath,
+                "slot": int(slot),
+            }
+            logger.info(f"Setting mesh material: {params}")
+            response = unreal.send_command("mesh_set_material", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting mesh material: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
+    @mcp.tool()
+    def mesh_set_build_scale(
+        ctx: Context[Any, Any, Any],
+        assetPath: str,
+        targetLongestAxisUU: float = None,
+        buildScale: float = None,
+    ) -> dict[str, Any]:
+        """Rescale a UStaticMesh asset by baking the scale into its vertices.
+
+        Nanite meshes ignore BuildSettings.BuildScale3D, so the scale is written
+        through ModifyMeshDescription / CommitMeshDescription instead. The
+        operation is ABSOLUTE and therefore idempotent: calling it repeatedly
+        with the same targetLongestAxisUU always yields the same size.
+
+        Provide exactly one of the two arguments.
+
+        Args:
+            assetPath: /Game/... path to an existing UStaticMesh.
+            targetLongestAxisUU: desired length of the longest bounding axis, in
+                UU. This is the normal way to use the command.
+            buildScale: absolute scale factor (not a relative multiplier).
+
+        Example:
+            mesh_set_build_scale(
+                assetPath="/Game/Environment/Meshes/SM_Env_Tree_Pine_A",
+                targetLongestAxisUU=90.0)
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {"assetPath": assetPath}
+            if targetLongestAxisUU is not None:
+                params["targetLongestAxisUU"] = float(targetLongestAxisUU)
+            if buildScale is not None:
+                params["buildScale"] = float(buildScale)
+            logger.info(f"Setting mesh build scale: {params}")
+            response = unreal.send_command("mesh_set_build_scale", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting mesh build scale: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Mesh tools registered successfully")

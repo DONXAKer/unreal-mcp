@@ -27,6 +27,8 @@
 #include "Engine/SCS_Node.h"
 #include "UObject/Field.h"
 #include "UObject/FieldPath.h"
+#include "UObject/SoftObjectPath.h"
+#include "UObject/SoftObjectPtr.h"
 #include "EditorAssetLibrary.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetToolsModule.h"
@@ -2648,6 +2650,17 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetBlueprintPrope
         }
 
         ByteProp->SetIntPropertyValue(ValuePtr, ByteVal);
+    }
+    // SoftObjectProperty (TSoftObjectPtr<T>) — accepts /Game/... asset path string
+    else if (FSoftObjectProperty* SoftObjProp = CastField<FSoftObjectProperty>(Prop))
+    {
+        if (JsonType != EJson::String)
+        {
+            return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
+                FString::Printf(TEXT("SoftObjectProperty '%s' requires a string asset path"), *PropertyName));
+        }
+        const FString AssetPathStr = PropertyValue->AsString();
+        SoftObjProp->SetPropertyValue(ValuePtr, FSoftObjectPtr(FSoftObjectPath(AssetPathStr)));
     }
     else
     {

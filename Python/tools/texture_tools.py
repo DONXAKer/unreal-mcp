@@ -111,4 +111,58 @@ def register_texture_tools(mcp: FastMCP) -> None:
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    @mcp.tool()
+    def texture_set_properties(
+        ctx: Context[Any, Any, Any],
+        assetPath: str,
+        compression: str = None,
+        sRGB: bool = None,
+        flipGreenChannel: bool = None,
+    ) -> dict[str, Any]:
+        """
+        Change properties of an ALREADY imported UTexture2D.
+
+        Why this exists separately from import_texture: passing
+        compression="Normalmap" AT IMPORT TIME hangs the UE 5.8 importer for the
+        rest of the editor session (ImportAssetsAutomated stops returning assets).
+        Import normal / mask textures with the default compression, then fix the
+        type here — this path recompresses through a normal PostEditChange.
+
+        Setting compression to "Normalmap" or "Grayscale" clears sRGB
+        automatically (linear data).
+
+        Args:
+            assetPath: Full /Game/... path of an existing UTexture2D.
+            compression: TextureCompressionSettings short code, e.g. "BC7",
+                "Normalmap", "Masks", "Grayscale", "Default".
+            sRGB: explicit sRGB flag (applied after the compression auto-rule).
+            flipGreenChannel: flip the green channel (DirectX vs OpenGL normals).
+
+        Example:
+            texture_set_properties(
+                assetPath="/Game/Maps/Terrain/T_Splat_1",
+                compression="Masks", sRGB=False)
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            params: dict[str, Any] = {"assetPath": assetPath}
+            if compression is not None:
+                params["compression"] = compression
+            if sRGB is not None:
+                params["sRGB"] = bool(sRGB)
+            if flipGreenChannel is not None:
+                params["flipGreenChannel"] = bool(flipGreenChannel)
+            logger.info(f"Setting texture properties: {params}")
+            response = unreal.send_command("texture_set_properties", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error setting texture properties: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Texture tools registered successfully")

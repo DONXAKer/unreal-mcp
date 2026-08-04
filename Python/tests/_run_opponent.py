@@ -35,6 +35,18 @@ def main() -> int:
     try:
         while time.time() < deadline:
             time.sleep(5)
+            # Партия завершена — полный рестарт бота (OpponentBot одноразовый:
+            # фазовые флаги не рассчитаны на вторую партию) и снова в очередь.
+            if bot.game_id and getattr(bot, "winner_id", None):
+                print("BOT RESTART: партия завершена — новый цикл", flush=True)
+                bot.close()
+                time.sleep(2.0)
+                bot = OpponentBot(get_test_jwt(login, pwd), name="bot", full_play=True)
+                if not bot.start():
+                    print("FAIL: бот не переподключился", flush=True)
+                    return 1
+                requeue_at = time.time() + 45.0
+                continue
             # Сервер вычищает очередь по queue-wait (cleanupExpiredSearches,
             # раз в минуту) — пока матч не найден, переподставляемся в очередь
             # каждые 45с (idempotent: «already in queue» сервер игнорирует).

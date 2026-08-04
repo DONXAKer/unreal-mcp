@@ -297,7 +297,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.13.0"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.21.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -310,7 +310,16 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("set_actor_property") ||
                      CommandType == TEXT("focus_viewport") ||
                      CommandType == TEXT("take_screenshot") ||
-                     CommandType == TEXT("viewport_take_screenshot"))
+                     CommandType == TEXT("viewport_take_screenshot") ||
+                     // Lookdev / deterministic framing (v3.14.0)
+                     CommandType == TEXT("viewport_set_camera") ||
+                     CommandType == TEXT("viewport_get_camera") ||
+                     CommandType == TEXT("viewport_set_view_mode") ||
+                     CommandType == TEXT("viewport_capture") ||
+                     CommandType == TEXT("actor_get_component_properties") ||
+                     CommandType == TEXT("actor_set_component_property") ||
+                     CommandType == TEXT("postprocess_get_params") ||
+                     CommandType == TEXT("postprocess_set_params"))
             {
                 ResultJson = EditorCommands->HandleCommand(CommandType, Params);
             }
@@ -386,6 +395,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             }
             // Texture Pipeline Commands (MCP-CONTENT-002)
             else if (CommandType == TEXT("import_texture") ||
+                     CommandType == TEXT("texture_set_properties") ||
                      CommandType == TEXT("generate_placeholder_texture"))
             {
                 ResultJson = TextureCommands->HandleCommand(CommandType, Params);
@@ -404,7 +414,10 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             else if (CommandType == TEXT("import_static_mesh") ||
                      CommandType == TEXT("generate_box_static_mesh") ||
                      CommandType == TEXT("set_nanite_enabled") ||
-                     CommandType == TEXT("import_skeletal_mesh"))
+                     CommandType == TEXT("import_skeletal_mesh") ||
+                     CommandType == TEXT("mesh_get_stats") ||
+                     CommandType == TEXT("mesh_set_material") ||
+                     CommandType == TEXT("mesh_set_build_scale"))
             {
                 ResultJson = MeshCommands->HandleCommand(CommandType, Params);
             }
@@ -419,8 +432,9 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             {
                 ResultJson = LevelCommands->HandleCommand(CommandType, Params);
             }
-            // Landscape Commands (v3.10.0)
-            else if (CommandType == TEXT("create_landscape"))
+            // Landscape Commands (v3.10.0; landscape_set_properties v3.21.0)
+            else if (CommandType == TEXT("create_landscape") ||
+                     CommandType == TEXT("landscape_set_properties"))
             {
                 ResultJson = LandscapeCommands->HandleCommand(CommandType, Params);
             }

@@ -356,7 +356,9 @@ def register_material_tools(mcp: FastMCP) -> None:
             assetPath: Full /Game/... path to the UMaterial asset.
             nodeType: Node type — one of: Constant | Constant3Vector | ScalarParameter |
                 VectorParameter | TextureSample | TextureSampleParameter2D |
-                Lerp | Multiply | Add | Panner | Noise.
+                Lerp | Multiply | Add | Panner | TextureCoordinate | Noise.
+                TextureCoordinate feeds a sampler's UVs — without it a sampler
+                uses TexCoord0 as-is, so a unique unwrap stretches the texture.
             nodeId: Unique string ID stored in the node Desc field for later reference.
             posX: X position in the graph editor (default 0).
             posY: Y position in the graph editor (default 0).
@@ -457,6 +459,9 @@ def register_material_tools(mcp: FastMCP) -> None:
           - VectorParameter:         ParameterName (str), DefaultValue ([r, g, b, a])
           - TextureSample:           Texture (str, /Game/... asset path)
           - TextureSampleParameter2D: Texture (str), ParameterName (str)
+          - Panner:                  SpeedX (float), SpeedY (float)
+          - TextureCoordinate:       UTiling (float), VTiling (float),
+                                     CoordinateIndex (int)
           - Noise:                   Scale (float), Levels (int)
 
         Args:

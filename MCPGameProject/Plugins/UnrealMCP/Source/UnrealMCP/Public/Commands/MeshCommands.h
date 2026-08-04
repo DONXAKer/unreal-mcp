@@ -78,4 +78,40 @@ private:
      *   - ifExists    (string, optional): skip | overwrite | fail | update. Default skip.
      */
     TSharedPtr<FJsonObject> HandleImportSkeletalMesh(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * mesh_get_stats — read-only аудит габаритов и качества UStaticMesh (v3.14.0).
+     *
+     * Отвечает на вопрос «фигура правильного размера и достаточного качества?»
+     * числами, а не взглядом: габариты в UU (и в тайлах поля), треугольники LOD0,
+     * число LOD, Nanite, разрешения используемых текстур.
+     *
+     * Params:
+     *   - assetPath  (string, required): /Game/... путь к существующему UStaticMesh.
+     *   - tileSize   (float, optional): размер тайла поля в UU для пересчёта
+     *                габаритов в тайлы. Default 100.
+     */
+    TSharedPtr<FJsonObject> HandleMeshGetStats(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * mesh_set_material — назначить материал на слот(ы) UStaticMesh-ассета (v3.16.0).
+     * Params: assetPath, materialPath, slot (int, опц.; <0 = все слоты).
+     */
+    TSharedPtr<FJsonObject> HandleMeshSetMaterial(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * mesh_set_build_scale — правит масштаб В САМОМ АССЕТЕ через
+     * BuildSettings.BuildScale3D + Build(). Нужен, когда меш импортирован не в
+     * тех единицах: патчить масштаб при спавне неправильно, ошибка должна
+     * чиниться в источнике.
+     *
+     * ИДЕМПОТЕНТНА: масштаб считается от габаритов ИСХОДНОЙ геометрии
+     * (MeshDescription), а не от границ собранного меша, поэтому повторные
+     * вызовы не накапливаются. Относительный множитель НЕ поддерживается.
+     *
+     * Params: assetPath, плюс ОДНО из:
+     *   - targetLongestAxisUU (float): целевой габарит по длинной оси в UU;
+     *   - buildScale          (float): абсолютный BuildScale3D.
+     */
+    TSharedPtr<FJsonObject> HandleMeshSetBuildScale(const TSharedPtr<FJsonObject>& Params);
 };

@@ -53,4 +53,12 @@ private:
      *   - ifExists   (string, optional): "skip" | "overwrite" | "update" | "fail".
      */
     TSharedPtr<FJsonObject> HandleGeneratePlaceholderTexture(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * texture_set_properties — правка свойств уже импортированной текстуры
+     * (v3.18.0). Существует потому, что compression="Normalmap" В МОМЕНТ импорта
+     * вешает импортёр UE 5.8; ставить тип сжатия надо после.
+     * Params: assetPath, compression (опц.), sRGB (опц.), flipGreenChannel (опц.).
+     */
+    TSharedPtr<FJsonObject> HandleTextureSetProperties(const TSharedPtr<FJsonObject>& Params);
 };

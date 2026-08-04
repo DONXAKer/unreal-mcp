@@ -15,6 +15,7 @@
 #include "Materials/MaterialExpressionMultiply.h"
 #include "Materials/MaterialExpressionAdd.h"
 #include "Materials/MaterialExpressionPanner.h"
+#include "Materials/MaterialExpressionTextureCoordinate.h"
 #include "Materials/MaterialExpressionNoise.h"
 #include "Factories/MaterialInstanceConstantFactoryNew.h"
 #include "Factories/MaterialFactoryNew.h"
@@ -515,6 +516,10 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialCreate(const TSharedPtr
         Mat->MaterialDomain = EMaterialDomain::MD_Surface;
     }
 
+    // Без PostEditChange граф записан, но список параметров материала не
+    // пересобирается — дочерние Material Instance не видят добавленные
+    // TextureSampleParameter2D/ScalarParameter и отвечают not_in_parent.
+    Mat->PostEditChange();
     Mat->MarkPackageDirty();
     UEditorAssetLibrary::SaveAsset(AssetPath, /*bOnlyIfIsDirty=*/false);
 
@@ -587,6 +592,9 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialAddNode(const TSharedPt
     else if (NodeType == TEXT("Multiply"))                 NodeClass = UMaterialExpressionMultiply::StaticClass();
     else if (NodeType == TEXT("Add"))                      NodeClass = UMaterialExpressionAdd::StaticClass();
     else if (NodeType == TEXT("Panner"))                   NodeClass = UMaterialExpressionPanner::StaticClass();
+    // TextureCoordinate — без него нельзя тайлить текстуру: сэмплер без входа UV
+    // берёт TexCoord0 как есть, и уникальная развёртка меша растягивает картинку.
+    else if (NodeType == TEXT("TextureCoordinate"))         NodeClass = UMaterialExpressionTextureCoordinate::StaticClass();
     else if (NodeType == TEXT("Noise"))                    NodeClass = UMaterialExpressionNoise::StaticClass();
 
     if (!NodeClass)
@@ -612,6 +620,10 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialAddNode(const TSharedPt
     // Store the caller-supplied ID in the Desc field so we can find this node later
     Expr->Desc = NodeId;
 
+    // Без PostEditChange граф записан, но список параметров материала не
+    // пересобирается — дочерние Material Instance не видят добавленные
+    // TextureSampleParameter2D/ScalarParameter и отвечают not_in_parent.
+    Mat->PostEditChange();
     Mat->MarkPackageDirty();
     UEditorAssetLibrary::SaveAsset(AssetPath, /*bOnlyIfIsDirty=*/false);
 
@@ -768,6 +780,10 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialConnect(const TSharedPt
         }
     }
 
+    // Без PostEditChange граф записан, но список параметров материала не
+    // пересобирается — дочерние Material Instance не видят добавленные
+    // TextureSampleParameter2D/ScalarParameter и отвечают not_in_parent.
+    Mat->PostEditChange();
     Mat->MarkPackageDirty();
     UEditorAssetLibrary::SaveAsset(AssetPath, /*bOnlyIfIsDirty=*/false);
 
@@ -992,6 +1008,31 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialSetNodeParam(const TSha
             }
         }
 
+        // UMaterialExpressionTextureCoordinate: UTiling / VTiling (float),
+        // CoordinateIndex (int). Без этого блока нода из 3.20.0 создавалась, но
+        // оставалась при дефолтном тайлинге 1×1 — то есть бесполезной.
+        if (!bHandled)
+        {
+            if (UMaterialExpressionTextureCoordinate* TexCoord = Cast<UMaterialExpressionTextureCoordinate>(Expr))
+            {
+                if (Key == TEXT("UTiling") && Val->Type == EJson::Number)
+                {
+                    TexCoord->UTiling = static_cast<float>(Val->AsNumber());
+                    bHandled = true;
+                }
+                else if (Key == TEXT("VTiling") && Val->Type == EJson::Number)
+                {
+                    TexCoord->VTiling = static_cast<float>(Val->AsNumber());
+                    bHandled = true;
+                }
+                else if (Key == TEXT("CoordinateIndex") && Val->Type == EJson::Number)
+                {
+                    TexCoord->CoordinateIndex = static_cast<int32>(Val->AsNumber());
+                    bHandled = true;
+                }
+            }
+        }
+
         if (bHandled)
         {
             Applied.Add(Key);
@@ -1002,6 +1043,10 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialSetNodeParam(const TSha
         }
     }
 
+    // Без PostEditChange граф записан, но список параметров материала не
+    // пересобирается — дочерние Material Instance не видят добавленные
+    // TextureSampleParameter2D/ScalarParameter и отвечают not_in_parent.
+    Mat->PostEditChange();
     Mat->MarkPackageDirty();
     UEditorAssetLibrary::SaveAsset(AssetPath, /*bOnlyIfIsDirty=*/false);
 

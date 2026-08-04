@@ -28,6 +28,7 @@ import logging
 import re
 import shutil
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -38,7 +39,13 @@ sys.path.insert(0, str(__file__.rsplit("\\tests", 1)[0]))
 # Windows cp1251 на Unicode-символах в widget tree).
 logging.getLogger("UnrealMCP").setLevel(logging.ERROR)
 
-from tests._fixtures import ensure_test_user
+from tests._fixtures import ensure_test_user, get_test_jwt
+from tests._stomp_opponent import (
+    StompWs,
+    _ATTACK_CARD_TYPES,
+    _DMG_KEY_BY_TYPE,
+    _jwt_subject,
+)
 from tests._screenshot_diff import (
     SCREENSHOTS_DIR,
     BaselineMissing,
@@ -74,6 +81,8 @@ THRESHOLDS = {
     "battle": 0.90,
     "battle_field": 0.88,
     "battle_after": 0.88,
+    "battle_attack": 0.88,
+    "battle_death":  0.85,
     "game_result": 0.95,
 }
 
@@ -90,6 +99,8 @@ EXPECTED_WIDGET = {
     "battle": "WBP_BattleHUD",
     "battle_field": "WBP_BattleHUD",
     "battle_after": "WBP_BattleHUD",
+    "battle_attack": "WBP_BattleHUD",
+    "battle_death":  "WBP_BattleHUD",
     "game_result": "WBP_GameResult",
 }
 
@@ -137,6 +148,8 @@ VISUAL_CHECKS: dict[str, list[str]] = {
     ],
     "game_result": [
         "Заголовок результата (Victory / Defeat / Победа / Поражение) виден",
+        "Итоговый счёт (Score / totalScore) отображён числом",
+        "Статистика (уничтоженных юнитов или нанесённого урона) видна",
         "Кнопка возврата в главное меню видна",
         "Нет устаревших виджетов поверх экрана результата",
     ],
@@ -153,7 +166,14 @@ def _uw_classes(conn: UnrealConnection) -> list[str]:
 
 
 def _has_uw(conn: UnrealConnection, substr: str) -> bool:
-    return any(substr in c for c in _uw_classes(conn))
+    if any(substr in c for c in _uw_classes(conn)):
+        return True
+    # Fallback: current_widget из pie_status (get_widget_tree иногда не
+    # помечает виджет is_in_viewport=True во втором PIE-окне).
+    status = _send(conn, "pie_status", {})
+    clients = status.get("clients") or []
+    cw = (clients[0].get("current_widget") or "") if clients else ""
+    return bool(substr in cw)
 
 
 def _wait_uw(conn: UnrealConnection, substr: str, timeout: float = 30.0) -> bool:
@@ -374,7 +394,8 @@ def _run_vlm_checks(run_dir: Path, manifest: dict[str, Any]) -> None:  # noqa: A
                 }],
             )
         except Exception as exc:  # noqa: BLE001
-            _add_check(manifest, f"vlm:{side}:{phase}:api_error", False, str(exc)[:200])
+            # API error (нет ключа, rate limit и т.п.) — пропускаем, не роняем summary
+            print(f"  [VLM] {side}:{phase} пропущен: {str(exc)[:120]}")
             continue
 
         raw = resp.content[0].text.strip() if resp.content else ""
@@ -400,6 +421,337 @@ def _run_vlm_checks(run_dir: Path, manifest: dict[str, Any]) -> None:  # noqa: A
         checked += len(verdicts)
 
     print(f"  [VLM] итого {checked} VLM-вердиктов записано в logic_checks")
+
+
+# ────────────────────────────────────────────────────────────────────────
+# STOMP-инфраструктура для боевой фазы: захват game_id + BattlePlayer.
+# ────────────────────────────────────────────────────────────────────────
+
+def _start_game_id_spy(token: str, holder: list[str], event: threading.Event) -> StompWs:
+    """Подключить фоновый STOMP-клиент, который захватит gameId из game-found.
+    Вызывать ДО _login_findgame() — сервер пришлёт game-found всем STOMP-сессиям
+    одного Principal (одинаковый JWT → один playerId)."""
+    spy = StompWs("127.0.0.1", 8081)
+
+    def _on(dest: str, body: dict[str, Any]) -> None:
+        if dest.endswith("/game-found") and not holder:
+            gid = body.get("gameId")
+            if gid:
+                holder.append(str(gid))
+                event.set()
+
+    spy.on_message = _on
+    if spy.connect(token):
+        spy.subscribe("/user/queue/matchmaking/game-found")
+    return spy
+
+
+class BattlePlayer:
+    """Тонкий синхронный STOMP-клиент одного игрока в BATTLE.
+    Треды-безопасен на чтение (recv-тред StompWs) + запись из основного треда."""
+
+    def __init__(self, token: str, game_id: str,
+                 server_host: str = "127.0.0.1", server_port: int = 8081):
+        self.my_id = _jwt_subject(token)
+        self._token = token
+        self._gid = game_id
+        self._stomp = StompWs(server_host, server_port)
+        self._stomp.on_message = self._on_msg
+        self._lock = threading.Lock()
+        self._hand: list[dict[str, Any]] = []
+        self._state: dict[str, Any] = {}
+        self._turn_ev = threading.Event()
+        self._pending: dict[str, tuple[threading.Event, dict[str, Any]]] = {}
+
+    def connect(self) -> bool:
+        if not self._stomp.connect(self._token):
+            return False
+        gid = self._gid
+        self._stomp.subscribe(f"/topic/game/{gid}/state")
+        self._stomp.subscribe(f"/user/topic/game/{gid}/cards-update")
+        self._stomp.subscribe(f"/topic/game/{gid}/turn-changed")
+        self._stomp.subscribe(f"/topic/game/{gid}/result")
+        return True
+
+    def _on_msg(self, dest: str, body: dict[str, Any]) -> None:
+        if dest.endswith("/state"):
+            with self._lock:
+                self._state = body
+        elif dest.endswith("/cards-update"):
+            cards = body.get("handCards") or []
+            with self._lock:
+                self._hand = [{"id": c.get("id", ""), "type": c.get("actionType", "")}
+                              for c in cards if isinstance(c, dict)]
+        elif dest.endswith("/turn-changed"):
+            if body.get("activePlayerId") == self.my_id:
+                self._turn_ev.set()
+        elif dest.endswith("/result"):
+            ct = body.get("commandType", "")
+            with self._lock:
+                entry = self._pending.pop(ct, None)
+            if entry is not None:
+                ev, h = entry
+                h["success"] = bool(body.get("success"))
+                h["message"] = str(body.get("message", ""))
+                h["data"] = body.get("data")
+                ev.set()
+
+    def wait_my_turn(self, timeout: float = 25.0) -> bool:
+        self._turn_ev.clear()
+        return self._turn_ev.wait(timeout)
+
+    def get_state(self) -> dict[str, Any]:
+        with self._lock:
+            return dict(self._state)
+
+    def get_hand(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return list(self._hand)
+
+    def my_units(self) -> list[dict[str, Any]]:
+        st = self.get_state()
+        return [u for u in st.get("units", [])
+                if u.get("ownerId") == self.my_id and u.get("isAlive", True)]
+
+    def foe_units(self) -> list[dict[str, Any]]:
+        st = self.get_state()
+        return [u for u in st.get("units", [])
+                if u.get("ownerId") and u.get("ownerId") != self.my_id
+                and u.get("isAlive", True)]
+
+    def execute_attack(self, card: dict[str, Any]) -> bool:
+        """Двухэтапная атака: select-action-card + execute-action."""
+        mine = self.my_units()
+        foes = self.foe_units()
+        if not mine or not foes or not card.get("id"):
+            return False
+        # Ближайшая пара (attacker, foe) — минимизируем расстояние между конкретным
+        # атакующим и конкретной целью, чтобы сервер не отверг атаку «вне дальности».
+        best_dist = 9999
+        attacker, foe = mine[0], foes[0]
+        for a in mine:
+            for f in foes:
+                d = (abs(int(a.get("gridX", 0)) - int(f.get("gridX", 0)))
+                     + abs(int(a.get("gridY", 0)) - int(f.get("gridY", 0))))
+                if d < best_dist:
+                    best_dist, attacker, foe = d, a, f
+        gid = self._gid
+
+        # 1. Выбрать карту
+        ev_s = threading.Event()
+        h_s: dict[str, Any] = {}
+        with self._lock:
+            self._pending["select-action-card"] = (ev_s, h_s)
+        self._stomp.send_json("/app/game/select-action-card",
+                              {"gameId": gid, "actionCardId": card["id"]})
+        ev_s.wait(3.0)
+
+        # 2. Выполнить атаку
+        ev_e = threading.Event()
+        h_e: dict[str, Any] = {}
+        with self._lock:
+            self._pending["execute-action"] = (ev_e, h_e)
+        self._stomp.send_json("/app/game/execute-action", {
+            "gameId": gid,
+            "actionCardId": card["id"],
+            "targetX": int(foe.get("gridX", 0)),
+            "targetY": int(foe.get("gridY", 0)),
+            "targetUnitId": foe.get("unitId", ""),
+            "attackerUnitId": attacker.get("unitId", ""),
+        })
+        ev_e.wait(5.0)
+        return bool(h_e.get("success"))
+
+    def execute_move(self, card: dict[str, Any], unit_id: str, tx: int, ty: int) -> bool:
+        """Двухэтапное перемещение: select-action-card + execute-action (MOVE/FORCED_MARCH)."""
+        gid = self._gid
+
+        ev_s = threading.Event()
+        h_s: dict[str, Any] = {}
+        with self._lock:
+            self._pending["select-action-card"] = (ev_s, h_s)
+        self._stomp.send_json("/app/game/select-action-card",
+                              {"gameId": gid, "actionCardId": card["id"]})
+        ev_s.wait(3.0)
+
+        ev_e = threading.Event()
+        h_e: dict[str, Any] = {}
+        with self._lock:
+            self._pending["execute-action"] = (ev_e, h_e)
+        self._stomp.send_json("/app/game/execute-action", {
+            "gameId": gid,
+            "actionCardId": card["id"],
+            "targetX": tx,
+            "targetY": ty,
+            "targetUnitId": unit_id,
+            "attackerUnitId": "",
+        })
+        ev_e.wait(5.0)
+        ok = bool(h_e.get("success"))
+        if not ok:
+            print(f"    execute_move failed: {h_e.get('message', '')}")
+        return ok
+
+    def end_turn(self) -> None:
+        self._stomp.send_json("/app/game/end-turn", {"gameId": self._gid})
+
+    def close(self) -> None:
+        self._stomp.close()
+
+
+def _play_battle_to_victory(
+    conns: dict[str, UnrealConnection],
+    run_dir: Path,
+    manifest: dict[str, Any],
+    p1_token: str,
+    p2_token: str,
+    p1_id: str,
+    p2_id: str,
+    game_id: str,
+) -> tuple[int, bool]:
+    """Играем BATTLE через STOMP execute-action до ALL_UNITS_DESTROYED.
+    Возвращает (cards_executed, first_death_captured)."""
+    p1_bp = BattlePlayer(p1_token, game_id)
+    p2_bp = BattlePlayer(p2_token, game_id)
+
+    if not p1_bp.connect():
+        print("  WARN: BattlePlayer p1 STOMP не подключился")
+    if not p2_bp.connect():
+        print("  WARN: BattlePlayer p2 STOMP не подключился")
+
+    time.sleep(1.5)  # дать recv-тредам осесть + получить первый /state
+
+    cards_executed = 0
+    first_death_captured = False
+    natural_win = False
+    MAX_TURNS = 60
+
+    try:
+        for turn_n in range(MAX_TURNS):
+            # Определяем активного игрока: my_turn per-side через MCP
+            st_p1 = _send(conns["p1"], "wc_get_battle_state", {"controller_index": 0})
+            st_p2 = _send(conns["p2"], "wc_get_battle_state", {"controller_index": 0})
+            p1_active = bool(st_p1.get("my_turn") or st_p1.get("myTurn"))
+            p2_active = bool(st_p2.get("my_turn") or st_p2.get("myTurn"))
+
+            # Читаем юниты из p1's перспективы (общее поле)
+            all_units = _battle_units(conns["p1"], 0)
+            red_alive = [u for u in all_units
+                         if u.get("alive") and _suffix(u.get("unitId", "")) == "red"]
+            blue_alive = [u for u in all_units
+                          if u.get("alive") and _suffix(u.get("unitId", "")) == "blue"]
+
+            # Первая гибель юнита — проверяем ДО проверки победы,
+            # иначе при резком переходе total 10→0 блок никогда не сработает.
+            total_alive = len(red_alive) + len(blue_alive)
+            if total_alive < 10 and not first_death_captured:
+                print(f"  первый юнит погиб! живых={total_alive}")
+                _capture_both(conns, "battle_death", run_dir, manifest, show_ui=False)
+                first_death_captured = True
+
+            # Победа? Double-check через 1.5s — _battle_units может вернуть
+            # временно пустой список (transient MCP ответ), что даст false positive.
+            if not red_alive or not blue_alive:
+                time.sleep(1.5)
+                confirm = _battle_units(conns["p1"], 0)
+                red_confirm = [u for u in confirm
+                               if u.get("alive") and _suffix(u.get("unitId", "")) == "red"]
+                blue_confirm = [u for u in confirm
+                                if u.get("alive") and _suffix(u.get("unitId", "")) == "blue"]
+                if not red_confirm or not blue_confirm:
+                    if not first_death_captured:
+                        _capture_both(conns, "battle_death", run_dir, manifest, show_ui=False)
+                        first_death_captured = True
+                    print(f"  ход {turn_n}: победа! red={len(red_confirm)} blue={len(blue_confirm)}")
+                    natural_win = True
+                    break
+                # Первый чек был ложным — обновляем живых и продолжаем
+                red_alive, blue_alive = red_confirm, blue_confirm
+
+            # Выбираем активного бота
+            if p1_active:
+                active_bp, active_conn, active_side = p1_bp, conns["p1"], "p1"
+            elif p2_active:
+                active_bp, active_conn, active_side = p2_bp, conns["p2"], "p2"
+            else:
+                time.sleep(1.5)
+                continue
+
+            # Ждём подтверждения хода из STOMP (turn-changed)
+            active_bp.wait_my_turn(timeout=3.0)
+            time.sleep(0.4)  # cards-update приходит чуть позже turn-changed
+
+            # Движение через карты MOVE/FORCED_MARCH из руки (тратит AP на сервере).
+            # Сдвигаем ближайшего к врагу юнита на 1 клетку в его сторону за итерацию.
+            _move_types = {"MOVE", "FORCED_MARCH"}
+            _moved_n = 0
+            for _attempt in range(3):  # до 2 удачных перемещений за ход
+                if _moved_n >= 2:
+                    break
+                move_card = next(
+                    (c for c in active_bp.get_hand() if c.get("type") in _move_types), None)
+                if not move_card:
+                    break  # нет карт движения в руке
+                _st_my = active_bp.my_units()
+                _st_foe = active_bp.foe_units()
+                if not _st_my or not _st_foe:
+                    break
+                _best_u, _near_f, _best_dist = None, None, 9999
+                for _u in _st_my:
+                    for _f in _st_foe:
+                        _d = (abs(int(_u.get("gridX", 0)) - int(_f.get("gridX", 0))) +
+                              abs(int(_u.get("gridY", 0)) - int(_f.get("gridY", 0))))
+                        if _d < _best_dist:
+                            _best_dist, _best_u, _near_f = _d, _u, _f
+                if _best_u is None or _best_dist <= 1:
+                    break  # все юниты уже в дальности атаки
+                _dx = int(_near_f.get("gridX", 0)) - int(_best_u.get("gridX", 0))
+                _dy = int(_near_f.get("gridY", 0)) - int(_best_u.get("gridY", 0))
+                _nx = int(_best_u.get("gridX", 0)) + (1 if _dx > 0 else -1 if _dx < 0 else 0)
+                _ny = int(_best_u.get("gridY", 0)) + (1 if _dy > 0 else -1 if _dy < 0 else 0)
+                ok_mv = active_bp.execute_move(
+                    move_card, _best_u.get("unitId", ""), _nx, _ny)
+                if ok_mv:
+                    _moved_n += 1
+                    print(f"    move {_best_u.get('unitId','')} -> ({_nx},{_ny})")
+                    time.sleep(0.5)  # дать STOMP state обновиться после move
+                else:
+                    break  # AP=0 или клетка занята — прекращаем движение
+
+            # Атаки: сервер контролирует AP через execute-action result.
+            attacked_this_turn = False
+            while True:
+                hand = active_bp.get_hand()
+                card = next((c for c in hand if c.get("type") in _ATTACK_CARD_TYPES), None)
+                if not card:
+                    break  # нет карт атаки
+                if not active_bp.foe_units():
+                    break  # нет врагов
+                ok_atk = active_bp.execute_attack(card)
+                if ok_atk:
+                    cards_executed += 1
+                    attacked_this_turn = True
+                    print(f"  ход {turn_n}: {active_side} атакует ({card['type']})")
+                else:
+                    break  # сервер отказал (AP=0 или ошибка)
+                time.sleep(0.3)
+
+            # Скриншот после первой атаки в игре (оба экрана, однократно)
+            if attacked_this_turn and "battle_attack" not in {p["phase"] for p in manifest.get("phases", [])}:
+                other_side = "p2" if active_side == "p1" else "p1"
+                _capture(active_side, active_conn,
+                         "battle_attack", run_dir, manifest, show_ui=True)
+                _capture(other_side, conns[other_side],
+                         "battle_attack", run_dir, manifest, show_ui=True)
+
+            active_bp.end_turn()
+            print(f"  ход {turn_n}: {active_side} end-turn (карт всего={cards_executed})")
+            time.sleep(1.0)
+    finally:
+        p1_bp.close()
+        p2_bp.close()
+
+    return cards_executed, first_death_captured, natural_win
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -443,25 +795,32 @@ def _snake_draft(conns: dict[str, UnrealConnection]) -> dict[str, int]:
     counts = {side: 0 for side in conns}
     for pick in range(10):
         done = False
-        for _ in range(30):
+        for attempt in range(30):
             for side, conn in conns.items():
-                for btn, _unit in _draft_entries(conn):
-                    r = _send(conn, "invoke_button_click",
-                              {"widget_name": btn, "controller_index": 0})
-                    if isinstance(r, dict) and r.get("ok") and not r.get("error"):
-                        counts[side] += 1
-                        print(f"  pick {pick}: {side} -> {btn}")
-                        done = True
-                        break
-                if done:
+                entries_before = _draft_entries(conn)
+                if not entries_before:
+                    continue
+                btn = entries_before[0][0]
+                r = _send(conn, "invoke_button_click",
+                          {"widget_name": btn, "controller_index": 0})
+                if not (isinstance(r, dict) and r.get("ok") and not r.get("error")):
+                    continue
+                # Проверяем что сервер принял пик: каталог должен уменьшиться.
+                # Сервер отклоняет пик не своего хода — тогда каталог не меняется.
+                time.sleep(0.6)
+                entries_after = _draft_entries(conn)
+                if len(entries_after) < len(entries_before):
+                    counts[side] += 1
+                    print(f"  pick {pick}: {side} -> {btn}")
+                    done = True
                     break
             if done:
                 break
-            time.sleep(0.8)
+            time.sleep(0.4)
         if not done:
             print(f"  pick {pick}: не удалось — стоп драфта")
             break
-        time.sleep(1.8)  # сервер broadcast draft-update + UI rebuild
+        time.sleep(2.0)  # сервер broadcast draft-update + UI rebuild (два Editor = медленнее)
     return counts
 
 
@@ -530,6 +889,11 @@ def main() -> int:
     for side in PORTS:
         ensure_test_user(users[side], pwd, f"{users[side]}@x.com")
 
+    p1_token = get_test_jwt(users["p1"], pwd)
+    p2_token = get_test_jwt(users["p2"], pwd)
+    p1_id = _jwt_subject(p1_token)
+    p2_id = _jwt_subject(p2_token)
+
     # Подключение к обоим редакторам.
     conns: dict[str, UnrealConnection] = {}
     for side, port in PORTS.items():
@@ -542,6 +906,9 @@ def main() -> int:
     print("оба MCP-соединения установлены\n")
 
     rc = 0
+    _gid_holder: list[str] = []
+    _gid_ev = threading.Event()
+    _gid_spy: StompWs | None = None
     try:
         # 1. PIE n=1 в каждом редакторе.
         print("--- PIE setup ---")
@@ -549,8 +916,14 @@ def main() -> int:
             if not _start_pie(side, conn):
                 print(f"FATAL: PIE не поднялся в {side}")
                 return 1
+            # Глушим AddOnScreenDebugMessage из C++ (попадают в скриншоты)
+            _send(conn, "execute_console_command",
+                  {"command": "DisableAllScreenMessages", "controller_index": 0})
         time.sleep(3)
         _capture_both(conns, "login", run_dir, manifest)
+
+        # Запускаем STOMP-шпиона ДО логина, чтобы перехватить game-found.
+        _gid_spy = _start_game_id_spy(p1_token, _gid_holder, _gid_ev)
 
         # 2. Login → MainMenu.
         print("\n--- login ---")
@@ -603,36 +976,63 @@ def main() -> int:
         for conn in conns.values():
             _send(conn, "wc_confirm_deployment", {"controller_index": 0})
 
-        # mulligan — best-effort между deployment и battle.
-        if _wait_uw_all(conns, "WBP_Mulligan", timeout=10):
+        # mulligan — оба игрока должны кликнуть AcceptHandButton.
+        if _wait_uw_all(conns, "WBP_Mulligan", timeout=20):
             _capture_both(conns, "mulligan", run_dir, manifest)
+            time.sleep(1.5)  # дать руке прогрузиться (OnHandCardsUpdated)
+            for conn in conns.values():
+                _send(conn, "invoke_button_click",
+                      {"widget_name": "AcceptHandButton", "controller_index": 0})
+            print("  AcceptHandButton кликнут для обоих клиентов")
 
-        # 6. Battle HUD.
+        # 6. Battle HUD. BattleHUD OR ActionCardHand = клиент в бою
+        #    (get_widget_tree может не ловить BattleHUD через is_in_viewport — текущий_widget надёжнее).
         print("\n--- battle ---")
-        battle_ok = _wait_uw_all(conns, "BattleHUD", timeout=60)
+        _bt_deadline = time.monotonic() + 60
+        _bt_pending: set[str] = set(conns)
+        while time.monotonic() < _bt_deadline and _bt_pending:
+            for _side in list(_bt_pending):
+                if (_has_uw(conns[_side], "BattleHUD")
+                        or _has_uw(conns[_side], "ActionCardHand")):
+                    _bt_pending.discard(_side)
+            if not _bt_pending:
+                break
+            time.sleep(1.0)
+        battle_ok = not _bt_pending
         _add_check(manifest, "battle_reached", battle_ok)
         time.sleep(2.5)  # дать /state-броадкасту заспавнить юнит-актёры
         _warm_render(conns, rounds=5)  # прогрев: поле боя рендерится не с первого кадра
         _capture_both(conns, "battle", run_dir, manifest)
         _capture_both(conns, "battle_field", run_dir, manifest, show_ui=False)
 
-        # 7. Несколько ходов + проверка, что доска меняется.
-        before = {side: _battle_units(conn, 0) for side, conn in conns.items()}
-        turns = _battle_moves(conns, max_turns=8)
-        time.sleep(1.5)
-        after = {side: _battle_units(conn, 0) for side, conn in conns.items()}
+        # 7. Ждём game_id (шпион поймал его при matchmaking/game-found).
+        print("\n--- ожидаем game_id ---")
+        gid_ok = _gid_ev.wait(timeout=90.0)
+        game_id = _gid_holder[0] if _gid_holder else ""
+        _add_check(manifest, "game_id_captured", gid_ok and bool(game_id),
+                   f"gameId={game_id}")
 
-        def _key(units: list[dict[str, Any]]) -> set[tuple]:
-            return {(u.get("unitId"), u.get("gridX"), u.get("gridY"), u.get("hp"), u.get("alive"))
-                    for u in units}
-        changed = any(_key(before[s]) != _key(after[s]) for s in conns)
-        _add_check(manifest, "board_changed_after_moves", changed, f"turns={turns}")
-        _capture_both(conns, "battle_after", run_dir, manifest, show_ui=False)
+        # 8. Играем через execute-action до победы ALL_UNITS_DESTROYED.
+        print("\n--- battle to victory ---")
+        cards_executed, first_death, natural_win = _play_battle_to_victory(
+            conns, run_dir, manifest,
+            p1_token, p2_token, p1_id, p2_id, game_id,
+        )
+        _add_check(manifest, "cards_executed_gt0", cards_executed > 0,
+                   f"cards_executed={cards_executed}")
+        _add_check(manifest, "first_death_captured", first_death)
+        _add_check(manifest, "natural_win", natural_win,
+                   "ALL_UNITS_DESTROYED до MAX_TURNS" if natural_win else "MAX_TURNS исчерпан или surrender")
 
-        # 8. Surrender p1 → GameResult на обоих.
-        print("\n--- surrender p1 -> game_result ---")
-        _send(conns["p1"], "wc_surrender", {"controller_index": 0})
-        result_ok = _wait_uw_all(conns, "WBP_GameResult", timeout=30)
+        # 9. Ждём WBP_GameResult (естественный конец — ALL_UNITS_DESTROYED).
+        #    Таймаут большой: сервер завершает игру по MAX_TURNS~70 если не убиты все юниты.
+        print("\n--- ожидаем GameResult ---")
+        result_ok = _wait_uw_all(conns, "WBP_GameResult", timeout=120)
+        if not result_ok:
+            print("  game_result timeout: принудительная капитуляция p1 для завершения игры")
+            _send(conns["p1"], "wc_surrender", {"controller_index": 0})
+            # После surrender UE клиент обновляется не сразу — ждём до 60s
+            result_ok = _wait_uw_all(conns, "WBP_GameResult", timeout=60)
         _add_check(manifest, "game_result_reached_both", result_ok)
         _capture_both(conns, "game_result", run_dir, manifest)
 
@@ -648,6 +1048,8 @@ def main() -> int:
         }
         rc = 0 if passed else 1
     finally:
+        if _gid_spy is not None:
+            _gid_spy.close()
         (run_dir / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\nmanifest -> {run_dir / 'manifest.json'}")

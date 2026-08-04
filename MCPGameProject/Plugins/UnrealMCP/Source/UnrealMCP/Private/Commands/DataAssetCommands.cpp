@@ -6,6 +6,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "EditorAssetLibrary.h"
 #include "Factories/CSVImportFactory.h"
+#include "Misc/FileHelper.h"
 #include "Factories/SoundFactory.h"
 #include "Engine/DataTable.h"
 #include "Sound/SoundWave.h"
@@ -106,64 +107,77 @@ TSharedPtr<FJsonObject> FDataAssetCommands::HandleImportDataTableFromCsv(const T
             FString::Printf(TEXT("Cannot split '%s' into package+name"), *AssetPath), D);
     }
 
-    // Build factory.
-    UCSVImportFactory* Factory = NewObject<UCSVImportFactory>();
-    Factory->AddToRoot(); // prevent GC during import
-
-    // Optional rowStruct override — set on AutomatedImportSettings, not on the factory directly.
+    // Resolve rowStruct. UDataTableFactory suppresses its struct-picker dialog when
+    // Struct is pre-set, so rowStruct is REQUIRED in no-UI mode.
+    UScriptStruct* RowStruct = nullptr;
     FString RowStructPath;
     if (Params->TryGetStringField(TEXT("rowStruct"), RowStructPath) && !RowStructPath.IsEmpty())
     {
-        UScriptStruct* RowStruct = FindObject<UScriptStruct>(nullptr, *RowStructPath);
+        RowStruct = FindObject<UScriptStruct>(nullptr, *RowStructPath);
         if (!RowStruct)
         {
             RowStruct = LoadObject<UScriptStruct>(nullptr, *RowStructPath);
         }
-        if (RowStruct)
-        {
-            Factory->AutomatedImportSettings.ImportRowStruct = RowStruct;
-        }
-        else
-        {
-            UE_LOG(LogTemp, Warning, TEXT("DataAssetCommands: rowStruct '%s' not found; using factory default."), *RowStructPath);
-        }
+    }
+    if (!RowStruct)
+    {
+        TSharedPtr<FJsonObject> D = MakeShared<FJsonObject>();
+        D->SetStringField(TEXT("rowStructPath"), RowStructPath.IsEmpty() ? TEXT("<none>") : RowStructPath);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"), TEXT("ROWSTRUCT_NOT_FOUND"),
+            FString::Printf(TEXT("UScriptStruct '%s' not found — rowStruct is required (no-UI mode)"), *RowStructPath), D);
     }
 
-    // Run import via AssetTools.ImportAssets (not ImportAssetsWithDialog which opens a file dialog).
-    IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
+    // Read CSV content synchronously — avoids blocking I/O inside the factory pipeline.
+    FString CSVContent;
+    if (!FFileHelper::LoadFileToString(CSVContent, *CsvPath))
+    {
+        TSharedPtr<FJsonObject> D = MakeShared<FJsonObject>();
+        D->SetStringField(TEXT("csvPath"), CsvPath);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("io"), TEXT("CSV_READ_FAILED"),
+            FString::Printf(TEXT("FFileHelper failed to read '%s'"), *CsvPath), D);
+    }
 
-    TArray<UObject*> Imported = AssetTools.ImportAssets(
-        TArray<FString>{ CsvPath },
-        PackagePath,
-        Factory,
-        /*bSyncToBrowser=*/false
-    );
-
-    Factory->RemoveFromRoot();
-
-    if (Imported.Num() == 0 || !Imported[0])
+    // Create the DataTable UObject directly — no factory, no dialogs, no blocking calls.
+    const FString PkgName = PackagePath + TEXT("/") + AssetName;
+    UPackage* Pkg = CreatePackage(*PkgName);
+    if (!Pkg)
     {
         return FAssetCommonUtils::MakeFailureResponse(
-            TEXT("ue_internal"), TEXT("DATATABLE_IMPORT_FAILED"),
-            FString::Printf(TEXT("CSVImportFactory returned no asset for '%s'"), *CsvPath));
+            TEXT("ue_internal"), TEXT("PACKAGE_CREATE_FAILED"),
+            FString::Printf(TEXT("CreatePackage failed for '%s'"), *PkgName));
     }
+    Pkg->FullyLoad();
 
-    UDataTable* DataTable = Cast<UDataTable>(Imported[0]);
+    UDataTable* DataTable = NewObject<UDataTable>(Pkg, *AssetName, RF_Public | RF_Standalone | RF_Transactional);
     if (!DataTable)
     {
         return FAssetCommonUtils::MakeFailureResponse(
-            TEXT("ue_internal"), TEXT("DATATABLE_CAST_FAILED"),
-            TEXT("Imported object is not a UDataTable"));
+            TEXT("ue_internal"), TEXT("DATATABLE_CREATE_FAILED"),
+            FString::Printf(TEXT("NewObject<UDataTable> returned null for '%s'"), *PkgName));
     }
+    DataTable->RowStruct = RowStruct;
+
+    // Populate rows from CSV string — no UI, no dialog, no factory.
+    TArray<FString> ImportErrors = DataTable->CreateTableFromCSVString(CSVContent);
+    for (const FString& Err : ImportErrors)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("DataAssetCommands CSV: %s"), *Err);
+    }
+
+    // Notify asset registry so Content Browser shows the new asset.
+    FAssetRegistryModule::AssetCreated(DataTable);
+    Pkg->MarkPackageDirty();
 
     const int32 RowCount = DataTable->GetRowMap().Num();
 
-    // Ensure the asset is saved.
-    const FString PackageName = DataTable->GetPackage()->GetName();
-    UEditorAssetLibrary::SaveAsset(PackageName, /*bOnlyIfIsDirty=*/false);
+    // Save the package.
+    UEditorAssetLibrary::SaveAsset(AssetPath, /*bOnlyIfIsDirty=*/false);
 
     TSharedPtr<FJsonObject> Meta = MakeShared<FJsonObject>();
     Meta->SetNumberField(TEXT("rowCount"), RowCount);
+    Meta->SetNumberField(TEXT("csvWarnings"), ImportErrors.Num());
 
     const FString Status = bOverwrite ? TEXT("overwritten") : TEXT("created");
     return FAssetCommonUtils::MakeSuccessResponse(Status, AssetPath, Meta);

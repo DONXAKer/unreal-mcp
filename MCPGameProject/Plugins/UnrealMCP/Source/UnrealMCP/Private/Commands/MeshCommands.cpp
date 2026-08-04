@@ -8,7 +8,9 @@
 #include "HAL/IConsoleManager.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/SkeletalMesh.h"
+#include "Engine/Texture2D.h"
 #include "Materials/MaterialInterface.h"
+#include "SceneTypes.h"
 #include "PhysicsEngine/BodySetup.h"
 #include "PhysicsEngine/AggregateGeom.h"
 #include "PhysicsEngine/BoxElem.h"
@@ -22,6 +24,7 @@
 #include "StaticMeshAttributes.h"
 #include "StaticMeshOperations.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "StaticMeshCompiler.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -93,6 +96,18 @@ TSharedPtr<FJsonObject> FMeshCommands::HandleCommand(const FString& CommandType,
     if (CommandType == TEXT("import_skeletal_mesh"))
     {
         return HandleImportSkeletalMesh(Params);
+    }
+    if (CommandType == TEXT("mesh_get_stats"))
+    {
+        return HandleMeshGetStats(Params);
+    }
+    if (CommandType == TEXT("mesh_set_material"))
+    {
+        return HandleMeshSetMaterial(Params);
+    }
+    if (CommandType == TEXT("mesh_set_build_scale"))
+    {
+        return HandleMeshSetBuildScale(Params);
     }
 
     return FAssetCommonUtils::MakeFailureResponse(
@@ -658,7 +673,9 @@ TSharedPtr<FJsonObject> FMeshCommands::HandleSetNaniteEnabled(const TSharedPtr<F
 
     // ── Toggle Nanite ────────────────────────────────────────────────────────
     Mesh->Modify();
-    Mesh->NaniteSettings.bEnabled = bEnabled;
+    FMeshNaniteSettings NaniteSettings = Mesh->GetNaniteSettings();
+    NaniteSettings.bEnabled = bEnabled;
+    Mesh->SetNaniteSettings(NaniteSettings);
     Mesh->PostEditChange();
     Mesh->MarkPackageDirty();
     UEditorAssetLibrary::SaveAsset(AssetPath, /*bOnlyIfIsDirty=*/false);
@@ -850,12 +867,9 @@ TSharedPtr<FJsonObject> FMeshCommands::HandleImportSkeletalMesh(const TSharedPtr
     // ── Meta response ─────────────────────────────────────────────────────────
     TSharedPtr<FJsonObject> Meta = MakeShared<FJsonObject>();
 
-    // Vertex count at LOD 0 as an approximation (triangle count not directly
-    // exposed on USkeletalMesh without rendering data access).
-    const int32 NumVertices = (SkelMesh->GetResourceForRendering() && SkelMesh->GetResourceForRendering()->LODRenderData.Num() > 0)
-        ? SkelMesh->GetResourceForRendering()->LODRenderData[0].GetNumVertices()
-        : 0;
-    Meta->SetNumberField(TEXT("verticesCount"), NumVertices);
+    // Rendering data is not streamed in at import time, so vertex count
+    // is not available here. Return 0; caller can query after the mesh loads.
+    Meta->SetNumberField(TEXT("verticesCount"), 0);
 
     const int32 BoneCount = SkelMesh->GetRefSkeleton().GetNum();
     Meta->SetNumberField(TEXT("boneCount"), BoneCount);
@@ -872,4 +886,380 @@ TSharedPtr<FJsonObject> FMeshCommands::HandleImportSkeletalMesh(const TSharedPtr
         ? (bUpdate ? TEXT("updated") : TEXT("overwritten"))
         : TEXT("created");
     return FAssetCommonUtils::MakeSuccessResponse(Status, AssetPath, Meta);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// mesh_get_stats (v3.14.0) — read-only аудит габаритов и качества
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FMeshCommands::HandleMeshGetStats(const TSharedPtr<FJsonObject>& Params)
+{
+    FString AssetPath;
+    TSharedPtr<FJsonObject> ParamFailure;
+    if (!FAssetCommonUtils::RequireAssetPath(Params, AssetPath, ParamFailure))
+    {
+        return ParamFailure;
+    }
+
+    // Размер тайла поля — база для пересчёта габаритов в "тайлы". Юнит шире
+    // одного тайла почти всегда означает ошибку масштаба при импорте.
+    double TileSize = 100.0;
+    Params->TryGetNumberField(TEXT("tileSize"), TileSize);
+    if (TileSize <= 0.0)
+    {
+        TileSize = 100.0;
+    }
+
+    UStaticMesh* Mesh = Cast<UStaticMesh>(FAssetCommonUtils::LoadAssetObject(AssetPath));
+    if (!Mesh)
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetStringField(TEXT("assetPath"), AssetPath);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"),
+            TEXT("MESH_NOT_FOUND"),
+            FString::Printf(TEXT("No UStaticMesh found at '%s'"), *AssetPath),
+            Details);
+    }
+
+    TSharedPtr<FJsonObject> Meta = MakeShared<FJsonObject>();
+
+    // ── Габариты ─────────────────────────────────────────────────────────────
+    const FBox Bounds = Mesh->GetBoundingBox();
+    const FVector Size = Bounds.IsValid ? Bounds.GetSize() : FVector::ZeroVector;
+
+    TArray<TSharedPtr<FJsonValue>> SizeArr;
+    SizeArr.Add(MakeShared<FJsonValueNumber>(Size.X));
+    SizeArr.Add(MakeShared<FJsonValueNumber>(Size.Y));
+    SizeArr.Add(MakeShared<FJsonValueNumber>(Size.Z));
+    Meta->SetArrayField(TEXT("sizeUU"), SizeArr);
+
+    TArray<TSharedPtr<FJsonValue>> TileArr;
+    TileArr.Add(MakeShared<FJsonValueNumber>(Size.X / TileSize));
+    TileArr.Add(MakeShared<FJsonValueNumber>(Size.Y / TileSize));
+    TileArr.Add(MakeShared<FJsonValueNumber>(Size.Z / TileSize));
+    Meta->SetArrayField(TEXT("sizeInTiles"), TileArr);
+    Meta->SetNumberField(TEXT("tileSize"), TileSize);
+
+    Meta->SetNumberField(TEXT("longestAxisUU"), FMath::Max3(Size.X, Size.Y, Size.Z));
+
+    // ── Геометрия ────────────────────────────────────────────────────────────
+    const int32 NumLODs = Mesh->GetNumLODs();
+    Meta->SetNumberField(TEXT("lodCount"), NumLODs);
+    Meta->SetNumberField(TEXT("trianglesLOD0"), (NumLODs > 0) ? Mesh->GetNumTriangles(0) : 0);
+    Meta->SetNumberField(TEXT("verticesLOD0"), (NumLODs > 0) ? Mesh->GetNumVertices(0) : 0);
+    Meta->SetBoolField(TEXT("naniteEnabled"), Mesh->GetNaniteSettings().bEnabled);
+
+    // ── Материалы и текстуры ────────────────────────────────────────────────
+    // Планка стайл-гайда: текстуры юнитов >= 2K, у техники 4K. Считаем
+    // максимальное разрешение среди всех использованных текстур.
+    TArray<TSharedPtr<FJsonValue>> MatArr;
+    int32 MaxTextureDim = 0;
+    int32 TextureCount = 0;
+
+    for (const FStaticMaterial& StaticMat : Mesh->GetStaticMaterials())
+    {
+        TSharedPtr<FJsonObject> MatObj = MakeShared<FJsonObject>();
+        MatObj->SetStringField(TEXT("slot"), StaticMat.MaterialSlotName.ToString());
+
+        UMaterialInterface* MatIface = StaticMat.MaterialInterface;
+        if (!MatIface)
+        {
+            MatObj->SetStringField(TEXT("material"), TEXT(""));
+            MatArr.Add(MakeShared<FJsonValueObject>(MatObj));
+            continue;
+        }
+
+        MatObj->SetStringField(TEXT("material"), MatIface->GetPathName());
+
+        TArray<UTexture*> UsedTextures;
+        // UE 5.8: перегрузка с (QualityLevel, bAllQualityLevels, FeatureLevel,
+        // bAllFeatureLevels) помечена final/deprecated. Без аргументов —
+        // поиск по всем quality level и shader platform, что нам и нужно.
+        MatIface->GetUsedTextures(UsedTextures);
+
+        int32 SlotMaxDim = 0;
+        for (UTexture* Tex : UsedTextures)
+        {
+            UTexture2D* Tex2D = Cast<UTexture2D>(Tex);
+            if (!Tex2D)
+            {
+                continue;
+            }
+            ++TextureCount;
+            const int32 Dim = FMath::Max(static_cast<int32>(Tex2D->GetSizeX()), static_cast<int32>(Tex2D->GetSizeY()));
+            SlotMaxDim = FMath::Max(SlotMaxDim, Dim);
+        }
+        MatObj->SetNumberField(TEXT("maxTextureDim"), SlotMaxDim);
+        MaxTextureDim = FMath::Max(MaxTextureDim, SlotMaxDim);
+
+        MatArr.Add(MakeShared<FJsonValueObject>(MatObj));
+    }
+
+    Meta->SetArrayField(TEXT("materials"), MatArr);
+    Meta->SetNumberField(TEXT("maxTextureDim"), MaxTextureDim);
+    Meta->SetNumberField(TEXT("textureCount"), TextureCount);
+
+    return FAssetCommonUtils::MakeSuccessResponse(TEXT("ok"), AssetPath, Meta);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// mesh_set_material (v3.16.0) — назначение материала на слот UStaticMesh-АССЕТА
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// apply_material_to_actor меняет материал у актора НА УРОВНЕ, но юниты WarCard
+// спавнятся в рантайме, поэтому правку надо вносить в сам ассет — иначе она
+// не доживёт до игры.
+
+TSharedPtr<FJsonObject> FMeshCommands::HandleMeshSetMaterial(const TSharedPtr<FJsonObject>& Params)
+{
+    FString AssetPath;
+    TSharedPtr<FJsonObject> ParamFailure;
+    if (!FAssetCommonUtils::RequireAssetPath(Params, AssetPath, ParamFailure))
+    {
+        return ParamFailure;
+    }
+
+    FString MaterialPath;
+    if (!Params->TryGetStringField(TEXT("materialPath"), MaterialPath) || MaterialPath.IsEmpty())
+    {
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"), TEXT("MISSING_MATERIAL"),
+            TEXT("Required param 'materialPath' is missing or empty"), nullptr);
+    }
+
+    UStaticMesh* Mesh = Cast<UStaticMesh>(FAssetCommonUtils::LoadAssetObject(AssetPath));
+    if (!Mesh)
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetStringField(TEXT("assetPath"), AssetPath);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"), TEXT("MESH_NOT_FOUND"),
+            FString::Printf(TEXT("No UStaticMesh found at '%s'"), *AssetPath), Details);
+    }
+
+    UMaterialInterface* Material = Cast<UMaterialInterface>(FAssetCommonUtils::LoadAssetObject(MaterialPath));
+    if (!Material)
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetStringField(TEXT("materialPath"), MaterialPath);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"), TEXT("MATERIAL_NOT_FOUND"),
+            FString::Printf(TEXT("No UMaterialInterface found at '%s'"), *MaterialPath), Details);
+    }
+
+    // slot < 0 (по умолчанию) — назначить во ВСЕ слоты. У AI-сгенерированных
+    // мешей слот обычно один, но имя его непредсказуемо (tripo_mat_XXXX),
+    // поэтому адресация по индексу надёжнее, чем по имени.
+    int32 Slot = -1;
+    Params->TryGetNumberField(TEXT("slot"), Slot);
+
+    TArray<FStaticMaterial>& StaticMaterials = Mesh->GetStaticMaterials();
+    if (StaticMaterials.Num() == 0)
+    {
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("ue_internal"), TEXT("NO_MATERIAL_SLOTS"),
+            FString::Printf(TEXT("Mesh '%s' has no material slots"), *AssetPath), nullptr);
+    }
+
+    if (Slot >= StaticMaterials.Num())
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetNumberField(TEXT("slotCount"), StaticMaterials.Num());
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"), TEXT("SLOT_OUT_OF_RANGE"),
+            FString::Printf(TEXT("Slot %d is out of range (mesh has %d)"), Slot, StaticMaterials.Num()),
+            Details);
+    }
+
+    Mesh->Modify();
+
+    TArray<TSharedPtr<FJsonValue>> Assigned;
+    for (int32 Index = 0; Index < StaticMaterials.Num(); ++Index)
+    {
+        if (Slot >= 0 && Index != Slot)
+        {
+            continue;
+        }
+        StaticMaterials[Index].MaterialInterface = Material;
+        Assigned.Add(MakeShared<FJsonValueString>(StaticMaterials[Index].MaterialSlotName.ToString()));
+    }
+
+    Mesh->PostEditChange();
+    Mesh->MarkPackageDirty();
+    UEditorAssetLibrary::SaveAsset(AssetPath, /*bOnlyIfIsDirty=*/false);
+
+    TSharedPtr<FJsonObject> Meta = MakeShared<FJsonObject>();
+    Meta->SetStringField(TEXT("materialPath"), MaterialPath);
+    Meta->SetArrayField(TEXT("assignedSlots"), Assigned);
+    Meta->SetNumberField(TEXT("slotCount"), StaticMaterials.Num());
+    return FAssetCommonUtils::MakeSuccessResponse(TEXT("updated"), AssetPath, Meta);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// mesh_set_build_scale (v3.17.0) — исправление масштаба В САМОМ АССЕТЕ
+// ─────────────────────────────────────────────────────────────────────────────
+
+
+TSharedPtr<FJsonObject> FMeshCommands::HandleMeshSetBuildScale(const TSharedPtr<FJsonObject>& Params)
+{
+    FString AssetPath;
+    TSharedPtr<FJsonObject> ParamFailure;
+    if (!FAssetCommonUtils::RequireAssetPath(Params, AssetPath, ParamFailure))
+    {
+        return ParamFailure;
+    }
+
+    UStaticMesh* Mesh = Cast<UStaticMesh>(FAssetCommonUtils::LoadAssetObject(AssetPath));
+    if (!Mesh)
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetStringField(TEXT("assetPath"), AssetPath);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"), TEXT("MESH_NOT_FOUND"),
+            FString::Printf(TEXT("No UStaticMesh found at '%s'"), *AssetPath), Details);
+    }
+
+    if (Mesh->GetNumSourceModels() == 0)
+    {
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("ue_internal"), TEXT("NO_SOURCE_MODEL"),
+            FString::Printf(TEXT("Mesh '%s' has no source model"), *AssetPath), nullptr);
+    }
+
+    // ── Габариты ИСХОДНОЙ геометрии ─────────────────────────────────────────
+    //
+    // Ключевой момент этой команды. Считать масштаб от GetBoundingBox() нельзя:
+    // это границы СОБРАННОГО меша, то есть уже умноженные на текущий
+    // BuildScale3D, и вдобавок обновляются асинхронно. Прошлая реализация
+    // делала именно так и работала как множитель — при неудачной пересборке
+    // множители НАКАПЛИВАЛИСЬ (наблюдался BuildScale3D = 124 117 817).
+    //
+    // MeshDescription хранит позиции вершин в единицах ИСТОЧНИКА и от
+    // BuildScale3D не зависит вовсе. Поэтому команда идемпотентна: сколько раз
+    // её ни вызови с одним targetLongestAxisUU, результат один и тот же.
+    const FMeshDescription* SourceDesc = Mesh->GetMeshDescription(0);
+    if (!SourceDesc)
+    {
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("ue_internal"), TEXT("NO_MESH_DESCRIPTION"),
+            FString::Printf(TEXT("Mesh '%s' has no MeshDescription for LOD0"), *AssetPath), nullptr);
+    }
+
+    FBox SourceBox(ForceInit);
+    {
+        FStaticMeshConstAttributes Attributes(*SourceDesc);
+        TVertexAttributesConstRef<FVector3f> Positions = Attributes.GetVertexPositions();
+        for (const FVertexID VertexID : SourceDesc->Vertices().GetElementIDs())
+        {
+            SourceBox += FVector(Positions[VertexID]);
+        }
+    }
+
+    if (!SourceBox.IsValid)
+    {
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("ue_internal"), TEXT("DEGENERATE_SOURCE"),
+            TEXT("Source geometry has no valid bounds"), nullptr);
+    }
+
+    const FVector SourceSize = SourceBox.GetSize();
+    const double SourceLongest = FMath::Max3(SourceSize.X, SourceSize.Y, SourceSize.Z);
+    if (SourceLongest <= KINDA_SMALL_NUMBER)
+    {
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("ue_internal"), TEXT("DEGENERATE_SOURCE"),
+            TEXT("Source geometry is degenerate"), nullptr);
+    }
+
+    // ── Целевой АБСОЛЮТНЫЙ масштаб ──────────────────────────────────────────
+    // Только absolute: параметра-множителя больше нет by design.
+    double AbsoluteScale = 0.0;
+    double TargetLongest = 0.0;
+    if (Params->TryGetNumberField(TEXT("targetLongestAxisUU"), TargetLongest) && TargetLongest > 0.0)
+    {
+        AbsoluteScale = TargetLongest / SourceLongest;
+    }
+    else if (!Params->TryGetNumberField(TEXT("buildScale"), AbsoluteScale) || AbsoluteScale <= 0.0)
+    {
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"), TEXT("MISSING_SCALE"),
+            TEXT("Provide 'targetLongestAxisUU' or absolute 'buildScale' (relative multipliers are not supported)"),
+            nullptr);
+    }
+
+    // Защита от повторения прежней катастрофы: осмысленный масштаб для игровых
+    // ассетов лежит далеко внутри этих границ.
+    if (AbsoluteScale < 1e-4 || AbsoluteScale > 1e4)
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetNumberField(TEXT("requestedScale"), AbsoluteScale);
+        Details->SetNumberField(TEXT("sourceLongestUU"), SourceLongest);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"), TEXT("SCALE_OUT_OF_SANE_RANGE"),
+            FString::Printf(TEXT("Refusing BuildScale3D %g (sane range 1e-4..1e4)"), AbsoluteScale),
+            Details);
+    }
+
+    FStaticMeshSourceModel& SourceModel = Mesh->GetSourceModel(0);
+    const FVector PreviousBuildScale = SourceModel.BuildSettings.BuildScale3D;
+
+    // Масштаб ЗАПЕКАЕТСЯ В ГЕОМЕТРИЮ, а не в BuildSettings.
+    //
+    // Почему так: проверено на SM_t72_red — BuildScale3D = 105.55 корректно
+    // сохраняется и переживает перезапуск редактора, но габариты меша остаются
+    // прежними (1.9 UU). Для этих ассетов (все с включённым Nanite) движок
+    // BuildScale3D к результату не применяет. Правка позиций вершин в
+    // MeshDescription работает независимо от пути сборки.
+    Mesh->Modify();
+    Mesh->ModifyMeshDescription(0);
+    if (FMeshDescription* EditDesc = Mesh->GetMeshDescription(0))
+    {
+        FStaticMeshAttributes EditAttributes(*EditDesc);
+        TVertexAttributesRef<FVector3f> EditPositions = EditAttributes.GetVertexPositions();
+        for (const FVertexID VertexID : EditDesc->Vertices().GetElementIDs())
+        {
+            EditPositions[VertexID] *= static_cast<float>(AbsoluteScale);
+        }
+    }
+    else
+    {
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("ue_internal"), TEXT("MESH_DESCRIPTION_NOT_EDITABLE"),
+            TEXT("Could not obtain an editable MeshDescription for LOD0"), nullptr);
+    }
+    Mesh->CommitMeshDescription(0);
+
+    // Геометрия уже в нужных единицах — BuildScale3D возвращаем к 1, иначе
+    // прежнее значение умножилось бы поверх запечённого масштаба.
+    SourceModel.BuildSettings.BuildScale3D = FVector::OneVector;
+
+    Mesh->Build(/*bInSilent=*/true);
+    Mesh->PostEditChange();
+    Mesh->MarkPackageDirty();
+    UEditorAssetLibrary::SaveAsset(AssetPath, /*bOnlyIfIsDirty=*/false);
+
+    const FVector ExpectedSize = SourceSize * AbsoluteScale;
+
+    TSharedPtr<FJsonObject> Meta = MakeShared<FJsonObject>();
+    Meta->SetNumberField(TEXT("appliedFactor"), AbsoluteScale);
+    Meta->SetStringField(TEXT("method"), TEXT("baked into MeshDescription vertices; BuildScale3D reset to 1"));
+    Meta->SetNumberField(TEXT("previousBuildScale"), PreviousBuildScale.X);
+    Meta->SetNumberField(TEXT("sourceLongestUU"), SourceLongest);
+    Meta->SetNumberField(TEXT("expectedLongestUU"),
+        FMath::Max3(ExpectedSize.X, ExpectedSize.Y, ExpectedSize.Z));
+
+    TArray<TSharedPtr<FJsonValue>> SrcArr;
+    for (int32 Axis = 0; Axis < 3; ++Axis)
+    {
+        SrcArr.Add(MakeShared<FJsonValueNumber>(SourceSize[Axis]));
+    }
+    Meta->SetArrayField(TEXT("sourceSizeUU"), SrcArr);
+
+    // Границы собранного меша сразу после Build ещё устаревшие, поэтому в ответ
+    // отдаётся ОЖИДАЕМЫЙ размер (source x scale). Фактический проверять
+    // отдельным mesh_get_stats.
+    Meta->SetStringField(TEXT("note"),
+        TEXT("expectedLongestUU is source*scale; verify actual size with mesh_get_stats"));
+    return FAssetCommonUtils::MakeSuccessResponse(TEXT("updated"), AssetPath, Meta);
 }

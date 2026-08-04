@@ -136,4 +136,81 @@ def register_landscape_tools(mcp: FastMCP) -> None:
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    @mcp.tool()
+    def landscape_set_properties(
+        ctx: Context[Any, Any, Any],
+        actor_label: str = None,
+        material_path: str = None,
+        enable_nanite: bool = None,
+        nanite_lod: int = None,
+        location: list[float] = None,
+        save: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Edit an EXISTING Landscape actor in place.
+
+        Use this instead of re-running create_landscape when only the material or
+        Nanite flag changes: re-creating the landscape destroys decor already
+        placed on it (decor Z comes from a line trace) and rewrites the level,
+        which is far too expensive for lookdev iteration.
+
+        Scale is intentionally NOT editable — it is bound to the imported
+        heightmap resolution, so changing it silently desyncs the terrain from
+        the gameplay grid. Re-run create_landscape for that.
+
+        Args:
+            actor_label: Landscape to edit. Omit when the level has exactly one
+                landscape; with several, omitting it is an AMBIGUOUS_LANDSCAPE
+                error listing the available labels.
+            material_path: /Game/... path of a UMaterialInterface to assign.
+            enable_nanite: Toggle Nanite on the landscape. The Nanite mesh is
+                rebuilt as part of the call.
+            nanite_lod: NaniteLODIndex (only meaningful with Nanite enabled).
+            location: New world location [x, y, z] in cm — use it to align the
+                landscape centre with the battlefield origin.
+            save: Save the map afterwards. Default True.
+
+        At least one of material_path / enable_nanite / nanite_lod / location
+        must be provided, otherwise the call fails with NOTHING_TO_SET.
+
+        Material and Nanite rebuilds run on the NEXT editor tick, not inside the
+        call (doing them inline crashes UE 5.8 with a TaskGraph recursion
+        assert). The reply carries meta.rebuild = "deferred_next_tick"; give the
+        editor a moment before screenshotting the result.
+
+        Example:
+            landscape_set_properties(
+                actor_label="MAP_Landscape",
+                material_path="/Game/Maps/Materials/MI_Landscape_RiverCrossing",
+                enable_nanite=True)
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+
+            params: dict[str, Any] = {"save": bool(save)}
+            if actor_label is not None:
+                params["actor_label"] = actor_label
+            if material_path is not None:
+                params["material_path"] = material_path
+            if enable_nanite is not None:
+                params["enable_nanite"] = bool(enable_nanite)
+            if nanite_lod is not None:
+                params["nanite_lod"] = int(nanite_lod)
+            if location is not None:
+                params["location"] = [float(v) for v in location]
+
+            logger.info("landscape_set_properties: %s", params)
+            response = unreal.send_command("landscape_set_properties", params)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+
+        except Exception as e:
+            error_msg = f"Error setting landscape properties: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Landscape tools registered successfully")

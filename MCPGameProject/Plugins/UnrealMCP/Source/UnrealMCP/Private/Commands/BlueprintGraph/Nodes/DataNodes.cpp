@@ -7,6 +7,7 @@
 #include "K2Node_MakeSet.h"
 #include "EdGraphSchema_K2.h"
 #include "EdGraph/EdGraphPin.h"
+#include "Engine/Blueprint.h"
 #include "Json.h"
 
 namespace
@@ -133,6 +134,7 @@ UK2Node* FDataNodeCreator::CreateVariableGetNode(UEdGraph* Graph, const TSharedP
 
 	// Если указан target_class — обращаемся к UPROPERTY внешнего C++ класса
 	FString TargetClassName;
+	bool bUsedExternalMember = false;
 	if (Params->TryGetStringField(TEXT("target_class"), TargetClassName) && !TargetClassName.IsEmpty())
 	{
 		// UE 5.7: FindObject(nullptr, ShortName) deprecated — FindFirstObject + LoadObject.
@@ -146,6 +148,7 @@ UK2Node* FDataNodeCreator::CreateVariableGetNode(UEdGraph* Graph, const TSharedP
 		if (TargetClass)
 		{
 			VarGetNode->VariableReference.SetExternalMember(FName(*VariableName), TargetClass);
+			bUsedExternalMember = true;
 		}
 		else
 		{
@@ -155,7 +158,33 @@ UK2Node* FDataNodeCreator::CreateVariableGetNode(UEdGraph* Graph, const TSharedP
 	}
 	else
 	{
-		VarGetNode->VariableReference.SetSelfMember(FName(*VariableName));
+		// v3.12.4: For SCS component variables (MainRotorMesh, TailRotorMesh etc.) on Blueprints,
+		// SetSelfMember cannot resolve the UPROPERTY at AllocateDefaultPins() time because the
+		// variable reference needs the Blueprint's GeneratedClass (not just the Blueprint graph).
+		// Fix: use SetExternalMember with Blueprint->GeneratedClass, which IS available at
+		// node-creation time and correctly exposes SCS component properties.
+		UBlueprint* OwnerBP = Graph->GetTypedOuter<UBlueprint>();
+		if (OwnerBP && OwnerBP->GeneratedClass)
+		{
+			FProperty* Prop = FindFProperty<FProperty>(OwnerBP->GeneratedClass, FName(*VariableName));
+			if (Prop)
+			{
+				VarGetNode->VariableReference.SetExternalMember(FName(*VariableName), OwnerBP->GeneratedClass);
+				bUsedExternalMember = true;
+				UE_LOG(LogTemp, Display, TEXT("DataNodes: VariableGet '%s' found in GeneratedClass '%s' — using SetExternalMember"),
+					*VariableName, *OwnerBP->GeneratedClass->GetName());
+			}
+			else
+			{
+				// Property not in GeneratedClass — fall back to SelfMember (handles regular BP variables)
+				VarGetNode->VariableReference.SetSelfMember(FName(*VariableName));
+				UE_LOG(LogTemp, Warning, TEXT("DataNodes: VariableGet '%s' NOT found in GeneratedClass — using SetSelfMember"), *VariableName);
+			}
+		}
+		else
+		{
+			VarGetNode->VariableReference.SetSelfMember(FName(*VariableName));
+		}
 	}
 
 	double PosX, PosY;
@@ -165,6 +194,14 @@ UK2Node* FDataNodeCreator::CreateVariableGetNode(UEdGraph* Graph, const TSharedP
 
 	Graph->AddNode(VarGetNode, true, false);
 	FNodeCreatorUtils::InitializeK2Node(VarGetNode, Graph);
+
+	// Safety: if InitializeK2Node produced 0 pins, try PostPlacedNewNode as fallback
+	if (VarGetNode->Pins.Num() == 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("DataNodes: VariableGet '%s' has 0 pins after InitializeK2Node, trying PostPlacedNewNode fallback"), *VariableName);
+		VarGetNode->PostPlacedNewNode();
+		VarGetNode->AllocateDefaultPins();
+	}
 
 	return VarGetNode;
 }
@@ -334,4 +371,3 @@ UK2Node* FDataNodeCreator::CreateMakeSetNode(UEdGraph* Graph, const TSharedPtr<F
 
 	return MakeSetNode;
 }
-

@@ -4,12 +4,15 @@
 #include "Json.h"
 
 /**
- * Handler for the create_landscape MCP command.
+ * Handlers for the landscape MCP commands.
  *
- * Primitives (1):
- *   - create_landscape : creates a real UE5 Landscape Actor from a 16-bit
- *                        grayscale PNG heightmap file and places it in the
- *                        currently open editor world.
+ * Primitives (2):
+ *   - create_landscape        : creates a real UE5 Landscape Actor from a 16-bit
+ *                               grayscale PNG heightmap file and places it in the
+ *                               currently open editor world.
+ *   - landscape_set_properties: edits an EXISTING landscape in place (material,
+ *                               Nanite, location) so swapping the material does
+ *                               not require re-importing the heightmap.
  *
  * Why this exists: Python UE 5.8 API (spawn_actor / generic Actor spawning)
  * produces only a placeholder Landscape without components.  The C++ import
@@ -59,4 +62,24 @@ private:
      * in the currently active editor world.
      */
     TSharedPtr<FJsonObject> HandleCreateLandscape(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * landscape_set_properties — edit an existing ALandscape in place (v3.21.0).
+     *
+     * Params:
+     *   - actor_label   (string, optional) : landscape to edit; defaults to the
+     *                                        only landscape in the world when
+     *                                        there is exactly one.
+     *   - material_path (string, optional) : /Game/... UMaterialInterface.
+     *   - enable_nanite (bool,   optional) : toggles ALandscapeProxy::bEnableNanite
+     *                                        and rebuilds the Nanite representation.
+     *   - nanite_lod    (int,    optional) : NaniteLODIndex (only with Nanite on).
+     *   - location      (array3, optional) : new world location in cm.
+     *   - save          (bool,   optional) : save the map afterwards (default true).
+     *
+     * Scale is deliberately NOT editable: it is tied to the imported heightmap
+     * resolution, so changing it silently desyncs the terrain from the grid.
+     * Re-run create_landscape instead.
+     */
+    TSharedPtr<FJsonObject> HandleLandscapeSetProperties(const TSharedPtr<FJsonObject>& Params);
 };
