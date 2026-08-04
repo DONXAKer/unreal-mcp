@@ -61,6 +61,32 @@ def run() -> dict[str, Any]:
         if not exists_after.get("meta", {}).get("exists"):
             errors.append("Niagara copy not found after copy_niagara_system")
 
+        # 3b. niagara_get_info must describe the copy (v3.22.0)
+        info = _call("niagara_get_info", assetPath=TEST_NS, includeModuleInputs=True)
+        if not info.get("ok"):
+            errors.append(f"niagara_get_info failed: {info}")
+        else:
+            meta = info.get("meta", {})
+            for key in ("emitterCount", "isEmpty", "emitters", "warnings"):
+                if key not in meta:
+                    errors.append(f"niagara_get_info meta missing '{key}'")
+
+        # 3c. A bogus module input must FAIL loudly with alternatives,
+        #     never report a silent success.
+        miss = _call("niagara_set_module_input",
+                     systemPath=TEST_NS,
+                     emitterName="__nope__",
+                     moduleName="__nope__",
+                     inputName="__nope__",
+                     value=1.0,
+                     compile=False)
+        if miss.get("ok"):
+            errors.append("niagara_set_module_input reported ok for a nonexistent emitter/input")
+        else:
+            code = miss.get("error", {}).get("code")
+            if code not in ("NIAGARA_EMITTER_HANDLE_NOT_FOUND", "NIAGARA_MODULE_INPUT_NOT_FOUND"):
+                errors.append(f"unexpected error code for bogus module input: {code}")
+
         # 4. Skip idempotency
         r2 = _call("copy_niagara_system", sourcePath=BASE_NS, destPath=TEST_NS, ifExists="skip")
         if not r2.get("ok"):

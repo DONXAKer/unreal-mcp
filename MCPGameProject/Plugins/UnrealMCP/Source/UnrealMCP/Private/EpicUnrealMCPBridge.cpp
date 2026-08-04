@@ -321,7 +321,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
                 // Дублирует UnrealMCP.uplugin::VersionName — бампить ОБА места,
                 // иначе ping врёт и handshake Python-клиента сверяет не то.
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.21.2"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.22.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -470,9 +470,13 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             {
                 ResultJson = DataAssetCommands->HandleCommand(CommandType, Params);
             }
-            // Niagara VFX Pipeline Commands
+            // Niagara VFX Pipeline Commands (emitter graph authoring added v3.22.0)
             else if (CommandType == TEXT("copy_niagara_system") ||
-                     CommandType == TEXT("set_niagara_parameters"))
+                     CommandType == TEXT("set_niagara_parameters") ||
+                     CommandType == TEXT("niagara_get_info") ||
+                     CommandType == TEXT("niagara_add_emitter") ||
+                     CommandType == TEXT("niagara_set_emitter_properties") ||
+                     CommandType == TEXT("niagara_set_module_input"))
             {
                 ResultJson = NiagaraCommands->HandleCommand(CommandType, Params);
             }

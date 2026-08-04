@@ -23,7 +23,7 @@ UE5 Editor + UnrealMCP C++ plugin
 
 Two layers of capability:
 
-- **Primitives** — ~118 low-level `@mcp.tool()` commands wrapping individual UE Editor operations (`create_blueprint`, `import_texture`, `add_blueprint_function_node`, `set_pin_default_value`, …). Defined in `Python/tools/*.py`, dispatched to C++ over TCP.
+- **Primitives** — ~122 low-level `@mcp.tool()` commands wrapping individual UE Editor operations (`create_blueprint`, `import_texture`, `add_blueprint_function_node`, `set_pin_default_value`, …). Defined in `Python/tools/*.py`, dispatched to C++ over TCP.
 - **Recipes** — project-specific workflows composed from primitives, registered automatically from `<UE-project>/Content/Python/recipes/*.py`. Adding a recipe never requires plugin or server changes — `reload_recipes()` picks it up.
 - **Graph Builder** (since v2.1) — `build_blueprint_graph` MCP tool builds a whole Blueprint EventGraph from one declarative JSON spec. Replaces 15-30 sequential `add_blueprint_*_node` + `connect_blueprint_nodes` calls with one atomic operation (with rollback). See [`Python/tools/graph_builder.py`](Python/tools/graph_builder.py) docstring for the spec schema.
 

@@ -15,6 +15,86 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.22.0] - 2026-08-04
+
+### Added
+
+- **`niagara_get_info(assetPath, includeModuleInputs=False)`** — read-only
+  интроспекция `UNiagaraSystem`. Возвращает `meta.emitterCount`,
+  `meta.enabledEmitterCount`, `meta.totalModuleCount`, `meta.totalRendererCount`,
+  `meta.isEmpty`, `meta.warmupTime`, `meta.warnings[]`, `meta.exposedParameters[]`
+  и `meta.emitters[]` — по каждому эмиттеру: `name`, `enabled`, `mode`,
+  `uniqueName`, `sourceAsset`, `localSpace`, `simTarget` (CPU/GPU),
+  `determinism`, `randomSeed`, `boundsMode`, `renderers[]` (класс + enabled),
+  `modules{emitterSpawn,emitterUpdate,particleSpawn,particleUpdate}` (имена
+  модулей в порядке исполнения), `loopBehavior`, `loopDuration`.
+  С `includeModuleInputs=True` дополнительно отдаёт `moduleInputs[]` — все
+  rapid-iteration параметры (`name`/`type`/`value`) и `staticSwitchInputs[]`.
+
+- **`niagara_add_emitter(systemPath, emitterAssetPath, emitterName="", compile=True)`**
+  — добавляет ассет `UNiagaraEmitter` в систему через
+  `FNiagaraEditorUtilities::AddEmitterToSystem` (UE 5.8 сигнатура с
+  `FGuid EmitterVersion`), опционально переименовывает handle,
+  `RequestCompile` + `WaitForCompilationComplete`, сохраняет.
+
+- **`niagara_set_emitter_properties(systemPath, emitterName, ...)`** — `enabled`,
+  `localSpace`, `simTarget` ("CPU"/"GPU"), `determinism`, `randomSeed`,
+  `boundsMode`, `fixedBounds`, а также `loopBehavior` ("Once"/"Multiple"/
+  "Infinite"), `loopDuration`, `loopCount` — последние три маршрутизируются
+  в модуль Emitter State (в Niagara они не поля эмиттера, а входы модуля).
+
+- **`niagara_set_module_input(systemPath, emitterName, inputName, value, moduleName="", compile=True)`**
+  — правка одного входа модуля. Порядок резолва: (1) rapid-iteration параметры
+  скриптов эмиттера (`Constants.<Emitter>.<Module>.<Input>`), (2) static-switch
+  пины на `UNiagaraNodeFunctionCall`. Типы: float, int, bool, enum (по имени
+  элемента), vec2/vec3/vec4/color/quat/position. Имена модулей и входов
+  сравниваются без учёта регистра и пробелов ("Loop Behavior" == "loopbehavior").
+
+- Python-обёртки в `Python/tools/niagara_tools.py` (4 новых `@mcp.tool`,
+  typed-сигнатуры без `Any`/`Optional`) и примитивы в `Python/tools/primitives.py`.
+
+### Changed
+
+- `NiagaraCommands.cpp` собирает список модулей стадии собственным обходом
+  цепочки Parameter Map от `UNiagaraNodeOutput` — `FNiagaraStackGraphUtilities::
+  GetOrderedModuleNodes` не экспортируется из `NiagaraEditor` (нет
+  `NIAGARAEDITOR_API`), линковаться на неё нельзя.
+
+### Why
+
+`/Game/Effects/Cards/NS_SmokeCloud` был ПУСТОЙ Niagara-системой: 0 эмиттеров.
+`UNiagaraFunctionLibrary::SpawnSystemAtLocation` честно возвращал компонент,
+5 облаков ложились в `ActiveSmokeClouds`, частиц не было ни одной, в логе —
+тишина. Карта «Дымовая завеса» не работала визуально, и проверить это было
+нечем: граф системы недоступен ни из C++-команд плагина, ни из editor-Python
+(`get_editor_property('emitter_handles')` не находит свойство — оно не
+экспонировано в Python API). Приходилось сравнивать размеры `.uasset` и
+grep'ать бинарник. `niagara_get_info` закрывает этот класс «молчаливых
+успехов» одним вызовом (`meta.isEmpty` + `meta.warnings`), а
+`niagara_add_emitter` / `niagara_set_emitter_properties` /
+`niagara_set_module_input` позволяют собрать зацикленную дымовую завесу по
+спеке `client/Documentation/VFX_Combat_Design.md:82-83, 311-318` вместо
+копирования burst-системы `NS_DeathSmoke` поверх.
+
+Контракт «никаких молчаливых успехов» соблюдён явно:
+- `niagara_add_emitter` сверяет количество handle'ов до/после и валидность
+  возвращённого `FGuid` → иначе `NIAGARA_ADD_EMITTER_FAILED`;
+- `niagara_set_module_input` перечитывает записанное значение из
+  `FNiagaraParameterStore` и сравнивает байты → иначе
+  `NIAGARA_MODULE_INPUT_WRITE_FAILED`; при отсутствии входа возвращает
+  `NIAGARA_MODULE_INPUT_NOT_FOUND` с `details.availableModules` и
+  `details.availableInputs`, чтобы следующий вызов не был угадыванием;
+- `niagara_set_emitter_properties` при частичном применении отдаёт `ok:false` /
+  `NIAGARA_PROPERTY_NOT_APPLIED` с `details.applied` + `details.unapplied`
+  (и `details.savedAppliedChanges`), а не «успех» с потерянными полями;
+- отказ `SaveAsset` — отдельный `NIAGARA_SAVE_FAILED`, а не игнорируется;
+- `AddEmitterToSystem` внутри делает `CastChecked` на `UNiagaraSystemEditorData` —
+  handler проверяет её наличие заранее и возвращает
+  `NIAGARA_SYSTEM_EDITOR_DATA_MISSING` вместо падения редактора.
+
+`NiagaraEditor` уже был в `PrivateDependencyModuleNames` — новых зависимостей
+в `UnrealMCP.Build.cs` не потребовалось.
+
 ## [3.21.2] - 2026-08-04
 
 ### Fixed

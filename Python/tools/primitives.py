@@ -258,3 +258,74 @@ def set_niagara_parameters(
         "assetPath": assetPath,
         "params": params,
     })
+
+
+# ── Niagara emitter graph (v3.22.0) ──────────────────────────────────────────
+
+def niagara_get_info(
+    assetPath: str,
+    includeModuleInputs: bool = False,
+) -> dict[str, Any]:
+    """Read-only: emitters / modules / renderers / loop settings of a system."""
+    return _call("niagara_get_info", {
+        "assetPath": assetPath,
+        "includeModuleInputs": includeModuleInputs,
+    })
+
+
+def niagara_add_emitter(
+    systemPath: str,
+    emitterAssetPath: str,
+    emitterName: str = "",
+    compile: bool = True,
+) -> dict[str, Any]:
+    """Add a UNiagaraEmitter asset into a UNiagaraSystem (verified handle count)."""
+    payload: dict[str, Any] = {
+        "systemPath": systemPath,
+        "emitterAssetPath": emitterAssetPath,
+        "compile": compile,
+    }
+    if emitterName:
+        payload["emitterName"] = emitterName
+    return _call("niagara_add_emitter", payload)
+
+
+def niagara_set_emitter_properties(
+    systemPath: str,
+    emitterName: str,
+    compile: bool = True,
+    **properties: Any,
+) -> dict[str, Any]:
+    """
+    Set emitter properties. Accepted keyword properties: enabled, localSpace,
+    simTarget, determinism, randomSeed, boundsMode, fixedBounds, loopBehavior,
+    loopDuration, loopCount.
+    """
+    payload: dict[str, Any] = {
+        "systemPath": systemPath,
+        "emitterName": emitterName,
+        "compile": compile,
+    }
+    payload.update({k: v for k, v in properties.items() if v is not None})
+    return _call("niagara_set_emitter_properties", payload)
+
+
+def niagara_set_module_input(
+    systemPath: str,
+    emitterName: str,
+    inputName: str,
+    value: Any,
+    moduleName: str = "",
+    compile: bool = True,
+) -> dict[str, Any]:
+    """Write one module input (rapid-iteration param or static-switch pin)."""
+    payload: dict[str, Any] = {
+        "systemPath": systemPath,
+        "emitterName": emitterName,
+        "inputName": inputName,
+        "value": value,
+        "compile": compile,
+    }
+    if moduleName:
+        payload["moduleName"] = moduleName
+    return _call("niagara_set_module_input", payload)
