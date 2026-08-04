@@ -8,6 +8,8 @@
 #include "Factories/TextureFactory.h"
 #include "Engine/Texture.h"
 #include "Engine/Texture2D.h"
+#include "AssetCompilingManager.h"
+#include "TextureCompiler.h"
 #include "TextureResource.h"
 #include "PixelFormat.h"
 #include "EditorAssetLibrary.h"
@@ -26,18 +28,31 @@
 
 namespace
 {
-    TextureCompressionSettings MapCompression(const FString& InName)
+    // Возвращает false для неизвестного имени — вызывающий обязан сообщить об
+    // этом ошибкой. Прежний молчаливый фолбэк в BC7 был ловушкой: splatmap,
+    // запрошенный как "Masks", импортировался как BC7, команда отвечала "ok", и
+    // расхождение всплывало только при разглядывании готового ландшафта.
+    bool TryMapCompression(const FString& InName, TextureCompressionSettings& Out)
     {
-        // Map the small, pipeline-relevant subset. Unknown names fall back to BC7.
         const FString N = InName.ToUpper();
-        if (N == TEXT("BC7"))          return TC_BC7;
-        if (N == TEXT("DEFAULT"))      return TC_Default;
-        if (N == TEXT("NORMALMAP"))    return TC_Normalmap;
-        if (N == TEXT("GRAYSCALE"))    return TC_Grayscale;
-        if (N == TEXT("HDR"))          return TC_HDR;
-        if (N == TEXT("USERINTERFACE2D")) return TC_EditorIcon; // UI textures
-        if (N == TEXT("EDITORICON"))   return TC_EditorIcon;
-        return TC_BC7;
+        if (N == TEXT("BC7"))             { Out = TC_BC7;                     return true; }
+        if (N == TEXT("DEFAULT"))         { Out = TC_Default;                 return true; }
+        if (N == TEXT("NORMALMAP"))       { Out = TC_Normalmap;               return true; }
+        if (N == TEXT("GRAYSCALE"))       { Out = TC_Grayscale;               return true; }
+        if (N == TEXT("HDR"))             { Out = TC_HDR;                     return true; }
+        if (N == TEXT("MASKS"))           { Out = TC_Masks;                   return true; }
+        if (N == TEXT("ALPHA"))           { Out = TC_Alpha;                   return true; }
+        if (N == TEXT("DISPLACEMENTMAP")) { Out = TC_Displacementmap;         return true; }
+        if (N == TEXT("VECTORDISPLACEMENTMAP")) { Out = TC_VectorDisplacementmap; return true; }
+        if (N == TEXT("USERINTERFACE2D")) { Out = TC_EditorIcon;              return true; }
+        if (N == TEXT("EDITORICON"))      { Out = TC_EditorIcon;              return true; }
+        return false;
+    }
+
+    const TCHAR* KnownCompressionNames()
+    {
+        return TEXT("BC7, Default, Normalmap, Grayscale, HDR, Masks, Alpha, "
+                    "DisplacementMap, VectorDisplacementMap, UserInterface2D, EditorIcon");
     }
 
     TextureMipGenSettings MapMipGen(const FString& InName)
@@ -131,6 +146,10 @@ TSharedPtr<FJsonObject> FTextureCommands::HandleCommand(const FString& CommandTy
     if (CommandType == TEXT("import_texture"))
     {
         return HandleImportTexture(Params);
+    }
+    if (CommandType == TEXT("texture_set_properties"))
+    {
+        return HandleTextureSetProperties(Params);
     }
     if (CommandType == TEXT("generate_placeholder_texture"))
     {
@@ -276,8 +295,19 @@ TSharedPtr<FJsonObject> FTextureCommands::HandleImportTexture(const TSharedPtr<F
     // Apply texture settings.
     if (Texture)
     {
+        TextureCompressionSettings Compression = TC_BC7;
+        if (!TryMapCompression(CompressionStr, Compression))
+        {
+            TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+            Details->SetStringField(TEXT("compression"), CompressionStr);
+            Details->SetStringField(TEXT("known"), KnownCompressionNames());
+            return FAssetCommonUtils::MakeFailureResponse(
+                TEXT("user"), TEXT("UNKNOWN_COMPRESSION"),
+                FString::Printf(TEXT("Unknown compression '%s'"), *CompressionStr), Details);
+        }
+
         Texture->SRGB = bSRGB;
-        Texture->CompressionSettings = MapCompression(CompressionStr);
+        Texture->CompressionSettings = Compression;
         Texture->MipGenSettings = MapMipGen(MipGenStr);
         Texture->UpdateResource();
         Texture->PostEditChange();
@@ -504,4 +534,143 @@ TSharedPtr<FJsonObject> FTextureCommands::HandleGeneratePlaceholderTexture(const
 
     const FString Status = bOverwrite ? TEXT("overwritten") : (bUpdate ? TEXT("updated") : TEXT("created"));
     return FAssetCommonUtils::MakeSuccessResponse(Status, AssetPath, Meta);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// texture_set_properties (v3.18.0) — правка свойств УЖЕ импортированной текстуры
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Зачем отдельно от import_texture: передача compression="Normalmap" В МОМЕНТ
+// импорта вешает импортёр UE 5.8 намертво (см. CHANGELOG 3.17.1 Known issue) —
+// после такого вызова ImportAssetsAutomated перестаёт отдавать ассеты до
+// перезапуска редактора. Импортировать нормали приходится с дефолтным BC7, а
+// правильный тип сжатия ставить потом, этой командой: путь другой, пересжатие
+// идёт через обычный PostEditChange.
+
+namespace
+{
+    // Дождаться конца асинхронной компрессии текстуры, НЕ вызывая
+    // FTextureCompilingManager::FinishCompilation.
+    //
+    // Почему не FinishCompilation: он падает fatal-ассертом, если его позвать в
+    // момент, когда компилятор уже вошёл в PostCompilation этой же текстуры
+    // (Engine/Private/TextureCompiler.cpp:484). Именно так и ронял редактор
+    // texture_set_properties: PostEditChange стартовал перекомпрессию, а
+    // SaveAsset тут же дёргал FinishCompilation изнутри. Гонка — падало
+    // примерно на каждой пятнадцатой текстуре пакетного импорта.
+    //
+    // ProcessAsyncTasks прокачивает очередь без этого запрета, поэтому ждём им.
+    void WaitForTextureCompilation(UTexture* Texture, double TimeoutSeconds = 120.0)
+    {
+        if (!Texture)
+        {
+            return;
+        }
+
+        // Прокачиваем очередь через ГЛОБАЛЬНЫЙ менеджер: у
+        // FTextureCompilingManager::ProcessAsyncTasks доступ private (это
+        // override интерфейса), публичный вход — только у FAssetCompilingManager.
+        FTextureCompilingManager& TextureManager = FTextureCompilingManager::Get();
+        FAssetCompilingManager& AssetManager = FAssetCompilingManager::Get();
+        const double Deadline = FPlatformTime::Seconds() + TimeoutSeconds;
+        while (TextureManager.IsCompilingTexture(Texture))
+        {
+            if (FPlatformTime::Seconds() > Deadline)
+            {
+                UE_LOG(LogTemp, Warning,
+                       TEXT("[UnrealMCP] WaitForTextureCompilation: timeout %.0fs on '%s'"),
+                       TimeoutSeconds, *Texture->GetPathName());
+                break;
+            }
+            AssetManager.ProcessAsyncTasks(/*bLimitExecutionTime=*/true);
+            FPlatformProcess::Sleep(0.005f);
+        }
+    }
+}
+
+TSharedPtr<FJsonObject> FTextureCommands::HandleTextureSetProperties(const TSharedPtr<FJsonObject>& Params)
+{
+    FString AssetPath;
+    TSharedPtr<FJsonObject> ParamFailure;
+    if (!FAssetCommonUtils::RequireAssetPath(Params, AssetPath, ParamFailure))
+    {
+        return ParamFailure;
+    }
+
+    UTexture2D* Texture = Cast<UTexture2D>(FAssetCommonUtils::LoadAssetObject(AssetPath));
+    if (!Texture)
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetStringField(TEXT("assetPath"), AssetPath);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"), TEXT("TEXTURE_NOT_FOUND"),
+            FString::Printf(TEXT("No UTexture2D found at '%s'"), *AssetPath), Details);
+    }
+
+    // Текстура после импорта ещё может дожимать компрессию в фоне. Правка
+    // свойств поверх живой компиляции и есть источник гонки — сперва ждём.
+    WaitForTextureCompilation(Texture);
+
+    Texture->Modify();
+
+    TArray<TSharedPtr<FJsonValue>> Changed;
+
+    FString CompressionStr;
+    if (Params->TryGetStringField(TEXT("compression"), CompressionStr) && !CompressionStr.IsEmpty())
+    {
+        TextureCompressionSettings Compression = TC_BC7;
+        if (!TryMapCompression(CompressionStr, Compression))
+        {
+            TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+            Details->SetStringField(TEXT("compression"), CompressionStr);
+            Details->SetStringField(TEXT("known"), KnownCompressionNames());
+            return FAssetCommonUtils::MakeFailureResponse(
+                TEXT("user"), TEXT("UNKNOWN_COMPRESSION"),
+                FString::Printf(TEXT("Unknown compression '%s'"), *CompressionStr), Details);
+        }
+
+        Texture->CompressionSettings = Compression;
+        Changed.Add(MakeShared<FJsonValueString>(TEXT("compression")));
+
+        // Нормали и roughness — линейные данные, sRGB на них ломает освещение.
+        if (Texture->CompressionSettings == TC_Normalmap || Texture->CompressionSettings == TC_Grayscale)
+        {
+            Texture->SRGB = false;
+            Changed.Add(MakeShared<FJsonValueString>(TEXT("sRGB(auto-off)")));
+        }
+    }
+
+    bool bSRGB = false;
+    if (Params->TryGetBoolField(TEXT("sRGB"), bSRGB))
+    {
+        Texture->SRGB = bSRGB;
+        Changed.Add(MakeShared<FJsonValueString>(TEXT("sRGB")));
+    }
+
+    bool bFlipGreen = false;
+    if (Params->TryGetBoolField(TEXT("flipGreenChannel"), bFlipGreen))
+    {
+        Texture->bFlipGreenChannel = bFlipGreen;
+        Changed.Add(MakeShared<FJsonValueString>(TEXT("flipGreenChannel")));
+    }
+
+    Texture->PostEditChange();
+    Texture->MarkPackageDirty();
+
+    // PostEditChange запустил перекомпрессию. SaveAsset внутри себя зовёт
+    // FTextureCompilingManager::FinishCompilation, и если тот попадает на уже
+    // идущую PostCompilation — движок падает ассертом (TextureCompiler.cpp:484,
+    // "Calling FinishCompilation is not allowed during PostCompilation").
+    // Поэтому дожидаемся компиляции сами, безопасным способом, ДО сейва.
+    WaitForTextureCompilation(Texture);
+
+    UEditorAssetLibrary::SaveAsset(AssetPath, /*bOnlyIfIsDirty=*/false);
+
+    TSharedPtr<FJsonObject> Meta = MakeShared<FJsonObject>();
+    Meta->SetArrayField(TEXT("changed"), Changed);
+    Meta->SetNumberField(TEXT("compressionSettings"), static_cast<int32>(Texture->CompressionSettings));
+    Meta->SetBoolField(TEXT("sRGB"), Texture->SRGB != 0);
+    Meta->SetNumberField(TEXT("sizeX"), Texture->Source.GetSizeX());
+    Meta->SetNumberField(TEXT("sizeY"), Texture->Source.GetSizeY());
+    return FAssetCommonUtils::MakeSuccessResponse(TEXT("updated"), AssetPath, Meta);
 }
