@@ -2887,6 +2887,66 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPBlueprintCommands::HandleSetComponentPrope
         return Result;
     }
 
+    // Special case: FObjectProperty (UNiagaraSystem*, UStaticMesh*, TObjectPtr<T>…).
+    // ImportText_Direct для такого свойства сам зовёт StaticLoadObject — это
+    // легально теперь, когда команды исполняются из core ticker'а (см. коммент
+    // в EpicUnrealMCPBridge::ExecuteCommand), но явная резолвинг-ветка даёт:
+    //   a) короткий путь пакета без суффикса объекта ("/Game/FX/NS_Smoke"),
+    //   b) внятную ошибку вместо голого "Failed to import value",
+    //   c) очистку свойства по "" / "None".
+    // FSoftObjectProperty сюда НЕ попадает (не наследник FObjectProperty) и,
+    // как и раньше, обрабатывается ImportText_Direct без загрузки ассета.
+    if (FObjectProperty* ObjectProp = CastField<FObjectProperty>(Property))
+    {
+        UObject* FoundObject = nullptr;
+        const bool bClearValue = StringValue.IsEmpty()
+            || StringValue.Equals(TEXT("None"), ESearchCase::IgnoreCase);
+
+        if (!bClearValue)
+        {
+            FString AssetPath = StringValue;
+            // "/Game/Path/Name" → "/Game/Path/Name.Name"
+            if (AssetPath.StartsWith(TEXT("/")) && !AssetPath.Contains(TEXT(".")))
+            {
+                FString ObjectName;
+                AssetPath.Split(TEXT("/"), nullptr, &ObjectName,
+                    ESearchCase::CaseSensitive, ESearchDir::FromEnd);
+                AssetPath = FString::Printf(TEXT("%s.%s"), *AssetPath, *ObjectName);
+            }
+
+            // StaticLoadObject сам возвращает уже загруженный объект, если он в памяти.
+            FoundObject = StaticLoadObject(
+                ObjectProp->PropertyClass, nullptr, *AssetPath, nullptr,
+                LOAD_NoWarn | LOAD_Quiet);
+
+            if (!FoundObject)
+            {
+                return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(
+                    TEXT("Could not load asset '%s' (expected class %s) for property '%s' on component '%s'"),
+                    *AssetPath,
+                    ObjectProp->PropertyClass ? *ObjectProp->PropertyClass->GetName() : TEXT("UObject"),
+                    *PropertyName, *ComponentName));
+            }
+        }
+
+        ObjectProp->SetObjectPropertyValue(PropertyAddr, FoundObject);
+        FBlueprintEditorUtils::MarkBlueprintAsModified(Blueprint);
+        if (UPackage* Pkg = Blueprint->GetPackage())
+        {
+            Pkg->MarkPackageDirty();
+        }
+
+        TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+        Result->SetStringField(TEXT("blueprint_name"), BlueprintName);
+        Result->SetStringField(TEXT("component_name"), ComponentName);
+        Result->SetStringField(TEXT("property_name"), PropertyName);
+        Result->SetStringField(TEXT("property_type"), Property->GetClass()->GetName());
+        Result->SetStringField(TEXT("value"),
+            FoundObject ? FoundObject->GetPathName() : TEXT("None"));
+        Result->SetBoolField(TEXT("success"), true);
+        return Result;
+    }
+
     const TCHAR* ImportResult = Property->ImportText_Direct(*StringValue, PropertyAddr, ComponentTemplate, PPF_None);
     if (!ImportResult)
     {

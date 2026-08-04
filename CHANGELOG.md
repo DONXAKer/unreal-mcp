@@ -15,6 +15,67 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.21.2] - 2026-08-04
+
+### Fixed
+
+- **Любая команда, тянущая за собой синхронную загрузку ассета или компиляцию
+  Blueprint'а, роняла редактор** ассертом
+  `Assertion failed: ++Queue(QueueIndex).RecursionGuard == 1`
+  (`Engine/Source/Runtime/Core/Private/Async/TaskGraph.cpp:705`), а MCP отвечал
+  `No response from Unreal Engine`. Стопроцентный репро (UE 5.8):
+
+  ```
+  set_component_property(blueprint_name="/Game/Effects/BP_CombatVFXManager",
+                         component_name="CombatVFXManager",
+                         property_name="NS_SmokeCloud",
+                         property_value="/Game/Effects/Cards/NS_SmokeScreen.NS_SmokeScreen")
+  ```
+
+  Причина — не в самом handler'е, а в конвейере: `UEpicUnrealMCPBridge::ExecuteCommand`
+  ставил тело команды в `AsyncTask(ENamedThreads::GameThread, ...)`, то есть весь
+  обработчик исполнялся **внутри TaskGraph-задачи** (`ProcessThreadUntilIdle`).
+  Любая синхронная блокировка оттуда — `StaticLoadObject` → `FlushAsyncLoading`,
+  `FKismetEditorUtilities::CompileBlueprint`, `FlushRenderingCommands`, ожидание
+  компиляции Niagara-скриптов/шейдеров — повторно входит в цикл разбора задач
+  именованного потока и срывает recursion guard.
+  Фикс — `EpicUnrealMCPBridge.cpp:305`: команда планируется через
+  `FTSTicker::GetCoreTicker().AddTicker(..., 0.0f)` (одноразовый тикер), который
+  тикается из `FEngineLoop::Tick` — верхний уровень стека game thread'а, вне
+  контекста задачи. Контракт не изменился: сокет-поток по-прежнему блокируется на
+  `Future.Get()` и отдаёт синхронный ответ, просто на такт позже.
+  Фикс общий для всех ~145 команд: `set_blueprint_property`,
+  `set_variable_default_value`, `apply_material_to_blueprint`,
+  `delete_component_from_blueprint`, `compile_blueprint` и прочие, зовущие
+  `CompileBlueprint` прямо в handler'е, были подвержены тому же крашу.
+- **`set_component_property` для object-свойств** (`UNiagaraSystem*`,
+  `UStaticMesh*`, `TObjectPtr<T>`) теперь резолвит ассет явно
+  (`EpicUnrealMCPBlueprintCommands.cpp:2899`), а не отдаёт строку в
+  `ImportText_Direct`: принимается короткий путь пакета без суффикса объекта
+  (`/Game/FX/NS_Smoke` == `/Game/FX/NS_Smoke.NS_Smoke`), `""`/`"None"` очищает
+  ссылку, а нерезолвящийся путь даёт внятное
+  `Could not load asset '<path>' (expected class <Class>)` вместо голого
+  `Failed to import value`. `value` в ответе — полный path ассета.
+  `FSoftObjectProperty` в эту ветку не попадает и, как и раньше, идёт через
+  `ImportText_Direct` без загрузки.
+
+### Why
+
+Крашилось не одно свойство одного Blueprint'а, а класс операций: «MCP-команда,
+которая впервые подтягивает ассет в память». Точечные обходы уже накапливались
+(отложенная перестройка в `landscape_set_properties` v3.21.0, ожидание
+компиляции текстур в v3.21.1) — каждый чинил свой симптом. Здесь убрана общая
+причина: контекст исполнения команды. `landscape_set_properties` оставлен как
+есть (его ответ документирует `rebuild: "deferred_next_tick"`), но новым
+handler'ам городить FTSTicker внутри себя больше не нужно — тяжёлую работу можно
+делать прямо в обработчике.
+
+### Known issues
+
+- Если редактор завис в операции, не прокачивающей core ticker, команда теперь
+  дождётся тика (или таймаута Python-клиента) вместо реентрантного исполнения.
+  Это намеренно: реентрантное исполнение и было причиной краша.
+
 ## [3.21.1] - 2026-08-04
 
 ### Fixed

@@ -24,6 +24,7 @@
 #include "Engine/Selection.h"
 #include "Kismet/GameplayStatics.h"
 #include "Async/Async.h"
+#include "Containers/Ticker.h"
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "HAL/PlatformMisc.h"
@@ -275,13 +276,34 @@ void UEpicUnrealMCPBridge::StopServer()
 FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
 {
     UE_LOG(LogTemp, Display, TEXT("EpicUnrealMCPBridge: Executing command: %s"), *CommandType);
-    
+
     // Create a promise to wait for the result
-    TPromise<FString> Promise;
-    TFuture<FString> Future = Promise.GetFuture();
-    
-    // Queue execution on Game Thread
-    AsyncTask(ENamedThreads::GameThread, [this, CommandType, Params, Promise = MoveTemp(Promise)]() mutable
+    // Промис живёт в TSharedRef, а не захватывается по move: тикер-делегат
+    // копируемый, mutable-лямбда с move-only состоянием в него не влезает.
+    TSharedRef<TPromise<FString>> PromiseRef = MakeShared<TPromise<FString>>();
+    TFuture<FString> Future = PromiseRef->GetFuture();
+
+    // ── Исполнение на game thread ЧЕРЕЗ CORE TICKER, а не через AsyncTask ──────
+    // Раньше здесь был AsyncTask(ENamedThreads::GameThread, ...): обработчик
+    // команды исполнялся ВНУТРИ TaskGraph-задачи (ProcessThreadUntilIdle).
+    // Любая синхронная блокировка внутри такой задачи — загрузка ассета
+    // (StaticLoadObject → FlushAsyncLoading), компиляция Blueprint'а
+    // (FKismetEditorUtilities::CompileBlueprint), FlushRenderingCommands,
+    // ожидание компиляции Niagara/шейдеров — повторно входит в цикл разбора
+    // задач именованного потока и роняет редактор ассертом
+    //     Assertion failed: ++Queue(QueueIndex).RecursionGuard == 1
+    //     [Async/TaskGraph.cpp] [Line: 705]
+    // Стопроцентный репро был на set_component_property с UNiagaraSystem*
+    // (ImportText_Direct → синхронная загрузка NS_* → ожидание компиляции
+    // Niagara-скриптов). Тот же класс краха ловили landscape_set_properties
+    // и import_asset_tasks() через Interchange.
+    //
+    // FTSTicker тикается из FEngineLoop::Tick — верхний уровень стека game
+    // thread'а, вне контекста задачи. Оттуда синхронные загрузки и компиляции
+    // легальны. Точечные обходы (отложение работы через FTSTicker внутри
+    // отдельных handler'ов) больше не нужны: безопасен весь конвейер команд.
+    FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
+        [this, CommandType, Params, PromiseRef](float) -> bool
     {
         TSharedPtr<FJsonObject> ResponseJson = MakeShareable(new FJsonObject);
         
@@ -297,7 +319,9 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // this field's presence to confirm the editor loaded a fresh
                 // plugin binary — a stale pre-2.0.0 plugin answers "pong"
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.21.0"));
+                // Дублирует UnrealMCP.uplugin::VersionName — бампить ОБА места,
+                // иначе ping врёт и handshake Python-клиента сверяет не то.
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.21.2"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -563,8 +587,8 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                     FString ResultString;
                     TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResultString);
                     FJsonSerializer::Serialize(ResponseJson.ToSharedRef(), Writer);
-                    Promise.SetValue(ResultString);
-                    return;
+                    PromiseRef->SetValue(ResultString);
+                    return false;   // одноразовый тикер
                 }
             }
             
@@ -613,8 +637,9 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
         FString ResultString;
         TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResultString);
         FJsonSerializer::Serialize(ResponseJson.ToSharedRef(), Writer);
-        Promise.SetValue(ResultString);
-    });
-    
+        PromiseRef->SetValue(ResultString);
+        return false;   // одноразовый тикер
+    }), /*InDelay=*/0.0f);
+
     return Future.Get();
 }
