@@ -101,6 +101,36 @@ private:
      */
     TSharedPtr<FJsonObject> HandleMaterialSetNodeParam(const TSharedPtr<FJsonObject>& Params);
 
+    /**
+     * material_get_graph — reads back a master material graph (nodes + wiring).
+     *
+     * Read-only counterpart of material_add_node / material_connect. UE's Python
+     * API cannot enumerate expressions (Material.expressions is protected and
+     * there is no get_expressions()), so this is the only way to verify that a
+     * declared parameter is actually wired to anything.
+     *
+     * Params:
+     *   - assetPath                 (string, required): /Game/... path to a UMaterial
+     *                               or UMaterialInstance. For an instance the base
+     *                               material (GetBaseMaterial()) is inspected.
+     *   - includeUnconnectedInputs  (bool, optional, default true): when false, only
+     *                               inputs that actually have a source node are listed.
+     *   - maxNodes                  (number, optional, default 500): safety cap on the
+     *                               number of nodes serialized.
+     *
+     * Result meta:
+     *   - materialPath, resolvedFrom ("material" | "instance"), nodeCount, truncated
+     *   - nodes[]: { name, class, nodeId, posX, posY, props{}, inputs[] }
+     *       props are type-dependent (ParameterName/DefaultValue, SpeedX/SpeedY,
+     *       Texture, CoordinateIndex, ConstA/ConstB, Code, …)
+     *       inputs[]: { index, name, connected, fromNode, fromClass, fromNodeId,
+     *                   fromOutputIndex }
+     *   - rootConnections{}: BaseColor / Normal / Roughness / … → { node, nodeClass,
+     *                        nodeId, outputIndex } for every connected root pin
+     *                        (read from UMaterialEditorOnlyData in UE 5.8).
+     */
+    TSharedPtr<FJsonObject> HandleMaterialGetGraph(const TSharedPtr<FJsonObject>& Params);
+
     /** Find a UMaterialExpression in Mat->GetExpressions() by its Desc field. */
     static UMaterialExpression* FindExprByDesc(UMaterial* Mat, const FString& Desc);
 };

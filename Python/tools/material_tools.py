@@ -499,4 +499,68 @@ def register_material_tools(mcp: FastMCP) -> None:
             logger.error(error_msg)
             return {"success": False, "message": error_msg}
 
+    @mcp.tool()
+    def material_get_graph(
+        ctx: Context[Any, Any, Any],
+        assetPath: str,
+        includeUnconnectedInputs: bool = True,
+        maxNodes: int = 500,
+    ) -> dict[str, Any]:
+        """
+        Read back a master material graph: every expression node plus its wiring.
+
+        Read-only counterpart of material_add_node / material_connect. The UE Python
+        API cannot enumerate expressions (Material.expressions is protected and there
+        is no get_expressions()), so this is the only way to tell a parameter that is
+        merely *declared* from one that is actually *wired* into the graph.
+
+        Accepts a UMaterial or a UMaterialInstance — for an instance the underlying
+        base material is inspected and meta.resolvedFrom is "instance".
+
+        Args:
+            assetPath: Full /Game/... path to a UMaterial or UMaterialInstance.
+            includeUnconnectedInputs: When True (default) every input pin is listed
+                with a "connected" flag. Set False to list only wired pins.
+            maxNodes: Safety cap on serialized nodes (default 500). meta.truncated
+                tells you whether the cap was hit.
+
+        Returns meta with:
+            materialPath, resolvedFrom ("material" | "instance"), nodeCount,
+            returnedNodeCount, truncated,
+            nodes: [{name, class, nodeId, posX, posY, props{}, inputs[]}]
+              props are type-dependent: ParameterName/DefaultValue (ScalarParameter,
+              VectorParameter), SpeedX/SpeedY (Panner), Texture/TexturePath
+              (TextureSample, TextureSampleParameter2D), CoordinateIndex/UTiling/
+              VTiling (TextureCoordinate), ConstA/ConstB (Add, Multiply), Code (Custom).
+              inputs: [{index, name, connected, fromNode, fromClass, fromNodeId,
+                        fromOutputIndex}]
+            rootConnections: {BaseColor|Normal|Roughness|Metallic|WorldPositionOffset|
+              CustomizedUV0..7|...: {node, nodeClass, nodeId, outputIndex}} — only
+              pins that are actually connected appear.
+
+        Example:
+            material_get_graph(assetPath="/Game/WarCard/Units/Materials/M_WarCard_UnitTrack")
+            material_get_graph(assetPath="/Game/WarCard/Units/Materials/MI_t72b_Track",
+                               includeUnconnectedInputs=False)
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"success": False, "message": "Failed to connect to Unreal Engine"}
+            payload: dict[str, Any] = {
+                "assetPath": assetPath,
+                "includeUnconnectedInputs": bool(includeUnconnectedInputs),
+                "maxNodes": int(maxNodes),
+            }
+            logger.info(f"Reading material graph: {payload}")
+            response = unreal.send_command("material_get_graph", payload)
+            if not response:
+                return {"success": False, "message": "No response from Unreal Engine"}
+            return response
+        except Exception as e:
+            error_msg = f"Error reading material graph: {e}"
+            logger.error(error_msg)
+            return {"success": False, "message": error_msg}
+
     logger.info("Material tools registered successfully")

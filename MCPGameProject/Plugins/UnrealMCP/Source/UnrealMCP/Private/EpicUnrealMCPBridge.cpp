@@ -321,7 +321,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
                 // Дублирует UnrealMCP.uplugin::VersionName — бампить ОБА места,
                 // иначе ping врёт и handshake Python-клиента сверяет не то.
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.22.0"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.24.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -430,7 +430,8 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("material_create") ||
                      CommandType == TEXT("material_add_node") ||
                      CommandType == TEXT("material_connect") ||
-                     CommandType == TEXT("material_set_node_param"))
+                     CommandType == TEXT("material_set_node_param") ||
+                     CommandType == TEXT("material_get_graph"))
             {
                 ResultJson = MaterialCommands->HandleCommand(CommandType, Params);
             }

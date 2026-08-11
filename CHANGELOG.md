@@ -15,6 +15,55 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.24.0] - 2026-08-11
+
+### Added
+
+- **`material_get_graph`** — чтение графа мастер-материала. Первый *читающий*
+  material-инструмент: до сих пор были только писатели (`material_create`,
+  `material_add_node`, `material_connect`, `material_set_node_param`), а
+  `get_available_materials` / `get_actor_material_info` граф не показывают.
+  Параметры: `assetPath` (UMaterial **или** UMaterialInstance — для инстанса
+  берётся `GetBaseMaterial()`), `includeUnconnectedInputs` (bool, default true),
+  `maxNodes` (int, default 500).
+  Ответ в `meta`: `materialPath`, `resolvedFrom` (`material` | `instance`),
+  `nodeCount`, `returnedNodeCount`, `truncated`,
+  `nodes[]` — `{name, class, nodeId, posX, posY, props{}, inputs[]}` и
+  `rootConnections{}` — `BaseColor` / `Normal` / `Roughness` / `Metallic` /
+  `WorldPositionOffset` / `CustomizedUV0..7` / … → `{node, nodeClass, nodeId,
+  outputIndex}` (только реально подключённые пины).
+  `props` зависят от типа узла: `ParameterName` + `DefaultValue`
+  (ScalarParameter / VectorParameter), `SpeedX` / `SpeedY` / `bFractionalPart`
+  (Panner), `Texture` + `TexturePath` (любой наследник
+  `UMaterialExpressionTextureBase`, включая `TextureSampleParameter2D`),
+  `CoordinateIndex` / `UTiling` / `VTiling` (TextureCoordinate),
+  `ConstA` / `ConstB` (Add, Multiply), `ConstAlpha` (Lerp), `Code`
+  (Custom HLSL, обрезается до 2000 символов с флагом `CodeTruncated`).
+  `inputs[]` — `{index, name, connected, fromNode, fromClass, fromNodeId,
+  fromOutputIndex}`: связи и есть главное, ради чего команда написана.
+- Python-обёртка `material_get_graph` в `Python/tools/material_tools.py`.
+
+### Why
+
+Гусеницы Т-72 не крутятся, и все остальные гипотезы уже отработаны фактами:
+материал `MI_t72b_Track` на мастере `M_WarCard_UnitTrack` сидит в слоте 1 у
+`SM_t72_red_Hull` / `SM_t72_red_Combined`, мастер экспонирует скаляр
+`TrackUVOffset`, `used_with_instanced_static_meshes` = true, `AVehicleUnit`
+создаёт `TrackMID` и пишет в него значение, порядок `PostInitUnit` →
+`InitMultiInstance` / `ApplyInstanceMIDs` верный. Оставался ровно один
+непроверяемый вопрос: доходит ли `TrackUVOffset` до UV-координат сэмплера
+внутри графа, или параметр объявлен и висит в воздухе. Проверить это было
+нечем — Python-API UE 5.8 выражения не отдаёт (`Material.expression_collection`
+нет, `expressions` protected, `get_expressions()` отсутствует), поэтому
+единственный путь — C++.
+
+Реализация опирается на editor-only API UE 5.8: `UMaterial::GetExpressions()`
+для узлов, `CountInputs()` / `GetInput(i)` / `GetInputName(i)` для связей и
+`UMaterial::GetEditorOnlyData()` (`UMaterialEditorOnlyData`) для корневых
+пинов — в 5.8 `BaseColor` / `Normal` / `CustomizedUVs[]` живут именно там, а не
+на самом `UMaterial`. Всё тело обёрнуто в `#if WITH_EDITOR` / `WITH_EDITORONLY_DATA`,
+в cooked-сборке команда отвечает `EDITOR_ONLY`.
+
 ## [3.22.0] - 2026-08-04
 
 ### Added

@@ -9,8 +9,10 @@
 #include "Materials/MaterialExpressionConstant3Vector.h"
 #include "Materials/MaterialExpressionScalarParameter.h"
 #include "Materials/MaterialExpressionVectorParameter.h"
+#include "Materials/MaterialExpressionTextureBase.h"
 #include "Materials/MaterialExpressionTextureSample.h"
 #include "Materials/MaterialExpressionTextureSampleParameter2D.h"
+#include "Materials/MaterialExpressionCustom.h"
 #include "Materials/MaterialExpressionLinearInterpolate.h"
 #include "Materials/MaterialExpressionMultiply.h"
 #include "Materials/MaterialExpressionAdd.h"
@@ -215,6 +217,10 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleCommand(const FString& CommandT
     if (CommandType == TEXT("material_set_node_param"))
     {
         return HandleMaterialSetNodeParam(Params);
+    }
+    if (CommandType == TEXT("material_get_graph"))
+    {
+        return HandleMaterialGetGraph(Params);
     }
 
     return FAssetCommonUtils::MakeFailureResponse(
@@ -1065,4 +1071,315 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialSetNodeParam(const TSha
     }
 
     return FAssetCommonUtils::MakeSuccessResponse(TEXT("updated"), AssetPath, Meta);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// material_get_graph  (FEAT-MAT-002 / v3.24.0)
+//
+// Read-only dump of a master material graph. The UE 5.8 Python API cannot walk
+// expressions (UMaterial::Expressions is protected, expression_collection is not
+// exposed), so without this command there is no way to tell a *declared*
+// parameter from a *wired* one.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#if WITH_EDITOR
+namespace MaterialGraphRead
+{
+    // Serializes an FLinearColor as [r, g, b, a].
+    static void SetColorField(const TSharedPtr<FJsonObject>& Obj, const TCHAR* Field, const FLinearColor& C)
+    {
+        TArray<TSharedPtr<FJsonValue>> Arr;
+        Arr.Add(MakeShared<FJsonValueNumber>(C.R));
+        Arr.Add(MakeShared<FJsonValueNumber>(C.G));
+        Arr.Add(MakeShared<FJsonValueNumber>(C.B));
+        Arr.Add(MakeShared<FJsonValueNumber>(C.A));
+        Obj->SetArrayField(Field, Arr);
+    }
+
+    // Describes the expression that a root pin (or an input pin) points at.
+    static TSharedPtr<FJsonObject> DescribeSource(const UMaterialExpression* Expr, int32 OutputIndex)
+    {
+        TSharedPtr<FJsonObject> J = MakeShared<FJsonObject>();
+        J->SetStringField(TEXT("node"), Expr->GetName());
+        J->SetStringField(TEXT("nodeClass"), Expr->GetClass()->GetName());
+        if (!Expr->Desc.IsEmpty())
+        {
+            J->SetStringField(TEXT("nodeId"), Expr->Desc);
+        }
+        J->SetNumberField(TEXT("outputIndex"), OutputIndex);
+        return J;
+    }
+
+    // Adds a root connection entry only when the pin is actually wired.
+    static void AddRootConnection(const TSharedPtr<FJsonObject>& Out, const TCHAR* PinName, const FExpressionInput& In)
+    {
+        if (!In.Expression)
+        {
+            return;
+        }
+        Out->SetObjectField(PinName, DescribeSource(In.Expression, In.OutputIndex));
+    }
+
+    // Fills type-specific properties for a single expression node.
+    static void FillNodeProps(UMaterialExpression* E, const TSharedPtr<FJsonObject>& P)
+    {
+        // Generic: every UMaterialExpressionParameter subclass exposes a name.
+        if (E->HasAParameterName())
+        {
+            P->SetStringField(TEXT("ParameterName"), E->GetParameterName().ToString());
+        }
+
+        if (const UMaterialExpressionScalarParameter* Scalar = Cast<UMaterialExpressionScalarParameter>(E))
+        {
+            P->SetNumberField(TEXT("DefaultValue"), Scalar->DefaultValue);
+        }
+        else if (const UMaterialExpressionVectorParameter* Vector = Cast<UMaterialExpressionVectorParameter>(E))
+        {
+            SetColorField(P, TEXT("DefaultValue"), Vector->DefaultValue);
+        }
+
+        if (const UMaterialExpressionConstant* Const = Cast<UMaterialExpressionConstant>(E))
+        {
+            P->SetNumberField(TEXT("R"), Const->R);
+        }
+        else if (const UMaterialExpressionConstant3Vector* Const3 = Cast<UMaterialExpressionConstant3Vector>(E))
+        {
+            SetColorField(P, TEXT("Constant"), Const3->Constant);
+        }
+
+        if (const UMaterialExpressionPanner* Panner = Cast<UMaterialExpressionPanner>(E))
+        {
+            P->SetNumberField(TEXT("SpeedX"), Panner->SpeedX);
+            P->SetNumberField(TEXT("SpeedY"), Panner->SpeedY);
+            P->SetBoolField(TEXT("bFractionalPart"), Panner->bFractionalPart);
+        }
+
+        // Covers TextureSample, TextureSampleParameter2D, TextureObject, ... —
+        // all of them inherit the Texture pointer from UMaterialExpressionTextureBase.
+        if (const UMaterialExpressionTextureBase* TexBase = Cast<UMaterialExpressionTextureBase>(E))
+        {
+            if (TexBase->Texture)
+            {
+                P->SetStringField(TEXT("Texture"), TexBase->Texture->GetName());
+                P->SetStringField(TEXT("TexturePath"), TexBase->Texture->GetPathName());
+            }
+            else
+            {
+                P->SetStringField(TEXT("Texture"), TEXT(""));
+            }
+        }
+
+        if (const UMaterialExpressionTextureCoordinate* TexCoord = Cast<UMaterialExpressionTextureCoordinate>(E))
+        {
+            P->SetNumberField(TEXT("CoordinateIndex"), TexCoord->CoordinateIndex);
+            P->SetNumberField(TEXT("UTiling"), TexCoord->UTiling);
+            P->SetNumberField(TEXT("VTiling"), TexCoord->VTiling);
+        }
+
+        if (const UMaterialExpressionAdd* AddExpr = Cast<UMaterialExpressionAdd>(E))
+        {
+            P->SetNumberField(TEXT("ConstA"), AddExpr->ConstA);
+            P->SetNumberField(TEXT("ConstB"), AddExpr->ConstB);
+        }
+        else if (const UMaterialExpressionMultiply* MulExpr = Cast<UMaterialExpressionMultiply>(E))
+        {
+            P->SetNumberField(TEXT("ConstA"), MulExpr->ConstA);
+            P->SetNumberField(TEXT("ConstB"), MulExpr->ConstB);
+        }
+        else if (const UMaterialExpressionLinearInterpolate* LerpExpr = Cast<UMaterialExpressionLinearInterpolate>(E))
+        {
+            P->SetNumberField(TEXT("ConstA"), LerpExpr->ConstA);
+            P->SetNumberField(TEXT("ConstB"), LerpExpr->ConstB);
+            P->SetNumberField(TEXT("ConstAlpha"), LerpExpr->ConstAlpha);
+        }
+
+        // Custom HLSL nodes: truncate, shader bodies can run to thousands of chars.
+        if (const UMaterialExpressionCustom* CustomExpr = Cast<UMaterialExpressionCustom>(E))
+        {
+            const int32 MaxCodeChars = 2000;
+            const FString& Code = CustomExpr->Code;
+            P->SetStringField(TEXT("Code"), Code.Len() > MaxCodeChars ? Code.Left(MaxCodeChars) : Code);
+            P->SetBoolField(TEXT("CodeTruncated"), Code.Len() > MaxCodeChars);
+        }
+    }
+}
+#endif // WITH_EDITOR
+
+TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedPtr<FJsonObject>& Params)
+{
+#if !WITH_EDITOR
+    return FAssetCommonUtils::MakeFailureResponse(
+        TEXT("config"),
+        TEXT("EDITOR_ONLY"),
+        TEXT("material_get_graph requires an editor build (material expressions are editor-only data)"));
+#else
+    FString AssetPath;
+    TSharedPtr<FJsonObject> ParamFailure;
+    if (!FAssetCommonUtils::RequireAssetPath(Params, AssetPath, ParamFailure))
+    {
+        return ParamFailure;
+    }
+
+    bool bIncludeUnconnectedInputs = true;
+    Params->TryGetBoolField(TEXT("includeUnconnectedInputs"), bIncludeUnconnectedInputs);
+
+    int32 MaxNodes = 500;
+    {
+        double Tmp = 0.0;
+        if (Params->TryGetNumberField(TEXT("maxNodes"), Tmp) && Tmp > 0.0)
+        {
+            MaxNodes = static_cast<int32>(Tmp);
+        }
+    }
+
+    UObject* Obj = FAssetCommonUtils::LoadAssetObject(AssetPath);
+    if (!Obj)
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetStringField(TEXT("assetPath"), AssetPath);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"),
+            TEXT("ASSET_NOT_FOUND"),
+            FString::Printf(TEXT("No asset found at '%s'"), *AssetPath),
+            Details);
+    }
+
+    // Accept both UMaterial and UMaterialInstance — an instance has no graph of
+    // its own, so fall through to the base material whose params it overrides.
+    FString ResolvedFrom = TEXT("material");
+    UMaterial* Mat = Cast<UMaterial>(Obj);
+    if (!Mat)
+    {
+        if (UMaterialInterface* MatIface = Cast<UMaterialInterface>(Obj))
+        {
+            Mat = MatIface->GetBaseMaterial();
+            ResolvedFrom = TEXT("instance");
+        }
+    }
+
+    if (!Mat)
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetStringField(TEXT("assetPath"), AssetPath);
+        Details->SetStringField(TEXT("actualClass"), Obj->GetClass()->GetName());
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"),
+            TEXT("MATERIAL_NOT_FOUND"),
+            FString::Printf(TEXT("Asset at '%s' is not a UMaterial or UMaterialInstance"), *AssetPath),
+            Details);
+    }
+
+    // ── Nodes ────────────────────────────────────────────────────────────────
+    TArray<TSharedPtr<FJsonValue>> NodesJson;
+    int32 TotalExpressions = 0;
+
+    for (UMaterialExpression* E : Mat->GetExpressions())
+    {
+        if (!E)
+        {
+            continue;
+        }
+        ++TotalExpressions;
+        if (NodesJson.Num() >= MaxNodes)
+        {
+            continue;
+        }
+
+        TSharedPtr<FJsonObject> NodeJson = MakeShared<FJsonObject>();
+        NodeJson->SetStringField(TEXT("name"), E->GetName());
+        NodeJson->SetStringField(TEXT("class"), E->GetClass()->GetName());
+        NodeJson->SetStringField(TEXT("nodeId"), E->Desc);
+        NodeJson->SetNumberField(TEXT("posX"), E->MaterialExpressionEditorX);
+        NodeJson->SetNumberField(TEXT("posY"), E->MaterialExpressionEditorY);
+
+        TSharedPtr<FJsonObject> PropsJson = MakeShared<FJsonObject>();
+        MaterialGraphRead::FillNodeProps(E, PropsJson);
+        NodeJson->SetObjectField(TEXT("props"), PropsJson);
+
+        TArray<TSharedPtr<FJsonValue>> InputsJson;
+        const int32 NumInputs = E->CountInputs();
+        for (int32 i = 0; i < NumInputs; ++i)
+        {
+            const FExpressionInput* In = E->GetInput(i);
+            if (!In)
+            {
+                continue;
+            }
+            const bool bConnected = (In->Expression != nullptr);
+            if (!bConnected && !bIncludeUnconnectedInputs)
+            {
+                continue;
+            }
+
+            TSharedPtr<FJsonObject> InputJson = MakeShared<FJsonObject>();
+            InputJson->SetNumberField(TEXT("index"), i);
+            InputJson->SetStringField(TEXT("name"), E->GetInputName(i).ToString());
+            InputJson->SetBoolField(TEXT("connected"), bConnected);
+            if (bConnected)
+            {
+                InputJson->SetStringField(TEXT("fromNode"), In->Expression->GetName());
+                InputJson->SetStringField(TEXT("fromClass"), In->Expression->GetClass()->GetName());
+                InputJson->SetNumberField(TEXT("fromOutputIndex"), In->OutputIndex);
+                if (!In->Expression->Desc.IsEmpty())
+                {
+                    InputJson->SetStringField(TEXT("fromNodeId"), In->Expression->Desc);
+                }
+            }
+            InputsJson.Add(MakeShared<FJsonValueObject>(InputJson));
+        }
+        NodeJson->SetArrayField(TEXT("inputs"), InputsJson);
+
+        NodesJson.Add(MakeShared<FJsonValueObject>(NodeJson));
+    }
+
+    // ── Root (material attribute) connections ────────────────────────────────
+    // In UE 5.8 these live on UMaterialEditorOnlyData, NOT on UMaterial itself.
+    TSharedPtr<FJsonObject> RootJson = MakeShared<FJsonObject>();
+#if WITH_EDITORONLY_DATA
+    if (const UMaterialEditorOnlyData* EditorOnly = Mat->GetEditorOnlyData())
+    {
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("BaseColor"),           EditorOnly->BaseColor);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("Metallic"),            EditorOnly->Metallic);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("Specular"),            EditorOnly->Specular);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("Roughness"),           EditorOnly->Roughness);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("Anisotropy"),          EditorOnly->Anisotropy);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("Normal"),              EditorOnly->Normal);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("Tangent"),             EditorOnly->Tangent);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("EmissiveColor"),       EditorOnly->EmissiveColor);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("Opacity"),             EditorOnly->Opacity);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("OpacityMask"),         EditorOnly->OpacityMask);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("WorldPositionOffset"), EditorOnly->WorldPositionOffset);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("Displacement"),        EditorOnly->Displacement);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("SubsurfaceColor"),     EditorOnly->SubsurfaceColor);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("ClearCoat"),           EditorOnly->ClearCoat);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("ClearCoatRoughness"),  EditorOnly->ClearCoatRoughness);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("AmbientOcclusion"),    EditorOnly->AmbientOcclusion);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("Refraction"),          EditorOnly->Refraction);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("PixelDepthOffset"),    EditorOnly->PixelDepthOffset);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("SurfaceThickness"),    EditorOnly->SurfaceThickness);
+        MaterialGraphRead::AddRootConnection(RootJson, TEXT("MaterialAttributes"),  EditorOnly->MaterialAttributes);
+
+        // CustomizedUVs[0..7] — a Panner wired here pans *every* sampler that
+        // reads TexCoord[N]; that is the usual way scrolling tank tracks work.
+        for (int32 UVIndex = 0; UVIndex < 8; ++UVIndex)
+        {
+            MaterialGraphRead::AddRootConnection(
+                RootJson,
+                *FString::Printf(TEXT("CustomizedUV%d"), UVIndex),
+                EditorOnly->CustomizedUVs[UVIndex]);
+        }
+    }
+#endif // WITH_EDITORONLY_DATA
+
+    TSharedPtr<FJsonObject> Meta = MakeShared<FJsonObject>();
+    Meta->SetStringField(TEXT("materialPath"), Mat->GetPathName());
+    Meta->SetStringField(TEXT("resolvedFrom"), ResolvedFrom);
+    Meta->SetNumberField(TEXT("nodeCount"), TotalExpressions);
+    Meta->SetNumberField(TEXT("returnedNodeCount"), NodesJson.Num());
+    Meta->SetBoolField(TEXT("truncated"), TotalExpressions > NodesJson.Num());
+    Meta->SetArrayField(TEXT("nodes"), NodesJson);
+    Meta->SetObjectField(TEXT("rootConnections"), RootJson);
+
+    return FAssetCommonUtils::MakeSuccessResponse(TEXT("read"), AssetPath, Meta);
+#endif // WITH_EDITOR
 }
