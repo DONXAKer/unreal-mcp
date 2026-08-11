@@ -59,7 +59,15 @@ def _battle_units(conn, ctrl: int = 0) -> list[dict]:
 
 def _ue_battle_round(conn, my_side: str) -> tuple[bool, int, int]:
     """Дождаться хода UE (ctrl 0), перебрать свои юниты пока чей-то ход не пройдёт,
-    плюс попробовать атаки. Возвращает (got_turn, moves_ok, attacks_ok)."""
+    плюс попробовать атаки. Возвращает (got_turn, moves_sent, attacks_sent).
+
+    ВНИМАНИЕ: счётчики означают «команда доставлена в клиент», а НЕ «сервер
+    принял действие». `wc_attack`/`wc_free_move` — fire-and-forget: вердикт
+    приходит позже по WebSocket, и в ответе команды его нет. Прогон 2026-08-11
+    показал 12 «успешных» атак, которые сервер все отклонил по OUT_OF_RANGE.
+    Настоящий признак результата — изменившееся состояние (HP, координаты, AP);
+    именно поэтому итог раунда сверяется отдельно через `_battle_units`.
+    """
     dl = time.monotonic() + 25
     while time.monotonic() < dl:
         st = _send(conn, "wc_get_battle_state", {"controller_index": 0})
@@ -114,7 +122,7 @@ def _ue_battle_round(conn, my_side: str) -> tuple[bool, int, int]:
     # end-turn только если ход всё ещё наш (иначе сервер отклонит «не ваш ход»).
     if _still_my_turn():
         _send(conn, "wc_end_turn", {"controller_index": 0})
-    print(f"    UE turn: атак ok={attacks_ok}, движений ok={moves_ok}")
+    print(f"    UE turn: атак отправлено={attacks_ok}, движений отправлено={moves_ok}")
     return (True, moves_ok, attacks_ok)
 
 
@@ -151,6 +159,50 @@ def _wait_pie_widget(conn, candidates: tuple, timeout: float, label: str = "") -
     if label:
         print(f"    [{label}] ни одна из {candidates} не появилась за {timeout}s")
     return False
+
+
+def _wait_battle_reached(conn, timeout: float = 60) -> str:
+    """FIX-E2E-010: дождаться боя на UE-клиенте. Возвращает имя сработавшего
+    сигнала ("" = не дождались).
+
+    Один `pie_status.current_widget` для этого негоден: он отдаёт ПОСЛЕДНИЙ
+    созданный виджет, а с появлением боевого лога (коммит 5178168) им стал
+    `CombatLogWidget`, хотя `WBP_BattleHUD` уже создан. Прежний гейт
+    `("BattleHUD", "ActionCardHand")` таймаутился на живом бое.
+
+    Поэтому сигналов три, любой достаточен:
+      1. current_widget — боевой экран или боевой лог поверх него;
+      2. WBP_BattleHUD в дереве виджетов (лог мог перекрыть current_widget);
+      3. wc_get_battle_state отдаёт непустую доску — состояние игры, а не UI.
+    """
+    battle_widgets = ("BattleHUD", "ActionCardHand", "CombatLog")
+    cur = ""
+    dl = time.monotonic() + timeout
+    while time.monotonic() < dl:
+        st = _send(conn, "pie_status", {}) or {}
+        cs = st.get("clients") or []
+        cur = (cs[0].get("current_widget") or "") if cs else ""
+        if any(c in cur for c in battle_widgets):
+            print(f"    [battle] current_widget='{cur}'")
+            return f"current_widget:{cur}"
+
+        try:
+            if _has_uw_any(conn, "WBP_BattleHUD"):
+                print("    [battle] WBP_BattleHUD найден в дереве виджетов")
+                return "widget_tree:WBP_BattleHUD"
+        except Exception:
+            pass  # дерево в бою бывает многоКБ и режется декодером — не фатально
+
+        bs = _send(conn, "wc_get_battle_state", {"controller_index": 0}) or {}
+        if bs.get("ok") and _battle_units(conn, 0):
+            print("    [battle] wc_get_battle_state: доска непустая")
+            return "battle_state"
+
+        time.sleep(1.0)
+
+    print(f"    [battle] ни один из сигналов не сработал за {timeout}s"
+          f" (current_widget='{cur}')")
+    return ""
 
 
 def _pie_ready_n1(conn) -> bool:
@@ -294,17 +346,16 @@ def main() -> int:
             # по current_widget; если уже в бою — mulligan проскочил раньше.
 
         print("\n--- 5/6 wait BATTLE HUD on UE client ---")
-        # Используем pie_status.current_widget (лёгкий ответ) вместо get_widget_tree:
-        # последний даёт многоКБ JSON и режется UTF-8 декодером в боевом состоянии.
-        # В бою current_widget показывает WBP_BattleHUD или WBP_ActionCardHand —
-        # любое из них = клиент дошёл до боя.
-        battle = _wait_pie_widget(conn, ("BattleHUD", "ActionCardHand"), 60, "battle")
+        # FIX-E2E-010: детект по трём сигналам (см. _wait_battle_reached).
+        # Один current_widget маскируется CombatLogWidget — боевой лог создаётся
+        # ПОСЛЕ WBP_BattleHUD и становится «текущим» виджетом.
+        battle = _wait_battle_reached(conn, 60)
         if not battle:
             bot_battle = bot.wait_battle(5)
             print(f"  боевой виджет не найден на UE; бот в BATTLE={bot_battle}")
             print("\n=== RESULT: BATTLE NOT reached on UE client -> FAIL ===")
             return 1
-        print("  боевой UI виден на UE-клиенте [OK]")
+        print(f"  бой достигнут на UE-клиенте [OK] (сигнал: {battle})")
 
         # Регресс-гард (фикс HideStaleScreenWidgets): экраны прошлых фаз не должны
         # оставаться в viewport поверх боя. Раньше залипали Login/MainMenu/
@@ -341,7 +392,11 @@ def main() -> int:
 
         print("\n--- 6/6 UE surrender -> GameResult ---")
         _send(conn, "wc_surrender", {"controller_index": 0})
-        result = _wait_pie_widget(conn, ("GameResult",), 30, "result")
+        # FIX-E2E-010: экран результата ищем и по current_widget, и по дереву —
+        # боевой лог остаётся «текущим» виджетом и так же маскирует WBP_GameResult,
+        # как маскировал WBP_BattleHUD на шаге 5/6.
+        result = (_wait_pie_widget(conn, ("GameResult",), 20, "result")
+                  or _wait_uw(conn, "WBP_GameResult", 10, "result-tree"))
         print(f"  WBP_GameResult виден: {result}")
 
         print("\n=== RESULT: PASS — UE client reached BATTLE"

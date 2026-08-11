@@ -297,6 +297,17 @@ _ZONE_CELLS = {
 # Транзитивные фазы, где шлём phase-ready (сервер авто-прокидывает дальше).
 _READY_PHASES = {"WAITING_FOR_START", "DICE_ROLL_1", "DICE_ROLL_2", "MULLIGAN"}
 
+# FIX-E2E-010: фазы, где мгновенный phase-ready бота обгоняет реального
+# UE-клиента. Бот headless — он «проходит» DICE_ROLL_2 и MULLIGAN за миллисекунды,
+# пока UE ещё доигрывает деплой, и сервер уводит игру в BATTLE до того, как UE
+# успевает показать WBP_Mulligan. Экран мулигана не появлялся вовсе, и шаг 4b
+# smoke_fullgame_solo уходил в fallback вместо честного клика AcceptHandButton.
+# Лечится паузой: фазу помечаем готовой сразу (дублей не будет), а сам
+# phase-ready шлём отложенно — UE успевает отрисовать экран и нажать кнопку.
+# Дедлока нет: сервер всё равно ждёт обе стороны, пауза лишь сдвигает нашу.
+_DELAYED_READY_PHASES = {"DICE_ROLL_2", "MULLIGAN"}
+_DELAYED_READY_SECONDS = 6.0
+
 # Типы карт, годные для execute-action как «атака» (см. server ActionCard.ActionType).
 _ATTACK_CARD_TYPES = ("BASIC_ATTACK", "SPECIAL_ATTACK")
 # unitType цели → ключ матрицы урона в UnitSnapshotDto (/state snapshot).
@@ -405,13 +416,46 @@ class OpponentBot:
         self.stomp.subscribe("/user/queue/matchmaking/game-found")
         self.stomp.subscribe("/user/queue/matchmaking/available-units")
         self.stomp.subscribe("/user/queue/matchmaking/status")
+        # Сервер снимает с очереди по таймауту и шлёт сюда NO_OPPONENT_FOUND.
+        self.stomp.subscribe("/user/queue/matchmaking/timeout")
         # resume-hint: при активной игре сервер шлёт active-game вместо очереди
         # (перезапуск бота посреди партии — вернуться и продолжить ходить)
         self.stomp.subscribe("/user/queue/active-game")
         time.sleep(0.3)
         self.stomp.send_json("/app/matchmaking/start", {})
         self._log("matchmaking/start отправлен")
+        self._start_requeue_loop()
         return True
+
+    def _start_requeue_loop(self) -> None:
+        """Держать бота в очереди, пока соперник не найден.
+
+        Сервер выкидывает из очереди по `warcard.timeouts.queue-wait` (~120 с),
+        а UE-клиент до пяти раз повторяет login+FindGame — до ~165 с, то есть
+        заведомо дольше. Прогон 2026-08-11 упал именно так: бота сняли с очереди
+        в 11:04:20, клиент встал в 11:04:25 — разминулись на пять секунд, драфт
+        не начался. Под нагрузкой на GPU (генерация арта рядом) редактор
+        медленнее, и промах становится вероятным.
+
+        Поэтому повторяем `matchmaking/start` до game-found. Повтор для игрока,
+        уже стоящего в очереди, безвреден — сервер просто обновляет запись.
+        """
+        def _tick() -> None:
+            while not self._stop_requeue.is_set() and not self.game_id:
+                if self._stop_requeue.wait(45.0):
+                    return
+                if self.game_id:
+                    return
+                try:
+                    self.stomp.send_json("/app/matchmaking/start", {})
+                    self._log("matchmaking/start повторно (держим очередь)")
+                except Exception as exc:
+                    self._log(f"повтор matchmaking не удался: {exc}")
+                    return
+
+        self._stop_requeue = threading.Event()
+        t = threading.Thread(target=_tick, name="bot-requeue", daemon=True)
+        t.start()
 
     def wait_battle(self, timeout: float) -> bool:
         return self._reached_battle.wait(timeout)
@@ -422,6 +466,9 @@ class OpponentBot:
         return self._game_over.wait(timeout)
 
     def close(self) -> None:
+        stop = getattr(self, "_stop_requeue", None)
+        if stop is not None:
+            stop.set()
         self.stomp.close()
 
     # --- обработка входящих ---
@@ -456,6 +503,21 @@ class OpponentBot:
     def _on_message(self, dest: str, body: dict[str, Any]) -> None:
         if dest.endswith("/turn-changed"):
             self._on_turn_changed(body)
+            return
+        if dest.endswith("/matchmaking/timeout"):
+            # Сервер снял с очереди (NO_OPPONENT_FOUND) — встаём обратно СРАЗУ.
+            # Периодический повтор тоже есть, но он не спасает сам по себе:
+            # `matchmaking/start` для уже стоящего в очереди сервер отбивает
+            # «already in queue» и время ожидания НЕ обновляет, поэтому таймаут
+            # всё равно срабатывает. Реакция на само уведомление закрывает окно,
+            # в котором бота в очереди нет и UE-клиенту не с кем матчиться.
+            if not self.game_id:
+                self._log("очередь снята по таймауту (%s) — встаём заново"
+                          % body.get("reason", "?"))
+                try:
+                    self.stomp.send_json("/app/matchmaking/start", {})
+                except Exception as exc:
+                    self._log(f"повтор matchmaking не удался: {exc}")
             return
         if dest.endswith("/active-game"):
             # Resume после перезапуска бота: подключаемся к идущей партии и
@@ -651,9 +713,24 @@ class OpponentBot:
                 return
             if phase in _READY_PHASES and phase not in self._readied_phases:
                 self._readied_phases.add(phase)
-                self.stomp.send_json("/app/game/phase-ready",
-                                     {"gameId": self.game_id, "phase": phase})
-                self._log(f"phase-ready: {phase}")
+                # FIX-E2E-010: в минимальном режиме (напротив живого UE-клиента)
+                # ready на DICE_ROLL_2/MULLIGAN уходит с паузой — иначе бот
+                # проскакивает фазу раньше, чем UE отрисует её экран.
+                # В full_play (два headless-бота) ждать некого — шлём сразу.
+                if phase in _DELAYED_READY_PHASES and not self.full_play:
+                    gid = self.game_id
+                    def _delayed_ready(p: str = phase, g: str | None = gid) -> None:
+                        if self.game_id != g:
+                            return
+                        self.stomp.send_json("/app/game/phase-ready",
+                                             {"gameId": g, "phase": p})
+                        self._log(f"phase-ready: {p} (отложен на {_DELAYED_READY_SECONDS:.0f}s "
+                                  f"— даём UE-клиенту показать экран)")
+                    threading.Timer(_DELAYED_READY_SECONDS, _delayed_ready).start()
+                else:
+                    self.stomp.send_json("/app/game/phase-ready",
+                                         {"gameId": self.game_id, "phase": phase})
+                    self._log(f"phase-ready: {phase}")
             elif phase == "DEPLOYMENT" and not self._deployed:
                 self._deployed = True
                 self._deploy_units()
