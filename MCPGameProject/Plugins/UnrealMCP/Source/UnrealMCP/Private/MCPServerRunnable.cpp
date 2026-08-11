@@ -99,17 +99,36 @@ uint32 FMCPServerRunnable::Run()
                                 int32 TotalBytesSent = 0;
                                 bool bSuccess = true;
 
-                                // Send all data in a loop (TCP may not send everything at once)
+                                // Сокет НЕблокирующий: при переполненном буфере
+                                // отправки Send отдаёт SE_EWOULDBLOCK (или true с
+                                // BytesSent == 0). Раньше это ломало цикл по break —
+                                // ответ уходил обрезанным, клиент получал битый JSON
+                                // и ждал до таймаута, снаружи неотличимо от висяка.
+                                // Первой командой, штатно выдающей сотни КБ, стала
+                                // material_get_graph, на ней это и всплывало.
+                                const double SendDeadlineSeconds = FPlatformTime::Seconds() + 30.0;
                                 while (TotalBytesSent < TotalDataSize)
                                 {
                                     int32 BytesSent = 0;
-                                    bool bSendResult = ClientSocket->Send(DataToSend + TotalBytesSent,
-                                                                          TotalDataSize - TotalBytesSent,
-                                                                          BytesSent);
+                                    const bool bSendResult = ClientSocket->Send(DataToSend + TotalBytesSent,
+                                                                               TotalDataSize - TotalBytesSent,
+                                                                               BytesSent);
 
-                                    if (!bSendResult)
+                                    if (!bSendResult || BytesSent <= 0)
                                     {
-                                        int32 LastError = (int32)ISocketSubsystem::Get()->GetLastErrorCode();
+                                        const int32 LastError = (int32)ISocketSubsystem::Get()->GetLastErrorCode();
+                                        const bool bTransient =
+                                            (!bSendResult && (LastError == SE_EWOULDBLOCK || LastError == SE_EINTR))
+                                            || (bSendResult && BytesSent == 0);
+
+                                        if (bTransient && FPlatformTime::Seconds() < SendDeadlineSeconds)
+                                        {
+                                            // Буфер сокета полон — подождать и дослать,
+                                            // а не бросать ответ на полуслове.
+                                            FPlatformProcess::Sleep(0.005f);
+                                            continue;
+                                        }
+
                                         UE_LOG(LogTemp, Error, TEXT("MCPServerRunnable: Failed to send response after %d/%d bytes - Error code: %d"),
                                                TotalBytesSent, TotalDataSize, LastError);
                                         bSuccess = false;
@@ -117,8 +136,13 @@ uint32 FMCPServerRunnable::Run()
                                     }
 
                                     TotalBytesSent += BytesSent;
-                                    UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Sent %d bytes (%d/%d total)"),
-                                           BytesSent, TotalBytesSent, TotalDataSize);
+                                }
+
+                                if (bSuccess && TotalBytesSent < TotalDataSize)
+                                {
+                                    UE_LOG(LogTemp, Error, TEXT("MCPServerRunnable: Response TRUNCATED (%d/%d bytes) — client will see malformed JSON"),
+                                           TotalBytesSent, TotalDataSize);
+                                    bSuccess = false;
                                 }
 
                                 if (bSuccess)

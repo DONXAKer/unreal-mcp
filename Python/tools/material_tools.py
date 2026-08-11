@@ -503,9 +503,9 @@ def register_material_tools(mcp: FastMCP) -> None:
     def material_get_graph(
         ctx: Context[Any, Any, Any],
         assetPath: str,
-        includeUnconnectedInputs: bool = True,
         maxNodes: int = 500,
         timeBudgetSeconds: float = 4.0,
+        verboseLog: bool = False,
     ) -> dict[str, Any]:
         """
         Read back a master material graph: every expression node plus its wiring.
@@ -520,33 +520,45 @@ def register_material_tools(mcp: FastMCP) -> None:
 
         Args:
             assetPath: Full /Game/... path to a UMaterial or UMaterialInstance.
-            includeUnconnectedInputs: When True (default) every input pin is listed
-                with a "connected" flag. Set False to list only wired pins.
             maxNodes: Safety cap on serialized nodes (default 500). meta.truncated
                 tells you whether the cap was hit.
             timeBudgetSeconds: Wall-clock budget for the graph walk (default 4.0, deliberately
                 under the 5s client socket timeout).
                 On overrun a partial graph comes back with meta.timedOut = True
                 instead of the editor game thread stalling.
+            verboseLog: Log every node to the editor log (LogUnrealMCPMaterialGraph)
+                with a forced flush. Off by default: the flush is more expensive
+                than the walk itself and would eat the time budget.
 
         Returns meta with:
             materialPath, resolvedFrom ("material" | "instance"), nodeCount,
             returnedNodeCount, truncated, timedOut, elapsedSeconds,
+            baseIsEngineDefaultMaterial, warnings[] (READ THESE: they flag
+            un-traversed MaterialFunctionCall bodies, empty rootConnections and
+            nodes that material_connect cannot address),
+            instanceParameters{scalars,vectors,textures} when assetPath was an
+            instance — nodes[] describe the BASE material with its defaults,
+            the instance's own values live here,
             nodes: [{name, class, nodeId, posX, posY, props{}, inputs[]}]
               props are type-dependent: ParameterName/DefaultValue (ScalarParameter,
               VectorParameter), SpeedX/SpeedY (Panner), Texture/TexturePath
               (TextureSample, TextureSampleParameter2D), CoordinateIndex/UTiling/
               VTiling (TextureCoordinate), ConstA/ConstB (Add, Multiply), Code (Custom).
+              MaterialFunctionCall / MaterialAttributeLayers carry
+              props.bodyTraversed = False: a wire that continues inside them looks
+              like a dead end here, so do NOT read that as "not connected".
               inputs: [{index, name, connected, fromNode, fromClass, fromNodeId,
                         fromOutputIndex}]
             rootConnections: {BaseColor|Normal|Roughness|Metallic|WorldPositionOffset|
-              CustomizedUV0..7|...: {node, nodeClass, nodeId, outputIndex}} — only
-              pins that are actually connected appear.
+              CustomizedUV0..7|FrontMaterial|ShadingModelFromMaterialExpression|...:
+              {node, nodeClass, nodeId, outputIndex}} — only pins that are actually
+              connected appear. With Substrate enabled the whole graph goes into
+              FrontMaterial.
 
         Example:
             material_get_graph(assetPath="/Game/WarCard/Units/Materials/M_WarCard_UnitTrack")
             material_get_graph(assetPath="/Game/WarCard/Units/Materials/MI_t72b_Track",
-                               includeUnconnectedInputs=False)
+                               verboseLog=True)
         """
         from unreal_mcp_server import get_unreal_connection
         try:
@@ -555,9 +567,9 @@ def register_material_tools(mcp: FastMCP) -> None:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
             payload: dict[str, Any] = {
                 "assetPath": assetPath,
-                "includeUnconnectedInputs": bool(includeUnconnectedInputs),
                 "maxNodes": int(maxNodes),
                 "timeBudgetSeconds": float(timeBudgetSeconds),
+                "verboseLog": bool(verboseLog),
             }
             logger.info(f"Reading material graph: {payload}")
             response = unreal.send_command("material_get_graph", payload)

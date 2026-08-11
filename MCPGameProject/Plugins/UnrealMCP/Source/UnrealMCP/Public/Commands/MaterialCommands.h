@@ -113,32 +113,47 @@ private:
      *   - assetPath                 (string, required): /Game/... path to a UMaterial
      *                               or UMaterialInstance. For an instance the base
      *                               material (GetBaseMaterial()) is inspected.
-     *   - includeUnconnectedInputs  (bool, optional, default true): when false, only
-     *                               inputs that actually have a source node are listed.
-     *   - maxNodes                  (number, optional, default 500): safety cap on the
-     *                               number of nodes serialized.
+     *   - maxNodes                  (number, optional, default 500): cap on the number
+     *                               of nodes serialized. 0 is legal (rootConnections
+     *                               only); negative or > 100000 is an error rather than
+     *                               a silent fallback to the default.
      *   - timeBudgetSeconds         (number, optional, default 4): wall-clock budget for
-     *                               the node walk. On overrun the traversal stops and a
-     *                               partial graph is returned with meta.timedOut = true,
-     *                               instead of stalling the game thread (and with it the
-     *                               whole MCP bridge, which waits on Future.Get()).
+     *                               the node walk, deliberately under the Python client's
+     *                               5 s socket timeout. On overrun a partial graph comes
+     *                               back with meta.timedOut = true instead of stalling
+     *                               the game thread (and with it the whole MCP bridge).
+     *   - verboseLog                (bool, optional, default false): log every node with a
+     *                               forced flush. Off by default — the flush costs more
+     *                               than the walk and would eat the time budget.
      *
-     * Never triggers a synchronous asset load while walking: texture references are
-     * read off the TObjectPtr handle (GetPathName/IsResolved) rather than dereferenced,
-     * and the per-node input walk is bounded explicitly instead of via CountInputs()
-     * (whose engine body is `while (GetInput(i)) ++i`, i.e. termination is delegated
-     * to each node's virtual override). Both are game-thread hang vectors that 3.24.0
-     * hit; the time budget below is the backstop for anything else.
+     * Never triggers a synchronous asset load while walking: texture and material-function
+     * references are read off the TObjectPtr handle (GetPathName/IsResolved) rather than
+     * dereferenced, and the per-node input walk is bounded explicitly instead of via
+     * CountInputs() (whose engine body is `while (GetInput(i)) ++i`, i.e. it both delegates
+     * termination to each node's virtual override AND stops at the first null — which drops
+     * every pin after an unconnected reroute on Composite / PinBase nodes).
+     *
+     * Does NOT descend into UMaterialExpressionMaterialFunctionCall or Material Layers.
+     * Such nodes report props.bodyTraversed = false and raise a meta.warnings entry, so a
+     * wire continuing inside them is not mistaken for a dead end.
      *
      * Result meta:
      *   - materialPath, resolvedFrom ("material" | "instance"), nodeCount, truncated,
-     *     timedOut, elapsedSeconds
-     *   - nodes[]: { name, class, nodeId, posX, posY, props{}, inputs[] }
+     *     timedOut, elapsedSeconds, baseIsEngineDefaultMaterial, warnings[]
+     *   - nodes[]: { name, class, index, nodeId, addressableByNodeId, posX, posY,
+     *                props{}, inputs[] }
+     *       nodeId is the node's Desc field, which material_add_node hijacks as its ID;
+     *       assets not built through MCP have it empty, and material_connect cannot
+     *       target such a node — hence addressableByNodeId.
      *       props are type-dependent (ParameterName/DefaultValue, SpeedX/SpeedY,
      *       Texture, CoordinateIndex, ConstA/ConstB, Code, …)
      *       inputs[]: { index, name, connected, fromNode, fromClass, fromNodeId,
      *                   fromOutputIndex }
-     *   - rootConnections{}: BaseColor / Normal / Roughness / … → { node, nodeClass,
+     *   - instanceParameters{}: scalars / vectors / textures with the instance's actual
+     *       values (nodes[] describe the BASE material and its defaults). Present only
+     *       when assetPath was an instance.
+     *   - rootConnections{}: BaseColor / Normal / Roughness / FrontMaterial (Substrate) /
+     *       ShadingModelFromMaterialExpression / CustomizedUV0..7 / … → { node, nodeClass,
      *                        nodeId, outputIndex } for every connected root pin
      *                        (read from UMaterialEditorOnlyData in UE 5.8).
      */

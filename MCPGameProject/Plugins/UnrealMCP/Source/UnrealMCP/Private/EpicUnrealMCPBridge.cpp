@@ -28,6 +28,8 @@
 #include "Misc/CommandLine.h"
 #include "Misc/Parse.h"
 #include "HAL/PlatformMisc.h"
+#include "HAL/IConsoleManager.h"
+#include "Misc/Timespan.h"
 // Add Blueprint related includes
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
@@ -273,6 +275,18 @@ void UEpicUnrealMCPBridge::StopServer()
 }
 
 // Execute a command received from a client
+// Потолок ожидания одной команды сокетным потоком. FMCPServerRunnable::Run
+// обслуживает клиентов ПО ОДНОМУ и стоит здесь в ожидании, поэтому раньше
+// любая застрявшая на game thread команда убивала мост ЦЕЛИКОМ, а не только
+// себя: Accept() не вызывался, а Windows на переполненную accept-очередь
+// отвечает RST — снаружи это WinError 10061, будто редактор закрыт.
+// 0 возвращает старое поведение (ждать вечно).
+static TAutoConsoleVariable<float> CVarMCPCommandTimeoutSeconds(
+    TEXT("mcp.CommandTimeoutSeconds"),
+    180.0f,
+    TEXT("Max seconds the MCP socket thread waits for a command to finish on the game thread. 0 = wait forever."),
+    ECVF_Default);
+
 FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
 {
     UE_LOG(LogTemp, Display, TEXT("EpicUnrealMCPBridge: Executing command: %s"), *CommandType);
@@ -321,7 +335,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
                 // Дублирует UnrealMCP.uplugin::VersionName — бампить ОБА места,
                 // иначе ping врёт и handshake Python-клиента сверяет не то.
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.24.1"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.24.2"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -645,6 +659,31 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
         PromiseRef->SetValue(ResultString);
         return false;   // одноразовый тикер
     }), /*InDelay=*/0.0f);
+
+    const float TimeoutSeconds = CVarMCPCommandTimeoutSeconds.GetValueOnAnyThread();
+    if (TimeoutSeconds > 0.0f && !Future.WaitFor(FTimespan::FromSeconds(TimeoutSeconds)))
+    {
+        // Промис живёт в TSharedRef, захваченном тикером, поэтому поздний
+        // SetValue после нашего выхода безопасен — значение просто никто не
+        // прочитает. Зато сокетный поток освобождается и продолжает
+        // принимать клиентов: висит одна команда, а не весь мост.
+        UE_LOG(LogTemp, Error,
+            TEXT("EpicUnrealMCPBridge: command '%s' exceeded %.0fs on the game thread — abandoning the wait ")
+            TEXT("(mcp.CommandTimeoutSeconds). The editor may still be busy with it."),
+            *CommandType, TimeoutSeconds);
+
+        TSharedPtr<FJsonObject> TimeoutJson = MakeShareable(new FJsonObject);
+        TimeoutJson->SetStringField(TEXT("status"), TEXT("error"));
+        TimeoutJson->SetStringField(TEXT("error"), FString::Printf(
+            TEXT("Command '%s' did not finish within %.0f s on the game thread (mcp.CommandTimeoutSeconds)"),
+            *CommandType, TimeoutSeconds));
+        TimeoutJson->SetStringField(TEXT("code"), TEXT("COMMAND_TIMEOUT"));
+
+        FString TimeoutString;
+        TSharedRef<TJsonWriter<>> TimeoutWriter = TJsonWriterFactory<>::Create(&TimeoutString);
+        FJsonSerializer::Serialize(TimeoutJson.ToSharedRef(), TimeoutWriter);
+        return TimeoutString;
+    }
 
     return Future.Get();
 }
