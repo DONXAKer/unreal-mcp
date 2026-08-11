@@ -504,7 +504,7 @@ def register_material_tools(mcp: FastMCP) -> None:
         ctx: Context[Any, Any, Any],
         assetPath: str,
         maxNodes: int = 500,
-        timeBudgetSeconds: float = 4.0,
+        timeBudgetSeconds: float = 20.0,
         verboseLog: bool = False,
     ) -> dict[str, Any]:
         """
@@ -522,10 +522,12 @@ def register_material_tools(mcp: FastMCP) -> None:
             assetPath: Full /Game/... path to a UMaterial or UMaterialInstance.
             maxNodes: Safety cap on serialized nodes (default 500). meta.truncated
                 tells you whether the cap was hit.
-            timeBudgetSeconds: Wall-clock budget for the graph walk (default 4.0, deliberately
-                under the 5s client socket timeout).
-                On overrun a partial graph comes back with meta.timedOut = True
-                instead of the editor game thread stalling.
+            timeBudgetSeconds: Wall-clock budget for the graph WALK (default 20.0, kept
+                well under the bridge's mcp.CommandTimeoutSeconds). On overrun a
+                partial graph comes back with meta.timedOut = True instead of the
+                editor game thread stalling. NOTE: the budget covers the node walk
+                only — loading a cold asset happens before it and is reported
+                separately as meta.loadSeconds.
             verboseLog: Log every node to the editor log (LogUnrealMCPMaterialGraph)
                 with a forced flush. Off by default: the flush is more expensive
                 than the walk itself and would eat the time budget.
@@ -536,9 +538,12 @@ def register_material_tools(mcp: FastMCP) -> None:
             baseIsEngineDefaultMaterial, warnings[] (READ THESE: they flag
             un-traversed MaterialFunctionCall bodies, empty rootConnections and
             nodes that material_connect cannot address),
+            loadSeconds (time spent resolving/loading the asset, outside the budget),
             instanceParameters{scalars,vectors,textures} when assetPath was an
             instance — nodes[] describe the BASE material with its defaults,
-            the instance's own values live here,
+            the instance's own values live here. All three list EVERY parameter,
+            with "overridden" telling you whether the value is the instance's own
+            or inherited from the master,
             nodes: [{name, class, nodeId, posX, posY, props{}, inputs[]}]
               props are type-dependent: ParameterName/DefaultValue (ScalarParameter,
               VectorParameter), SpeedX/SpeedY (Panner), Texture/TexturePath
@@ -547,18 +552,26 @@ def register_material_tools(mcp: FastMCP) -> None:
               MaterialFunctionCall / MaterialAttributeLayers carry
               props.bodyTraversed = False: a wire that continues inside them looks
               like a dead end here, so do NOT read that as "not connected".
-              inputs: [{index, name, connected, fromNode, fromClass, fromNodeId,
-                        fromOutputIndex}]
+              inputs: [{index, name, connected, unresolvedPin, fromNode, fromClass,
+                        fromNodeId, fromOutputIndex}]
+              unresolvedPin = True marks a pin that exists on the node but that UE
+              would not resolve (typically an unbound reroute pin on a collapsed
+              Composite). It is NOT the same as "pin absent" — trailing absent pins
+              are simply not listed.
             rootConnections: {BaseColor|Normal|Roughness|Metallic|WorldPositionOffset|
               CustomizedUV0..7|FrontMaterial|ShadingModelFromMaterialExpression|...:
               {node, nodeClass, nodeId, outputIndex}} — only pins that are actually
               connected appear. With Substrate enabled the whole graph goes into
               FrontMaterial.
 
+        Round-trip caveat: this reader returns more than material_set_node_param can
+        write back. Panner.bFractionalPart, Add/Multiply/Lerp Const*, Custom.Code and
+        the MaterialFunctionCall / MaterialAttributeLayers fields are readable but NOT
+        settable — do not assume "I can fix whatever I find with the same commands".
+
         Example:
             material_get_graph(assetPath="/Game/WarCard/Units/Materials/M_WarCard_UnitTrack")
-            material_get_graph(assetPath="/Game/WarCard/Units/Materials/MI_t72b_Track",
-                               verboseLog=True)
+            material_get_graph(assetPath="/Game/WarCard/Units/Materials/MI_t72b_Track")
         """
         from unreal_mcp_server import get_unreal_connection
         try:

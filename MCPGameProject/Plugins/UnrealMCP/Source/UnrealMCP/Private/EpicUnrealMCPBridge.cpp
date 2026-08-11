@@ -30,6 +30,7 @@
 #include "HAL/PlatformMisc.h"
 #include "HAL/IConsoleManager.h"
 #include "Misc/Timespan.h"
+#include <atomic>
 // Add Blueprint related includes
 #include "Engine/Blueprint.h"
 #include "Engine/BlueprintGeneratedClass.h"
@@ -281,21 +282,49 @@ void UEpicUnrealMCPBridge::StopServer()
 // себя: Accept() не вызывался, а Windows на переполненную accept-очередь
 // отвечает RST — снаружи это WinError 10061, будто редактор закрыт.
 // 0 возвращает старое поведение (ждать вечно).
+//
+// Значение согласовано с приёмным таймаутом Python-клиента
+// (UnrealConnection.receive_full_response, env UNREAL_MCP_RECV_TIMEOUT).
+// Держать потолок ВЫШЕ клиентского бессмысленно: клиент уходит раньше, ответ
+// COMMAND_TIMEOUT читать становится некому, и наружу вместо внятной ошибки
+// вылезает обрыв связи. Меняешь одно — проверь второе.
 static TAutoConsoleVariable<float> CVarMCPCommandTimeoutSeconds(
     TEXT("mcp.CommandTimeoutSeconds"),
-    180.0f,
+    120.0f,
     TEXT("Max seconds the MCP socket thread waits for a command to finish on the game thread. 0 = wait forever."),
     ECVF_Default);
+
+// Общее состояние сокетного потока и тикер-делегата.
+//
+// TPromise заполняется РОВНО один раз, и после таймаута заполнить его обязан
+// тот, кто снял тикер: `~TPromise` в UE 5.8 держит `check(State->IsComplete())`,
+// поэтому уничтожение делегата с незаполненным промисом роняет редактор
+// ассертом на выходе. Гонку «тикер как раз сработал» закрывает
+// compare_exchange — второй вызов становится no-op вместо второго SetValue.
+struct FMCPCommandState
+{
+    TPromise<FString> Promise;
+    std::atomic<bool> bFulfilled{false};
+
+    void Fulfill(const FString& Value)
+    {
+        bool bExpected = false;
+        if (bFulfilled.compare_exchange_strong(bExpected, true))
+        {
+            Promise.SetValue(Value);
+        }
+    }
+};
 
 FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const TSharedPtr<FJsonObject>& Params)
 {
     UE_LOG(LogTemp, Display, TEXT("EpicUnrealMCPBridge: Executing command: %s"), *CommandType);
 
     // Create a promise to wait for the result
-    // Промис живёт в TSharedRef, а не захватывается по move: тикер-делегат
+    // Состояние живёт в TSharedRef, а не захватывается по move: тикер-делегат
     // копируемый, mutable-лямбда с move-only состоянием в него не влезает.
-    TSharedRef<TPromise<FString>> PromiseRef = MakeShared<TPromise<FString>>();
-    TFuture<FString> Future = PromiseRef->GetFuture();
+    TSharedRef<FMCPCommandState> StateRef = MakeShared<FMCPCommandState>();
+    TFuture<FString> Future = StateRef->Promise.GetFuture();
 
     // ── Исполнение на game thread ЧЕРЕЗ CORE TICKER, а не через AsyncTask ──────
     // Раньше здесь был AsyncTask(ENamedThreads::GameThread, ...): обработчик
@@ -316,8 +345,8 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
     // thread'а, вне контекста задачи. Оттуда синхронные загрузки и компиляции
     // легальны. Точечные обходы (отложение работы через FTSTicker внутри
     // отдельных handler'ов) больше не нужны: безопасен весь конвейер команд.
-    FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
-        [this, CommandType, Params, PromiseRef](float) -> bool
+    const FTSTicker::FDelegateHandle TickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
+        [this, CommandType, Params, StateRef](float) -> bool
     {
         TSharedPtr<FJsonObject> ResponseJson = MakeShareable(new FJsonObject);
         
@@ -335,7 +364,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
                 // Дублирует UnrealMCP.uplugin::VersionName — бампить ОБА места,
                 // иначе ping врёт и handshake Python-клиента сверяет не то.
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.24.2"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.25.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -540,7 +569,9 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("add_anim_state") ||
                      CommandType == TEXT("add_anim_transition") ||
                      CommandType == TEXT("add_play_anim_node") ||
-                     CommandType == TEXT("add_blend_space_player_node"))
+                     CommandType == TEXT("add_blend_space_player_node") ||
+                     // MCP-ANIM-001 (v3.23.0)
+                     CommandType == TEXT("import_anim_sequence"))
             {
                 ResultJson = AnimationBPCommands->HandleCommand(CommandType, Params);
             }
@@ -606,7 +637,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                     FString ResultString;
                     TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResultString);
                     FJsonSerializer::Serialize(ResponseJson.ToSharedRef(), Writer);
-                    PromiseRef->SetValue(ResultString);
+                    StateRef->Fulfill(ResultString);
                     return false;   // одноразовый тикер
                 }
             }
@@ -614,7 +645,9 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
             // Check if the result contains an error
             bool bSuccess = true;
             FString ErrorMessage;
-            
+            // Структурный error-объект новой asset-схемы {category, code, message, details}.
+            TSharedPtr<FJsonObject> StructuredError;
+
             if (ResultJson->HasField(TEXT("success")))
             {
                 bSuccess = ResultJson->GetBoolField(TEXT("success"));
@@ -623,12 +656,49 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                     ErrorMessage = ResultJson->GetStringField(TEXT("error"));
                 }
             }
-            
+            // Asset-команды отвечают через FAssetCommonUtils::MakeFailureResponse,
+            // а он кладёт `ok:false` и НЕ кладёт `success` вовсе. Пока здесь
+            // стояла проверка только по `success`, bSuccess оставался true, и
+            // отказ уезжал наружу как {status:"success", result:{ok:false,...}}:
+            // Python-обёртка видит на верхнем уровне status=success и разбирает
+            // его как успех. Так молча обнулялись ВСЕ коды отказа asset-слоя
+            // (ASSET_NOT_FOUND, INVALID_MAX_NODES, BASE_MATERIAL_IS_ENGINE_DEFAULT,
+            // NO_EDITOR_ONLY_DATA) — гарды срабатывали, а звучали как «ок».
+            else if (ResultJson->HasField(TEXT("ok")))
+            {
+                bSuccess = ResultJson->GetBoolField(TEXT("ok"));
+                if (!bSuccess)
+                {
+                    const TSharedPtr<FJsonObject>* ErrObj = nullptr;
+                    if (ResultJson->TryGetObjectField(TEXT("error"), ErrObj)
+                        && ErrObj != nullptr && (*ErrObj).IsValid())
+                    {
+                        StructuredError = *ErrObj;
+                        (*ErrObj)->TryGetStringField(TEXT("message"), ErrorMessage);
+                    }
+                    else
+                    {
+                        ResultJson->TryGetStringField(TEXT("error"), ErrorMessage);
+                    }
+                }
+            }
+
             if (bSuccess)
             {
                 // Set success status and include the result
                 ResponseJson->SetStringField(TEXT("status"), TEXT("success"));
                 ResponseJson->SetObjectField(TEXT("result"), ResultJson);
+            }
+            else if (StructuredError.IsValid())
+            {
+                // Отказ asset-слоя: код и категорию доносим ЦЕЛИКОМ, а не
+                // схлопываем в строку. Python-обёртка разбирает верхнеуровневый
+                // `ok` раньше `status`, поэтому вызывающий получает настоящие
+                // category/code/details вместо безымянного BRIDGE_ERROR и может
+                // отличить «ассета нет» от «редактор занят».
+                ResponseJson->SetStringField(TEXT("status"), TEXT("error"));
+                ResponseJson->SetBoolField(TEXT("ok"), false);
+                ResponseJson->SetObjectField(TEXT("error"), StructuredError);
             }
             else
             {
@@ -656,32 +726,55 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
         FString ResultString;
         TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResultString);
         FJsonSerializer::Serialize(ResponseJson.ToSharedRef(), Writer);
-        PromiseRef->SetValue(ResultString);
+        StateRef->Fulfill(ResultString);
         return false;   // одноразовый тикер
     }), /*InDelay=*/0.0f);
 
     const float TimeoutSeconds = CVarMCPCommandTimeoutSeconds.GetValueOnAnyThread();
     if (TimeoutSeconds > 0.0f && !Future.WaitFor(FTimespan::FromSeconds(TimeoutSeconds)))
     {
-        // Промис живёт в TSharedRef, захваченном тикером, поэтому поздний
-        // SetValue после нашего выхода безопасен — значение просто никто не
-        // прочитает. Зато сокетный поток освобождается и продолжает
-        // принимать клиентов: висит одна команда, а не весь мост.
+        // Снимаем тикер. Если он ещё НЕ сработал (типовой случай: game thread
+        // занят предыдущей командой, наша даже не начиналась) — команда не
+        // выполнится вообще. Без этого она отрабатывала уже после того, как
+        // клиент получил ошибку и по своей retry-логике прислал её повторно:
+        // импорт/спавн/удаление исполнялись ДВАЖДЫ, а лог рапортовал отказ.
+        //
+        // Гонку «тикер сработал прямо сейчас» RemoveTicker не закрывает — её
+        // закрывает Fulfill ниже: он либо заполняет промис за снятый делегат
+        // (иначе ~TPromise падает на check(IsComplete())), либо становится
+        // no-op, если тикер успел заполнить его сам.
+        FTSTicker::GetCoreTicker().RemoveTicker(TickerHandle);
+
         UE_LOG(LogTemp, Error,
-            TEXT("EpicUnrealMCPBridge: command '%s' exceeded %.0fs on the game thread — abandoning the wait ")
-            TEXT("(mcp.CommandTimeoutSeconds). The editor may still be busy with it."),
+            TEXT("EpicUnrealMCPBridge: command '%s' exceeded %.0fs on the game thread — cancelling it ")
+            TEXT("(mcp.CommandTimeoutSeconds). If it had already started, it will still finish."),
             *CommandType, TimeoutSeconds);
+
+        const FString TimeoutMessage = FString::Printf(
+            TEXT("Command '%s' did not finish within %.0f s on the game thread (mcp.CommandTimeoutSeconds)"),
+            *CommandType, TimeoutSeconds);
+
+        // Отдаём код в структурном виде: обёртка разбирает верхнеуровневый `ok`
+        // раньше `status`, поэтому COMMAND_TIMEOUT доходит до вызывающего как
+        // код, а не тонет в безымянном BRIDGE_ERROR. Отличить «команда упала»
+        // от «команда, возможно, ещё идёт — ретраить опасно» иначе нечем.
+        TSharedPtr<FJsonObject> TimeoutError = MakeShareable(new FJsonObject);
+        TimeoutError->SetStringField(TEXT("category"), TEXT("ue_internal"));
+        TimeoutError->SetStringField(TEXT("code"), TEXT("COMMAND_TIMEOUT"));
+        TimeoutError->SetStringField(TEXT("message"), TimeoutMessage);
+        TimeoutError->SetObjectField(TEXT("details"), MakeShared<FJsonObject>());
 
         TSharedPtr<FJsonObject> TimeoutJson = MakeShareable(new FJsonObject);
         TimeoutJson->SetStringField(TEXT("status"), TEXT("error"));
-        TimeoutJson->SetStringField(TEXT("error"), FString::Printf(
-            TEXT("Command '%s' did not finish within %.0f s on the game thread (mcp.CommandTimeoutSeconds)"),
-            *CommandType, TimeoutSeconds));
+        TimeoutJson->SetBoolField(TEXT("ok"), false);
+        TimeoutJson->SetObjectField(TEXT("error"), TimeoutError);
         TimeoutJson->SetStringField(TEXT("code"), TEXT("COMMAND_TIMEOUT"));
 
         FString TimeoutString;
         TSharedRef<TJsonWriter<>> TimeoutWriter = TJsonWriterFactory<>::Create(&TimeoutString);
         FJsonSerializer::Serialize(TimeoutJson.ToSharedRef(), TimeoutWriter);
+
+        StateRef->Fulfill(TimeoutString);
         return TimeoutString;
     }
 

@@ -70,11 +70,131 @@ uint32 FMCPServerRunnable::Run()
                         FString ReceivedText = UTF8_TO_TCHAR(Buffer);
                         UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Received: %s"), *ReceivedText);
 
+                        // Отправка ответа вынесена в лямбду, потому что отвечать
+                        // обязаны ВСЕ три пути, а не только удачный. Раньше на
+                        // нераспарсенный JSON и на запрос без поля `type` сервер
+                        // молча писал Warning в лог и не слал ничего: клиент
+                        // досиживал до собственного таймаута. Пока тот был 5 с,
+                        // это выглядело мелочью; после согласования таймаутов с
+                        // потолком моста цена молчания выросла до двух минут.
+                        auto SendResponse = [this, &ClientSocketRef = ClientSocket](const FString& Response)
+                        {
+                            UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Command executed, response length: %d"), Response.Len());
+
+                            // Log response for debugging (truncated for large responses)
+                            FString LogResponse = Response.Len() > 200 ? Response.Left(200) + TEXT("...") : Response;
+                            UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Sending response (%d bytes): %s"),
+                                   Response.Len(), *LogResponse);
+
+                            // Convert to UTF8 once
+                            FTCHARToUTF8 UTF8Response(*Response);
+                            const uint8* DataToSend = (const uint8*)UTF8Response.Get();
+                            int32 TotalDataSize = UTF8Response.Length();
+                            int32 TotalBytesSent = 0;
+                            bool bSuccess = true;
+
+                            // Сокет НЕблокирующий: при переполненном буфере
+                            // отправки Send отдаёт SE_EWOULDBLOCK (или true с
+                            // BytesSent == 0). Раньше это ломало цикл по break —
+                            // ответ уходил обрезанным, клиент получал битый JSON
+                            // и ждал до таймаута, снаружи неотличимо от висяка.
+                            // Первой командой, штатно выдающей сотни КБ, стала
+                            // material_get_graph, на ней это и всплывало.
+                            // bRunning в условии обязателен: клиент, ушедший по
+                            // своему таймауту, оставляет буфер вечно полным, и
+                            // цикл честно досиживает все 30 с. Без этой проверки
+                            // Stop() (закрытие редактора, выгрузка модуля) на
+                            // такой отправке не действует — shutdown повисает на
+                            // полминуты за каждый застрявший ответ.
+                            const double SendDeadlineSeconds = FPlatformTime::Seconds() + 30.0;
+                            while (TotalBytesSent < TotalDataSize && bRunning)
+                            {
+                                int32 BytesSent = 0;
+                                const bool bSendResult = ClientSocketRef->Send(DataToSend + TotalBytesSent,
+                                                                           TotalDataSize - TotalBytesSent,
+                                                                           BytesSent);
+
+                                if (!bSendResult || BytesSent <= 0)
+                                {
+                                    // Код ошибки осмыслен ТОЛЬКО когда Send отчитался
+                                    // о провале. При bSendResult == true с BytesSent == 0
+                                    // (полный буфер — штатное состояние на сотнях КБ)
+                                    // GetLastErrorCode отдаёт остаток от прошлой
+                                    // операции, обычно SE_NO_ERROR, и лог печатал
+                                    // «Error code: 0», уводя разбор в сторону.
+                                    const int32 LastError = bSendResult
+                                        ? (int32)SE_NO_ERROR
+                                        : (int32)ISocketSubsystem::Get()->GetLastErrorCode();
+                                    const bool bTransient =
+                                        (!bSendResult && (LastError == SE_EWOULDBLOCK || LastError == SE_EINTR))
+                                        || (bSendResult && BytesSent == 0);
+
+                                    if (bTransient && FPlatformTime::Seconds() < SendDeadlineSeconds)
+                                    {
+                                        // Буфер сокета полон — подождать и дослать,
+                                        // а не бросать ответ на полуслове.
+                                        FPlatformProcess::Sleep(0.005f);
+                                        continue;
+                                    }
+
+                                    UE_LOG(LogTemp, Error, TEXT("MCPServerRunnable: Failed to send response after %d/%d bytes — Send %s, error code: %d"),
+                                           TotalBytesSent, TotalDataSize,
+                                           bSendResult ? TEXT("stalled (send buffer full, client likely gone)") : TEXT("failed"),
+                                           LastError);
+                                    bSuccess = false;
+                                    break;
+                                }
+
+                                TotalBytesSent += BytesSent;
+                            }
+
+                            // Раньше здесь стояло `bSuccess && TotalBytesSent < TotalDataSize`,
+                            // и блок был недостижим: цикл выходил либо по выполненному
+                            // условию, либо через break, который уже снял bSuccess.
+                            // Диагностика «клиент увидит битый JSON» не печаталась
+                            // НИКОГДА — а именно она отличает «ответ не дошёл» от
+                            // «ответ не отправлялся». Достижимо и при выходе по !bRunning.
+                            if (TotalBytesSent < TotalDataSize)
+                            {
+                                UE_LOG(LogTemp, Error, TEXT("MCPServerRunnable: Response TRUNCATED (%d/%d bytes) — client will see malformed JSON"),
+                                       TotalBytesSent, TotalDataSize);
+                                bSuccess = false;
+                            }
+
+                            if (bSuccess)
+                            {
+                                UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Response sent successfully (%d bytes)"),
+                                       TotalBytesSent);
+                            }
+                        };
+
+                        // Ошибка протокола в том же конверте, что и всё остальное:
+                        // {status:error, ok:false, error:{category,code,message}} —
+                        // Python-обёртка разбирает верхнеуровневый `ok` первым.
+                        auto SendProtocolError = [&SendResponse](const TCHAR* Code, const FString& Message)
+                        {
+                            TSharedPtr<FJsonObject> Error = MakeShareable(new FJsonObject);
+                            Error->SetStringField(TEXT("category"), TEXT("user"));
+                            Error->SetStringField(TEXT("code"), Code);
+                            Error->SetStringField(TEXT("message"), Message);
+                            Error->SetObjectField(TEXT("details"), MakeShared<FJsonObject>());
+
+                            TSharedPtr<FJsonObject> Json = MakeShareable(new FJsonObject);
+                            Json->SetStringField(TEXT("status"), TEXT("error"));
+                            Json->SetBoolField(TEXT("ok"), false);
+                            Json->SetObjectField(TEXT("error"), Error);
+
+                            FString Out;
+                            TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&Out);
+                            FJsonSerializer::Serialize(Json.ToSharedRef(), Writer);
+                            SendResponse(Out);
+                        };
+
                         // Parse JSON
                         TSharedPtr<FJsonObject> JsonObject;
                         TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ReceivedText);
-                        
-                        if (FJsonSerializer::Deserialize(Reader, JsonObject))
+
+                        if (FJsonSerializer::Deserialize(Reader, JsonObject) && JsonObject.IsValid())
                         {
                             // Get command type
                             FString CommandType;
@@ -82,83 +202,27 @@ uint32 FMCPServerRunnable::Run()
                             {
                                 UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Executing command: %s"), *CommandType);
 
-                                // Execute command
-                                FString Response = Bridge->ExecuteCommand(CommandType, JsonObject->GetObjectField(TEXT("params")));
+                                const TSharedPtr<FJsonObject>* ParamsObj = nullptr;
+                                TSharedPtr<FJsonObject> Params =
+                                    (JsonObject->TryGetObjectField(TEXT("params"), ParamsObj) && ParamsObj && (*ParamsObj).IsValid())
+                                        ? *ParamsObj
+                                        : MakeShared<FJsonObject>();
 
-                                UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Command executed, response length: %d"), Response.Len());
-
-                                // Log response for debugging (truncated for large responses)
-                                FString LogResponse = Response.Len() > 200 ? Response.Left(200) + TEXT("...") : Response;
-                                UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Sending response (%d bytes): %s"),
-                                       Response.Len(), *LogResponse);
-
-                                // Convert to UTF8 once
-                                FTCHARToUTF8 UTF8Response(*Response);
-                                const uint8* DataToSend = (const uint8*)UTF8Response.Get();
-                                int32 TotalDataSize = UTF8Response.Length();
-                                int32 TotalBytesSent = 0;
-                                bool bSuccess = true;
-
-                                // Сокет НЕблокирующий: при переполненном буфере
-                                // отправки Send отдаёт SE_EWOULDBLOCK (или true с
-                                // BytesSent == 0). Раньше это ломало цикл по break —
-                                // ответ уходил обрезанным, клиент получал битый JSON
-                                // и ждал до таймаута, снаружи неотличимо от висяка.
-                                // Первой командой, штатно выдающей сотни КБ, стала
-                                // material_get_graph, на ней это и всплывало.
-                                const double SendDeadlineSeconds = FPlatformTime::Seconds() + 30.0;
-                                while (TotalBytesSent < TotalDataSize)
-                                {
-                                    int32 BytesSent = 0;
-                                    const bool bSendResult = ClientSocket->Send(DataToSend + TotalBytesSent,
-                                                                               TotalDataSize - TotalBytesSent,
-                                                                               BytesSent);
-
-                                    if (!bSendResult || BytesSent <= 0)
-                                    {
-                                        const int32 LastError = (int32)ISocketSubsystem::Get()->GetLastErrorCode();
-                                        const bool bTransient =
-                                            (!bSendResult && (LastError == SE_EWOULDBLOCK || LastError == SE_EINTR))
-                                            || (bSendResult && BytesSent == 0);
-
-                                        if (bTransient && FPlatformTime::Seconds() < SendDeadlineSeconds)
-                                        {
-                                            // Буфер сокета полон — подождать и дослать,
-                                            // а не бросать ответ на полуслове.
-                                            FPlatformProcess::Sleep(0.005f);
-                                            continue;
-                                        }
-
-                                        UE_LOG(LogTemp, Error, TEXT("MCPServerRunnable: Failed to send response after %d/%d bytes - Error code: %d"),
-                                               TotalBytesSent, TotalDataSize, LastError);
-                                        bSuccess = false;
-                                        break;
-                                    }
-
-                                    TotalBytesSent += BytesSent;
-                                }
-
-                                if (bSuccess && TotalBytesSent < TotalDataSize)
-                                {
-                                    UE_LOG(LogTemp, Error, TEXT("MCPServerRunnable: Response TRUNCATED (%d/%d bytes) — client will see malformed JSON"),
-                                           TotalBytesSent, TotalDataSize);
-                                    bSuccess = false;
-                                }
-
-                                if (bSuccess)
-                                {
-                                    UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Response sent successfully (%d bytes)"),
-                                           TotalBytesSent);
-                                }
+                                SendResponse(Bridge->ExecuteCommand(CommandType, Params));
                             }
                             else
                             {
                                 UE_LOG(LogTemp, Warning, TEXT("MCPServerRunnable: Missing 'type' field in command"));
+                                SendProtocolError(TEXT("MISSING_COMMAND_TYPE"),
+                                    TEXT("Request JSON has no 'type' field naming the command."));
                             }
                         }
                         else
                         {
                             UE_LOG(LogTemp, Warning, TEXT("MCPServerRunnable: Failed to parse JSON from: %s"), *ReceivedText);
+                            SendProtocolError(TEXT("MALFORMED_REQUEST_JSON"),
+                                FString::Printf(TEXT("Could not parse the request as JSON (%d bytes received). ")
+                                                TEXT("Note that NaN/Infinity are not valid JSON."), ReceivedText.Len()));
                         }
                     }
                     else
@@ -215,179 +279,3 @@ void FMCPServerRunnable::Stop()
 void FMCPServerRunnable::Exit()
 {
 }
-
-void FMCPServerRunnable::HandleClientConnection(TSharedPtr<FSocket> InClientSocket)
-{
-    if (!InClientSocket.IsValid())
-    {
-        UE_LOG(LogTemp, Error, TEXT("MCPServerRunnable: Invalid client socket passed to HandleClientConnection"));
-        return;
-    }
-
-    UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Starting to handle client connection"));
-    
-    // Set socket options for better connection stability
-    InClientSocket->SetNonBlocking(false);
-    UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Set socket to blocking mode"));
-    
-    // Properly read full message with timeout
-    const int32 MaxBufferSize = 4096;
-    uint8 Buffer[MaxBufferSize];
-    FString MessageBuffer;
-    
-    UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Starting message receive loop"));
-    
-    while (bRunning && InClientSocket.IsValid())
-    {
-        // Log socket state
-        bool bIsConnected = InClientSocket->GetConnectionState() == SCS_Connected;
-        UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Socket state - Connected: %s"), 
-               bIsConnected ? TEXT("true") : TEXT("false"));
-        
-        // Log pending data status before receive
-        uint32 PendingDataSize = 0;
-        bool HasPendingData = InClientSocket->HasPendingData(PendingDataSize);
-        UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Before Recv - HasPendingData=%s, Size=%d"), 
-               HasPendingData ? TEXT("true") : TEXT("false"), PendingDataSize);
-        
-        // Try to receive data with timeout
-        int32 BytesRead = 0;
-        bool bReadSuccess = false;
-        
-        UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Attempting to receive data..."));
-        bReadSuccess = InClientSocket->Recv(Buffer, MaxBufferSize - 1, BytesRead, ESocketReceiveFlags::None);
-        
-        UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Recv attempt complete - Success=%s, BytesRead=%d"), 
-               bReadSuccess ? TEXT("true") : TEXT("false"), BytesRead);
-        
-        if (BytesRead > 0)
-        {
-            // Log raw data for debugging
-            FString HexData;
-            for (int32 i = 0; i < FMath::Min(BytesRead, 50); ++i)
-            {
-                HexData += FString::Printf(TEXT("%02X "), Buffer[i]);
-            }
-            UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Raw data (first 50 bytes hex): %s%s"), 
-                   *HexData, BytesRead > 50 ? TEXT("...") : TEXT(""));
-            
-            // Convert and log received data
-            Buffer[BytesRead] = 0; // Null terminate
-            FString ReceivedData = UTF8_TO_TCHAR(Buffer);
-            UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Received data as string: '%s'"), *ReceivedData);
-            
-            // Append to message buffer
-            MessageBuffer.Append(ReceivedData);
-            
-            // Process complete messages (messages are terminated with newline)
-            if (MessageBuffer.Contains(TEXT("\n")))
-            {
-                UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Newline detected in buffer, processing messages"));
-                
-                TArray<FString> Messages;
-                MessageBuffer.ParseIntoArray(Messages, TEXT("\n"), true);
-                
-                UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Found %d message(s) in buffer"), Messages.Num());
-                
-                // Process all complete messages
-                for (int32 i = 0; i < Messages.Num() - 1; ++i)
-                {
-                    UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Processing message %d: '%s'"), 
-                           i + 1, *Messages[i]);
-                    ProcessMessage(InClientSocket, Messages[i]);
-                }
-                
-                // Keep any incomplete message in the buffer
-                MessageBuffer = Messages.Last();
-                UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Remaining buffer after processing: %s"), 
-                       *MessageBuffer);
-            }
-            else
-            {
-                UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: No complete message yet (no newline detected)"));
-            }
-        }
-        else if (!bReadSuccess)
-        {
-            UE_LOG(LogTemp, Warning, TEXT("MCPServerRunnable: Connection closed or error occurred - Last error: %d"), 
-                   (int32)ISocketSubsystem::Get()->GetLastErrorCode());
-            break;
-        }
-        
-        // Small sleep to prevent tight loop
-        FPlatformProcess::Sleep(0.01f);
-    }
-    
-    UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Exited message receive loop"));
-}
-
-void FMCPServerRunnable::ProcessMessage(TSharedPtr<FSocket> Client, const FString& Message)
-{
-    UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Processing message: %s"), *Message);
-    
-    // Parse message as JSON
-    TSharedPtr<FJsonObject> JsonMessage;
-    TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Message);
-    
-    if (!FJsonSerializer::Deserialize(Reader, JsonMessage) || !JsonMessage.IsValid())
-    {
-        UE_LOG(LogTemp, Warning, TEXT("MCPServerRunnable: Failed to parse message as JSON"));
-        return;
-    }
-    
-    // Extract command type and parameters using MCP protocol format
-    FString CommandType;
-    TSharedPtr<FJsonObject> Params = MakeShareable(new FJsonObject());
-    
-    if (!JsonMessage->TryGetStringField(TEXT("command"), CommandType))
-    {
-        UE_LOG(LogTemp, Warning, TEXT("MCPServerRunnable: Message missing 'command' field"));
-        return;
-    }
-    
-    // Parameters are optional in MCP protocol
-    if (JsonMessage->HasField(TEXT("params")))
-    {
-        TSharedPtr<FJsonValue> ParamsValue = JsonMessage->TryGetField(TEXT("params"));
-        if (ParamsValue.IsValid() && ParamsValue->Type == EJson::Object)
-        {
-            Params = ParamsValue->AsObject();
-        }
-    }
-    
-    UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Executing command: %s"), *CommandType);
-    
-    // Execute command
-    FString Response = Bridge->ExecuteCommand(CommandType, Params);
-    
-    // Send response with newline terminator
-    Response += TEXT("\n");
-
-    UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Sending response (%d bytes): %s"),
-           Response.Len(), *Response);
-
-    // Convert to UTF8 once
-    FTCHARToUTF8 UTF8Response(*Response);
-    const uint8* DataToSend = (const uint8*)UTF8Response.Get();
-    int32 TotalDataSize = UTF8Response.Length();
-    int32 TotalBytesSent = 0;
-
-    // Send all data in a loop (TCP may not send everything at once)
-    while (TotalBytesSent < TotalDataSize)
-    {
-        int32 BytesSent = 0;
-        if (!Client->Send(DataToSend + TotalBytesSent, TotalDataSize - TotalBytesSent, BytesSent))
-        {
-            UE_LOG(LogTemp, Error, TEXT("MCPServerRunnable: Failed to send response after %d/%d bytes"),
-                   TotalBytesSent, TotalDataSize);
-            return;
-        }
-
-        TotalBytesSent += BytesSent;
-        UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Sent %d bytes (%d/%d total)"),
-               BytesSent, TotalBytesSent, TotalDataSize);
-    }
-
-    UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Response sent successfully (%d bytes)"),
-           TotalBytesSent);
-} 

@@ -65,8 +65,19 @@ def _shot(conn, name: str) -> bool:
     return True
 
 
-AP_KEYS = ("ap", "ap_remaining", "apRemaining", "currentAP", "current_ap",
-           "actionPoints", "ActionPoints")
+# Порядок ЗНАЧИМ: _ap берёт первое совпавшее поле. Достоверные имена идут
+# первыми, а ненадёжное `ap` — последним: сырой мост кладёт его даже когда
+# рефлексивный GetCurrentAP не удался (см. предупреждение в _ap), поэтому при
+# наличии обоих полей верить надо ActionPoints, а не заглушке.
+# Список сокращён до имён, которые ДЕЙСТВИТЕЛЬНО встречаются в дереве:
+# ap_remaining / currentAP / current_ap не отдаёт ни мост, ни офиц. toolset, а
+# лишнее имя опасно — под ним может однажды приехать чужая величина.
+AP_KEYS = ("ActionPoints", "actionPoints", "apRemaining", "ap")
+
+# То же для признака хода: сырой мост отдаёт `my_turn`, официальный toolset
+# UE 5.8 — `bMyTurn`. Асимметрия с _ap уже стоила ложного «ход не вернулся»:
+# _ap продолжал работать, а _my_turn вечно возвращал False.
+TURN_KEYS = ("bMyTurn", "myTurn", "my_turn")
 
 _UNKNOWN = -1
 
@@ -77,13 +88,19 @@ def _battle_state(conn) -> dict[str, object]:
     Ретраи ЗДЕСЬ, а не в _ap: `_my_turn` читает то же самое состояние, и без
     общей защиты фикс выходил асимметричным — таймаут превращался в «сейчас не
     мой ход», и цикл ожидания честно досиживал до дедлайна при живом ходе.
+
+    Ретраим и на ПУСТОМ ответе: `_send` отдаёт {} когда редактор не принял
+    коннект (send_command вернул None). Ключа `error` там нет, поэтому прежняя
+    проверка считала пустой словарь успехом и уходила без единой повторной
+    попытки — самый частый режим отказа не ретраился вовсе, а диагностика
+    молчала.
     """
-    for attempt in range(4):
+    for attempt in range(3):
         st = _send(conn, "wc_get_battle_state", {"controller_index": 0}) or {}
-        if not st.get("error"):
+        if st and not st.get("error"):
             return st
         time.sleep(1.0 + attempt)
-    print("    ВНИМАНИЕ: состояние боя не прочитано за 4 попытки")
+    print("    ВНИМАНИЕ: состояние боя не прочитано за 3 попытки")
     return {}
 
 
@@ -102,16 +119,34 @@ def _ap(conn) -> int:
     """
     st = _battle_state(conn)
     for key in AP_KEYS:
-        value = st.get(key)
+        if key not in st:
+            continue
+        value = st[key]
+        # bool исключаем явно: в Python bool — наследник int, и булев флаг,
+        # приехавший под именем AP, прошёл бы как «настоящие 0 или 1».
+        # Строку, наоборот, принимаем: прежний `int(st["ap"])` её терпел, а
+        # переход на isinstance(int, float) начал отбраковывать — обёртка
+        # официального toolset вполне может отдать "3".
+        if isinstance(value, bool):
+            continue
         if isinstance(value, (int, float)):
             return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value.strip())
+            except ValueError:
+                continue
     if st:
         print(f"    ВНИМАНИЕ: в состоянии боя нет ни одного из полей AP: {st}")
     return _UNKNOWN
 
 
 def _my_turn(conn) -> bool:
-    return bool(_battle_state(conn).get("my_turn"))
+    st = _battle_state(conn)
+    for key in TURN_KEYS:
+        if key in st:
+            return bool(st[key])
+    return False
 
 
 def main() -> int:
@@ -211,6 +246,16 @@ def main() -> int:
                 print("  AP не читается — состояние неизвестно, прерываем")
                 return 1
             if ap_before == 0:
+                # Ноль ДО первой траты — не «дошли до нуля», а подозрительное
+                # состояние: `HandleGetBattleState` кладёт AP = 0 и когда
+                # рефлексивный GetCurrentAP не удался. Раньше этот выход
+                # проскакивал финальный гард `ap1 != 0` и давал успех, не
+                # потратив ни одного очка, — кадр «AP потрачен» снимался при
+                # полной активной руке.
+                if spent == 0:
+                    print(f"=== FAIL: AP упал в 0 без единой траты (было {ap0}) — "
+                          "похоже на сбой чтения AP, а не на исчерпание ===")
+                    return 1
                 break
 
             units = [u for u in _battle_units(conn, 0) if u.get("alive")]
@@ -255,9 +300,22 @@ def main() -> int:
         # Проверка обязана уметь провалиться. Раньше main() возвращал 0 на всех
         # путях после начала боя, и прогон с «AP 3 -> 3» рапортовал успех, хотя
         # проверяемое свойство (карты гаснут при AP=0) не подтверждалось ничем.
+        #
+        # Два разных провала — две разные причины, и различать их обязательно:
+        # «ни одной траты» указывает на сломанный канал команд, а «застряли на
+        # ненулевом AP» — на ростер, которым до нуля не дойти движением
+        # (GameConstants.MOVE_AP_COST: HEAVY_TECH = 2 при бюджете 3). Второе —
+        # ограничение харнесса, а не игры, и валить его молча под общим
+        # сообщением значило бы каждый раз заново искать несуществующий баг.
+        if spent == 0:
+            print(f"\n=== FAIL: AP {ap0} -> {ap1}, ни одно действие не сняло AP — "
+                  "проверять затемнение руки не на чем ===")
+            return 1
         if ap1 != 0:
-            print(f"\n=== FAIL: AP {ap0} -> {ap1}, до нуля не дошли — кадр 'AP потрачен' "
-                  "снят при активной руке, сравнивать нечего ===")
+            print(f"\n=== FAIL: AP {ap0} -> {ap1} за {spent} действий, до нуля не дошли. "
+                  "Кадр 'AP потрачен' снят при активной руке. Вероятная причина — "
+                  "ростер из тяжёлой техники (ход стоит 2 AP при бюджете 3): "
+                  "нужен пехотный ростер либо трата картой ===")
             return 1
 
         print("\n=== ИТОГ: AP {} -> {}; кадры: {} ===".format(ap0, ap1, ", ".join(n for n, _ in SHOTS)))

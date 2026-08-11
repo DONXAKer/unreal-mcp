@@ -31,6 +31,11 @@ logger = logging.getLogger("UnrealMCP-HTTP")
 UNREAL_HOST = os.getenv("UNREAL_HOST", "host.docker.internal")
 UNREAL_PORT = int(os.getenv("UNREAL_PORT", "55557"))
 MCP_HTTP_PORT = int(os.getenv("MCP_HTTP_PORT", "3001"))
+# См. те же константы в unreal_mcp_server.py: приёмный таймаут держим НЕ МЕНЬШЕ
+# `mcp.CommandTimeoutSeconds` моста, иначе клиент уходит раньше ответа, а
+# команда продолжает выполняться и повторяется ретраем.
+RECV_TIMEOUT = float(os.getenv("UNREAL_MCP_RECV_TIMEOUT", "130"))
+CONNECT_TIMEOUT = float(os.getenv("UNREAL_MCP_CONNECT_TIMEOUT", "5"))
 
 logger.info("UnrealMCP HTTP: will connect to Unreal at %s:%d", UNREAL_HOST, UNREAL_PORT)
 
@@ -49,7 +54,7 @@ class UnrealConnection:
                     pass
                 self.socket = None
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.settimeout(5)
+            self.socket.settimeout(CONNECT_TIMEOUT)
             self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
             self.socket.connect((UNREAL_HOST, UNREAL_PORT))
@@ -72,7 +77,7 @@ class UnrealConnection:
 
     def receive_full_response(self, sock: socket.socket, buffer_size: int = 4096) -> bytes:
         chunks: list[bytes] = []
-        sock.settimeout(5)
+        sock.settimeout(RECV_TIMEOUT)
         try:
             while True:
                 chunk = sock.recv(buffer_size)
@@ -82,10 +87,13 @@ class UnrealConnection:
                     break
                 chunks.append(chunk)
                 data = b''.join(chunks)
+                # UnicodeDecodeError ловим наравне с JSONDecodeError: разрыв
+                # многобайтовой последовательности на границе чанка — обычное
+                # состояние недочитанного ответа, а не ошибка данных.
                 try:
                     json.loads(data.decode('utf-8'))
                     return data
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, UnicodeDecodeError):
                     continue
         except TimeoutError:
             if chunks:

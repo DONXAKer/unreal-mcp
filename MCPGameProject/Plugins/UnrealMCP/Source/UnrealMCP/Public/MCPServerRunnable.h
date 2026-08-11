@@ -22,9 +22,11 @@ public:
 	virtual void Stop() override;
 	virtual void Exit() override;
 
-protected:
-	void HandleClientConnection(TSharedPtr<FSocket> ClientSocket);
-	void ProcessMessage(TSharedPtr<FSocket> Client, const FString& Message);
+	// HandleClientConnection/ProcessMessage удалены: вызывающих не было ни в
+	// одном плагине, а внутри жила вторая, необновлённая копия цикла отправки —
+	// без ретраев, без дедлайна и с `return` посреди ответа. Правки приёмки и
+	// отправки применялись только к Run(), поэтому мёртвая ветка расходилась с
+	// живой и служила ловушкой: починить в ней — не починить ничего.
 
 private:
 	UEpicUnrealMCPBridge* Bridge;

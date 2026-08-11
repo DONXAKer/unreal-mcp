@@ -1351,6 +1351,17 @@ namespace MaterialGraphRead
 
         return bOpaqueBody;
     }
+
+    // Дешёвая классификация «тело не раскрыто» БЕЗ сериализации props.
+    // Нужна для узлов за отсечкой maxNodes: их не дампят, но считать обязаны,
+    // иначе предупреждение о нераскрытых телах молчит ровно там, где дамп
+    // неполон, — и обрыв внутри материал-функции снова неотличим от обрыва.
+    // Признак обязан совпадать с тем, что возвращает FillNodeProps.
+    static bool HasOpaqueBody(UMaterialExpression* E)
+    {
+        return E->IsA<UMaterialExpressionMaterialFunctionCall>()
+            || E->IsA<UMaterialExpressionMaterialAttributeLayers>();
+    }
 }
 #endif // WITH_EDITOR
 
@@ -1389,10 +1400,28 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
         double Tmp = 0.0;
         if (Params->TryGetNumberField(TEXT("maxNodes"), Tmp))
         {
-            if (Tmp < 0.0 || Tmp > static_cast<double>(MaterialGraphRead::MaxNodesHardCap))
+            // !IsFinite обязателен ПЕРВЫМ: для NaN оба сравнения ложны, проверка
+            // диапазона пропускает значение, а `static_cast<int32>(NaN)` — UB
+            // (на практике INT32_MIN). Ответ выходил как nodes:[] при ненулевом
+            // nodeCount — тот самый «успех без данных», ради которого гард и
+            // написан. Достижимо сырым TCP-вызовом в обход обёртки с int().
+            if (!FMath::IsFinite(Tmp) || Tmp < 0.0 || Tmp > static_cast<double>(MaterialGraphRead::MaxNodesHardCap))
             {
                 TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
-                Details->SetNumberField(TEXT("maxNodes"), Tmp);
+                // Отражаем принятое значение СТРОКОЙ, если оно не конечное:
+                // NaN/Infinity в SetNumberField уезжают в выходной JSON как
+                // `nan`/`inf`, а это невалидный JSON — клиент не может разобрать
+                // ответ, дочитывает сокет до конца и висит до своего таймаута.
+                // Ошибка про NaN, отправленная в виде NaN, ровно так и вела себя:
+                // гард срабатывал, а снаружи выглядело как зависшая команда.
+                if (FMath::IsFinite(Tmp))
+                {
+                    Details->SetNumberField(TEXT("maxNodes"), Tmp);
+                }
+                else
+                {
+                    Details->SetStringField(TEXT("maxNodes"), TEXT("non-finite (NaN or Infinity)"));
+                }
                 Details->SetNumberField(TEXT("allowedMax"), static_cast<double>(MaterialGraphRead::MaxNodesHardCap));
                 return FAssetCommonUtils::MakeFailureResponse(
                     TEXT("user"),
@@ -1404,9 +1433,13 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
         }
     }
 
-    // Бюджет времени. Дефолт 4с намеренно МЕНЬШЕ 5-секундного socket-таймаута
-    // Python-клиента (unreal_mcp_server.py: settimeout(5)).
-    double TimeBudgetSeconds = 4.0;
+    // Бюджет времени. Прежний дефолт 4 с подгонялся под жёсткий settimeout(5)
+    // Python-клиента; теперь приёмный таймаут клиента (UNREAL_MCP_RECV_TIMEOUT,
+    // 130 с) согласован с потолком моста (mcp.CommandTimeoutSeconds, 120 с), и
+    // 4 с обрезали большие графы там, где их можно прочитать целиком. Держим
+    // дефолт заметно НИЖЕ потолка моста: смысл бюджета — отдать частичный граф
+    // с честным timedOut, а не упереться в таймаут команды.
+    double TimeBudgetSeconds = 20.0;
     {
         double Tmp = 0.0;
         if (Params->TryGetNumberField(TEXT("timeBudgetSeconds"), Tmp) && Tmp > 0.0)
@@ -1420,6 +1453,12 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
 
     StepPhase(TEXT("resolving asset (StaticFindObject, then StaticLoadObject) ..."));
     UObject* Obj = FAssetCommonUtils::LoadAssetObject(AssetPath);
+    // Загрузка холодного ассета (StaticLoadObject -> FlushAsyncLoading) лежит
+    // ВНЕ цикла по узлам, то есть вне бюджета. Замеряем её отдельно и выносим
+    // в meta: иначе команда, просидевшая всё время на загрузке, отчитывалась
+    // `timedOut:false` и мелким elapsedSeconds — «уложились», хотя обещание
+    // «частичный граф вместо висяка» не выполнялось на первом же шаге.
+    const double LoadSeconds = FPlatformTime::Seconds() - StartSeconds;
     StepPhase(Obj ? TEXT("asset resolved") : TEXT("asset NOT resolved"));
 
     if (!Obj)
@@ -1490,6 +1529,14 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
         Warnings.Add(TEXT("This IS the engine default material, not a project asset."));
     }
 
+    if (LoadSeconds > TimeBudgetSeconds)
+    {
+        Warnings.Add(FString::Printf(
+            TEXT("Loading the asset alone took %.1fs, over the %.1fs budget — the budget only guards the node walk, "
+                 "not the load. See meta.loadSeconds."),
+            LoadSeconds, TimeBudgetSeconds));
+    }
+
     // ── Nodes ────────────────────────────────────────────────────────────────
     // GetExpressions() внутри — GetEditorOnlyData()->ExpressionCollection.Expressions,
     // поэтому гард на editor-only data обязан стоять ДО обхода, а не только
@@ -1527,6 +1574,20 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
             bTimedOut = true;
             StepPhase(FString::Printf(TEXT("TIME BUDGET EXCEEDED at node index %d — returning partial graph"), NodeIndex));
             Warnings.Add(TEXT("Time budget exceeded: node list is partial. Raise timeBudgetSeconds."));
+
+            // Досчитываем ОСТАВШИЕСЯ узлы, не сериализуя их. Без этого счётчик
+            // замирал на месте обрыва, nodeCount совпадал с returnedNodeCount,
+            // и `truncated` выходил false: читатель, проверяющий полноту дампа
+            // по этому полю (как предписывает docstring), получал «полный граф»
+            // на 30% узлов и делал вывод «параметра в графе нет».
+            for (int32 Rest = NodeIndex; Rest < Expressions.Num(); ++Rest)
+            {
+                UMaterialExpression* RestE = Expressions[Rest].Get();
+                if (RestE && IsValid(RestE))
+                {
+                    ++TotalExpressions;
+                }
+            }
             break;
         }
 
@@ -1538,6 +1599,18 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
         ++TotalExpressions;
         if (NodesJson.Num() >= MaxNodes)
         {
+            // Узел за отсечкой не дампим, но КЛАССИФИЦИРУЕМ: счётчики
+            // непрозрачных тел и неадресуемых узлов иначе оставались нулевыми
+            // ровно в том случае, когда ответ неполон, и предупреждения о
+            // нераскрытых телах не печатались вовсе.
+            if (MaterialGraphRead::HasOpaqueBody(E))
+            {
+                ++OpaqueBodyCount;
+            }
+            if (E->Desc.IsEmpty())
+            {
+                ++UnaddressableCount;
+            }
             continue;
         }
 
@@ -1578,14 +1651,37 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
         // (Composite / PinBase) GetInput отдаёт nullptr на каждый несвязанный
         // reroute-пин, поэтому всё за первой дыркой терялось. Идём по ВСЕМ
         // индексам до жёсткого потолка и пропускаем дырки.
+        // Индексы, на которых GetInput отдал nullptr, копим отдельно и
+        // выкладываем в ответ ТОЛЬКО если дальше нашёлся настоящий пин, то
+        // есть дырка оказалась ВНУТРИ набора входов. Такая дырка — не «пина
+        // нет», а «пин на схеме есть, но GetInput его не разрешает» (типовой
+        // случай: у Composite/PinBase несвязанный reroute-пин). Пока эти
+        // индексы молча пропускались, проверяющий видел inputs:[{0},{2}] и не
+        // мог отличить отсутствие пина от неподключённого — ровно ту
+        // двусмысленность, ради снятия которой команда и написана. Хвостовые
+        // nullptr'ы (за последним реальным пином) отбрасываем: до жёсткого
+        // потолка их десятки, и это просто «входов больше нет».
         TArray<TSharedPtr<FJsonValue>> InputsJson;
+        TArray<int32> PendingHoles;
         for (int32 i = 0; i < MaterialGraphRead::MaxInputsPerNode; ++i)
         {
             const FExpressionInput* In = E->GetInput(i);
             if (!In)
             {
+                PendingHoles.Add(i);
                 continue;
             }
+
+            for (int32 HoleIndex : PendingHoles)
+            {
+                TSharedPtr<FJsonObject> HoleJson = MakeShared<FJsonObject>();
+                HoleJson->SetNumberField(TEXT("index"), HoleIndex);
+                HoleJson->SetStringField(TEXT("name"), E->GetInputName(HoleIndex).ToString());
+                HoleJson->SetBoolField(TEXT("connected"), false);
+                HoleJson->SetBoolField(TEXT("unresolvedPin"), true);
+                InputsJson.Add(MakeShared<FJsonValueObject>(HoleJson));
+            }
+            PendingHoles.Reset();
 
             // FExpressionInput::Expression в UE 5.8 — сырой указатель.
             UMaterialExpression* Src = In->Expression;
@@ -1595,6 +1691,7 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
             InputJson->SetNumberField(TEXT("index"), i);
             InputJson->SetStringField(TEXT("name"), E->GetInputName(i).ToString());
             InputJson->SetBoolField(TEXT("connected"), bConnected);
+            InputJson->SetBoolField(TEXT("unresolvedPin"), false);
             if (bConnected)
             {
                 InputJson->SetStringField(TEXT("fromNode"), Src->GetName());
@@ -1729,22 +1826,75 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
         }
         InstanceJson->SetObjectField(TEXT("vectors"), VectorsJson);
 
-        // Текстуры: читаем СОБСТВЕННЫЙ массив оверрайдов инстанса, а не
-        // GetTextureParameterValue — тот отдаёт UTexture* и потому разрешает
-        // хендл (та самая синхронная загрузка, что вешала 3.24.0).
+        // Текстуры: перечисляем ВСЕ параметры, а не только переопределённые.
+        // Раньше в ответ попадали одни оверрайды с константным overridden:true,
+        // и унаследованный от мастера параметр отсутствовал вовсе — пустой
+        // textures:{} был неотличим от «текстурных параметров нет». Команду
+        // зовут на MI_t72b_Track именно чтобы увидеть, что лежит в слоте.
+        //
+        // Значения читаем БЕЗ GetTextureParameterValue: тот отдаёт UTexture* и
+        // разрешает хендл — та самая синхронная загрузка, что вешала 3.24.0.
+        // Вместо него: оверрайды берём из TextureParameterValues по цепочке
+        // Parent (ближайший побеждает), дефолты — из выражений базового
+        // материала. И там и там путь достаём через .GetPathName() у TObjectPtr.
         TSharedPtr<FJsonObject> TexturesJson = MakeShared<FJsonObject>();
-        if (const UMaterialInstance* MI = Cast<UMaterialInstance>(SourceInstance))
         {
-            for (const FTextureParameterValue& TexParam : MI->TextureParameterValues)
+            // Оверрайды по цепочке инстансов, от ближайшего к дальнему.
+            TMap<FName, FString> OverridePaths;
+            for (const UMaterialInstance* Chain = Cast<UMaterialInstance>(SourceInstance);
+                 Chain != nullptr;
+                 Chain = Cast<UMaterialInstance>(Chain->Parent.Get()))
             {
-                const FString TexPath = TexParam.ParameterValue.GetPathName();
+                for (const FTextureParameterValue& TexParam : Chain->TextureParameterValues)
+                {
+                    const FName ParamName = TexParam.ParameterInfo.Name;
+                    if (!OverridePaths.Contains(ParamName))
+                    {
+                        OverridePaths.Add(ParamName, TexParam.ParameterValue.GetPathName());
+                    }
+                }
+            }
+
+            // Дефолты мастера: имя параметра -> путь текстуры в выражении.
+            TMap<FName, FString> DefaultPaths;
+            for (const TObjectPtr<UMaterialExpression>& ExprPtr : Mat->GetExpressions())
+            {
+                UMaterialExpression* Expr = ExprPtr.Get();
+                if (!Expr || !IsValid(Expr) || !Expr->HasAParameterName())
+                {
+                    continue;
+                }
+                if (const UMaterialExpressionTextureBase* TexBase = Cast<UMaterialExpressionTextureBase>(Expr))
+                {
+                    DefaultPaths.Add(Expr->GetParameterName(), TexBase->Texture.GetPathName());
+                }
+            }
+
+            TArray<FMaterialParameterInfo> TextureInfos;
+            TArray<FGuid> TextureGuids;
+            SourceInstance->GetAllTextureParameterInfo(TextureInfos, TextureGuids);
+            for (const FMaterialParameterInfo& Info : TextureInfos)
+            {
+                const FString* OverridePath = OverridePaths.Find(Info.Name);
+                const bool bOverridden = (OverridePath != nullptr);
+                const FString* DefaultPath = DefaultPaths.Find(Info.Name);
+
+                FString TexPath;
+                if (bOverridden)
+                {
+                    TexPath = *OverridePath;
+                }
+                else if (DefaultPath != nullptr)
+                {
+                    TexPath = *DefaultPath;
+                }
                 const bool bHasTexture = !TexPath.IsEmpty() && TexPath != TEXT("None");
 
                 TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
                 Entry->SetStringField(TEXT("value"), bHasTexture ? MaterialGraphRead::ShortNameFromPath(TexPath) : FString());
                 Entry->SetStringField(TEXT("valuePath"), bHasTexture ? TexPath : FString());
-                Entry->SetBoolField(TEXT("overridden"), true);
-                TexturesJson->SetObjectField(TexParam.ParameterInfo.Name.ToString(), Entry);
+                Entry->SetBoolField(TEXT("overridden"), bOverridden);
+                TexturesJson->SetObjectField(Info.Name.ToString(), Entry);
             }
         }
         InstanceJson->SetObjectField(TEXT("textures"), TexturesJson);
@@ -1764,6 +1914,7 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
     Meta->SetBoolField(TEXT("truncated"), TotalExpressions > NodesJson.Num());
     Meta->SetBoolField(TEXT("timedOut"), bTimedOut);
     Meta->SetNumberField(TEXT("elapsedSeconds"), FPlatformTime::Seconds() - StartSeconds);
+    Meta->SetNumberField(TEXT("loadSeconds"), LoadSeconds);
     Meta->SetArrayField(TEXT("nodes"), NodesJson);
     Meta->SetObjectField(TEXT("rootConnections"), RootJson);
     if (InstanceJson.IsValid())

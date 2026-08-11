@@ -31,6 +31,16 @@ logger = logging.getLogger("UnrealMCP")
 UNREAL_HOST = os.environ.get("UNREAL_HOST", "127.0.0.1")
 UNREAL_PORT = int(os.environ.get("UNREAL_PORT", "55557"))
 
+# Сколько ждать ОТВЕТ на уже отправленную команду. Держать НЕ МЕНЬШЕ, чем
+# `mcp.CommandTimeoutSeconds` в мосту (сейчас 120 с) плюс запас на сериализацию:
+# мост гарантирует ответ в пределах своего потолка, и уход клиента раньше
+# означает, что внятную ошибку COMMAND_TIMEOUT читать уже некому, а команда
+# при этом продолжает выполняться. Именно это рассогласование (5 с против 180 с)
+# приводило к повторной отправке и двойному исполнению импортов и спавнов.
+RECV_TIMEOUT = float(os.environ.get("UNREAL_MCP_RECV_TIMEOUT", "130"))
+# Установка соединения — операция быстрая; долго ждать её незачем.
+CONNECT_TIMEOUT = float(os.environ.get("UNREAL_MCP_CONNECT_TIMEOUT", "5"))
+
 class UnrealConnection:
     """Connection to an Unreal Engine instance."""
     
@@ -60,7 +70,7 @@ class UnrealConnection:
             
             logger.info(f"Connecting to Unreal at {self.host}:{self.port}...")
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.settimeout(5)  # 5 second timeout
+            self.socket.settimeout(CONNECT_TIMEOUT)
             
             # Set socket options for better stability
             self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -93,7 +103,7 @@ class UnrealConnection:
     def receive_full_response(self, sock: socket.socket, buffer_size: int = 4096) -> bytes:
         """Receive a complete response from Unreal, handling chunked data."""
         chunks: list[bytes] = []
-        sock.settimeout(5)  # 5 second timeout
+        sock.settimeout(RECV_TIMEOUT)
         try:
             while True:
                 chunk = sock.recv(buffer_size)
@@ -102,18 +112,23 @@ class UnrealConnection:
                         raise Exception("Connection closed before receiving data")
                     break
                 chunks.append(chunk)
-                
+
                 # Process the data received so far
                 data = b''.join(chunks)
-                decoded_data = data.decode('utf-8')
-                
-                # Try to parse as JSON to check if complete
+
+                # Декод ВНУТРИ try: он падает не только на неполном JSON.
+                # Многобайтовая последовательность (кириллица в имени ноды,
+                # HLSL-код в props, путь) регулярно разрывается на границе
+                # 4 КБ-чанка, и тогда UnicodeDecodeError — это ValueError, а не
+                # JSONDecodeError. Пока декод стоял снаружи, такой разрыв ронял
+                # приёмку целиком: большие ответы (material_get_graph — сотни
+                # килобайт, ~100+ чанков) падали при полностью корректных данных.
                 try:
-                    json.loads(decoded_data)
+                    json.loads(data.decode('utf-8'))
                     logger.info(f"Received complete response ({len(data)} bytes)")
                     return data
-                except json.JSONDecodeError:
-                    # Not complete JSON yet, continue reading
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    # Ещё не целое сообщение — дочитываем.
                     logger.debug("Received partial response, waiting for more data...")
                     continue
                 except Exception as e:
