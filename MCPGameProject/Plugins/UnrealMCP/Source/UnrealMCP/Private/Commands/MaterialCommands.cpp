@@ -1074,17 +1074,65 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialSetNodeParam(const TSha
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// material_get_graph  (FEAT-MAT-002 / v3.24.0)
+// material_get_graph  (FEAT-MAT-002 / v3.24.0, hang fix v3.24.1)
 //
 // Read-only dump of a master material graph. The UE 5.8 Python API cannot walk
 // expressions (UMaterial::Expressions is protected, expression_collection is not
 // exposed), so without this command there is no way to tell a *declared*
 // parameter from a *wired* one.
+//
+// v3.24.1 — первая версия ВЕШАЛА РЕДАКТОР. Три источника блокировки, все убраны:
+//
+//   1. Разыменование TObjectPtr<UTexture> (`if (TexBase->Texture)` и
+//      `Texture->GetPathName()`). TObjectPtr при обращении разрешает object
+//      handle, а неразрешённый хендл тянет СИНХРОННУЮ загрузку пакета текстуры
+//      прямо в game thread. Ни одна другая material-команда чужие Texture-
+//      указатели не читает (material_set_node_param только ПИШЕТ уже
+//      загруженный ассет), поэтому грабли всплыли именно здесь. Теперь путь
+//      берётся из самого хендла: TObjectPtr::GetPathName() + IsResolved(),
+//      без разрешения и без загрузки.
+//
+//   2. UMaterialExpression::CountInputs(). Реализация в движке —
+//          int32 Index = 0; while (GetInput(Index)) { Index += 1; } return Index;
+//      то есть завершение цикла целиком отдано на откуп virtual-override'у
+//      конкретного узла. Мы зовём это на КАЖДОМ узле ЛЮБОГО материала: один
+//      узел, чей GetInput не отдаёт nullptr на выходе за диапазон, вешает
+//      game thread навсегда. Заменено на собственный обход с жёстким потолком.
+//
+//   3. Отсутствие бюджета времени: любая заминка = мёртвый мост навсегда
+//      (server-поток стоит в Future.Get(), новые коннекты получают WinError
+//      10061, потому что accept-очередь переполняется). Теперь обход
+//      прерывается по таймауту и отдаёт частичный ответ с timedOut:true.
+//
+// Плюс пошаговое логирование. Оно обязано быть ЗДЕСЬ, а не в мосту: логи
+// "MCPServerRunnable: Executing command" и "EpicUnrealMCPBridge: Executing
+// command" пишутся из СОКЕТНОГО потока и попадают в threaded-очередь, которую
+// разгребает game thread. Виснет game thread — очередь не разгребается, и в
+// Client.log не появляется ни строчки о команде (ровно это и наблюдалось:
+// в логе был только ping, а про material_get_graph — тишина). Логи ниже идут
+// из ticker-лямбды, то есть из самого game thread, и каждый принудительно
+// флашится, поэтому последняя строка в файле точно укажет место следующего
+// висяка.
 // ─────────────────────────────────────────────────────────────────────────────
+
+DEFINE_LOG_CATEGORY_STATIC(LogUnrealMCPMaterialGraph, Log, All);
 
 #if WITH_EDITOR
 namespace MaterialGraphRead
 {
+    /** Верхний потолок на число входов одного узла — страховка от зацикливания. */
+    static constexpr int32 MaxInputsPerNode = 64;
+
+    /** Шаг обхода в лог + немедленный флаш: иначе висяк не локализуется. */
+    static void Step(const FString& Message)
+    {
+        UE_LOG(LogUnrealMCPMaterialGraph, Display, TEXT("material_get_graph: %s"), *Message);
+        if (GLog)
+        {
+            GLog->Flush();
+        }
+    }
+
     // Serializes an FLinearColor as [r, g, b, a].
     static void SetColorField(const TSharedPtr<FJsonObject>& Obj, const TCHAR* Field, const FLinearColor& C)
     {
@@ -1094,6 +1142,22 @@ namespace MaterialGraphRead
         Arr.Add(MakeShared<FJsonValueNumber>(C.B));
         Arr.Add(MakeShared<FJsonValueNumber>(C.A));
         Obj->SetArrayField(Field, Arr);
+    }
+
+    /** "/Game/X/T_Foo.T_Foo" -> "T_Foo"; "None"/пусто -> "". */
+    static FString ShortNameFromPath(const FString& Path)
+    {
+        if (Path.IsEmpty() || Path == TEXT("None"))
+        {
+            return FString();
+        }
+        FString Result = Path;
+        int32 Index = INDEX_NONE;
+        if (Result.FindLastChar(TCHAR('.'), Index))
+        {
+            Result = Result.Mid(Index + 1);
+        }
+        return Result;
     }
 
     // Describes the expression that a root pin (or an input pin) points at.
@@ -1113,11 +1177,14 @@ namespace MaterialGraphRead
     // Adds a root connection entry only when the pin is actually wired.
     static void AddRootConnection(const TSharedPtr<FJsonObject>& Out, const TCHAR* PinName, const FExpressionInput& In)
     {
-        if (!In.Expression)
+        // Выражения — сабобъекты того же пакета, что и материал: разрешение
+        // указателя не тянет загрузку с диска. Но на всякий случай IsValid.
+        UMaterialExpression* Expr = In.Expression.Get();
+        if (!Expr || !IsValid(Expr))
         {
             return;
         }
-        Out->SetObjectField(PinName, DescribeSource(In.Expression, In.OutputIndex));
+        Out->SetObjectField(PinName, DescribeSource(Expr, In.OutputIndex));
     }
 
     // Fills type-specific properties for a single expression node.
@@ -1156,17 +1223,19 @@ namespace MaterialGraphRead
 
         // Covers TextureSample, TextureSampleParameter2D, TextureObject, ... —
         // all of them inherit the Texture pointer from UMaterialExpressionTextureBase.
+        //
+        // КРИТИЧНО: НЕ разыменовываем TObjectPtr. `if (TexBase->Texture)` и
+        // `Texture->GetPathName()` разрешают object handle и могут утащить
+        // game thread в синхронную загрузку пакета текстуры — именно это
+        // вешало редактор в 3.24.0. GetPathName()/IsResolved() читают хендл
+        // как есть, без разрешения.
         if (const UMaterialExpressionTextureBase* TexBase = Cast<UMaterialExpressionTextureBase>(E))
         {
-            if (TexBase->Texture)
-            {
-                P->SetStringField(TEXT("Texture"), TexBase->Texture->GetName());
-                P->SetStringField(TEXT("TexturePath"), TexBase->Texture->GetPathName());
-            }
-            else
-            {
-                P->SetStringField(TEXT("Texture"), TEXT(""));
-            }
+            const FString TexPath = TexBase->Texture.GetPathName();
+            const bool bHasTexture = !TexPath.IsEmpty() && TexPath != TEXT("None");
+            P->SetStringField(TEXT("Texture"), bHasTexture ? ShortNameFromPath(TexPath) : FString());
+            P->SetStringField(TEXT("TexturePath"), bHasTexture ? TexPath : FString());
+            P->SetBoolField(TEXT("TextureLoaded"), TexBase->Texture.IsResolved());
         }
 
         if (const UMaterialExpressionTextureCoordinate* TexCoord = Cast<UMaterialExpressionTextureCoordinate>(E))
@@ -1213,10 +1282,17 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
         TEXT("EDITOR_ONLY"),
         TEXT("material_get_graph requires an editor build (material expressions are editor-only data)"));
 #else
+    using MaterialGraphRead::Step;
+
+    const double StartSeconds = FPlatformTime::Seconds();
+
+    Step(TEXT("enter handler"));
+
     FString AssetPath;
     TSharedPtr<FJsonObject> ParamFailure;
     if (!FAssetCommonUtils::RequireAssetPath(Params, AssetPath, ParamFailure))
     {
+        Step(TEXT("missing assetPath -> bail"));
         return ParamFailure;
     }
 
@@ -1232,7 +1308,28 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
         }
     }
 
+    // Бюджет времени. Любая непредвиденная заминка теперь превращается в
+    // ответ с timedOut:true, а не в мёртвый мост.
+    // Дефолт 4с намеренно МЕНЬШЕ 5-секундного socket-таймаута Python-клиента
+    // (unreal_mcp_server.py: settimeout(5)): иначе клиент отваливается раньше,
+    // чем плагин успевает отдать частичный ответ, и наружу это выглядит как
+    // тот же самый висяк.
+    double TimeBudgetSeconds = 4.0;
+    {
+        double Tmp = 0.0;
+        if (Params->TryGetNumberField(TEXT("timeBudgetSeconds"), Tmp) && Tmp > 0.0)
+        {
+            TimeBudgetSeconds = Tmp;
+        }
+    }
+
+    Step(FString::Printf(TEXT("params: assetPath='%s' maxNodes=%d includeUnconnected=%d budget=%.1fs"),
+        *AssetPath, MaxNodes, bIncludeUnconnectedInputs ? 1 : 0, TimeBudgetSeconds));
+
+    Step(TEXT("resolving asset (StaticFindObject, then StaticLoadObject) ..."));
     UObject* Obj = FAssetCommonUtils::LoadAssetObject(AssetPath);
+    Step(Obj ? TEXT("asset resolved") : TEXT("asset NOT resolved"));
+
     if (!Obj)
     {
         TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
@@ -1252,8 +1349,10 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
     {
         if (UMaterialInterface* MatIface = Cast<UMaterialInterface>(Obj))
         {
+            Step(TEXT("asset is a MaterialInstance -> GetBaseMaterial() ..."));
             Mat = MatIface->GetBaseMaterial();
             ResolvedFrom = TEXT("instance");
+            Step(TEXT("base material resolved"));
         }
     }
 
@@ -1270,12 +1369,25 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
     }
 
     // ── Nodes ────────────────────────────────────────────────────────────────
+    Step(TEXT("fetching expression collection ..."));
+    TConstArrayView<TObjectPtr<UMaterialExpression>> Expressions = Mat->GetExpressions();
+    Step(FString::Printf(TEXT("expression collection size = %d"), Expressions.Num()));
+
     TArray<TSharedPtr<FJsonValue>> NodesJson;
     int32 TotalExpressions = 0;
+    bool bTimedOut = false;
 
-    for (UMaterialExpression* E : Mat->GetExpressions())
+    for (int32 NodeIndex = 0; NodeIndex < Expressions.Num(); ++NodeIndex)
     {
-        if (!E)
+        if (FPlatformTime::Seconds() - StartSeconds > TimeBudgetSeconds)
+        {
+            bTimedOut = true;
+            Step(FString::Printf(TEXT("TIME BUDGET EXCEEDED at node index %d — returning partial graph"), NodeIndex));
+            break;
+        }
+
+        UMaterialExpression* E = Expressions[NodeIndex].Get();
+        if (!E || !IsValid(E))
         {
             continue;
         }
@@ -1285,9 +1397,13 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
             continue;
         }
 
+        const FString NodeName = E->GetName();
+        const FString NodeClass = E->GetClass()->GetName();
+        Step(FString::Printf(TEXT("node[%d] %s (%s) — props"), NodeIndex, *NodeName, *NodeClass));
+
         TSharedPtr<FJsonObject> NodeJson = MakeShared<FJsonObject>();
-        NodeJson->SetStringField(TEXT("name"), E->GetName());
-        NodeJson->SetStringField(TEXT("class"), E->GetClass()->GetName());
+        NodeJson->SetStringField(TEXT("name"), NodeName);
+        NodeJson->SetStringField(TEXT("class"), NodeClass);
         NodeJson->SetStringField(TEXT("nodeId"), E->Desc);
         NodeJson->SetNumberField(TEXT("posX"), E->MaterialExpressionEditorX);
         NodeJson->SetNumberField(TEXT("posY"), E->MaterialExpressionEditorY);
@@ -1296,16 +1412,21 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
         MaterialGraphRead::FillNodeProps(E, PropsJson);
         NodeJson->SetObjectField(TEXT("props"), PropsJson);
 
+        Step(FString::Printf(TEXT("node[%d] %s — inputs"), NodeIndex, *NodeName));
+
+        // НЕ используем E->CountInputs(): его тело — while (GetInput(i)) ++i,
+        // цикл завершает virtual-override узла. Идём сами с жёстким потолком.
         TArray<TSharedPtr<FJsonValue>> InputsJson;
-        const int32 NumInputs = E->CountInputs();
-        for (int32 i = 0; i < NumInputs; ++i)
+        for (int32 i = 0; i < MaterialGraphRead::MaxInputsPerNode; ++i)
         {
             const FExpressionInput* In = E->GetInput(i);
             if (!In)
             {
-                continue;
+                break;
             }
-            const bool bConnected = (In->Expression != nullptr);
+
+            UMaterialExpression* Src = In->Expression.Get();
+            const bool bConnected = (Src != nullptr) && IsValid(Src);
             if (!bConnected && !bIncludeUnconnectedInputs)
             {
                 continue;
@@ -1317,12 +1438,12 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
             InputJson->SetBoolField(TEXT("connected"), bConnected);
             if (bConnected)
             {
-                InputJson->SetStringField(TEXT("fromNode"), In->Expression->GetName());
-                InputJson->SetStringField(TEXT("fromClass"), In->Expression->GetClass()->GetName());
+                InputJson->SetStringField(TEXT("fromNode"), Src->GetName());
+                InputJson->SetStringField(TEXT("fromClass"), Src->GetClass()->GetName());
                 InputJson->SetNumberField(TEXT("fromOutputIndex"), In->OutputIndex);
-                if (!In->Expression->Desc.IsEmpty())
+                if (!Src->Desc.IsEmpty())
                 {
-                    InputJson->SetStringField(TEXT("fromNodeId"), In->Expression->Desc);
+                    InputJson->SetStringField(TEXT("fromNodeId"), Src->Desc);
                 }
             }
             InputsJson.Add(MakeShared<FJsonValueObject>(InputJson));
@@ -1331,6 +1452,8 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
 
         NodesJson.Add(MakeShared<FJsonValueObject>(NodeJson));
     }
+
+    Step(FString::Printf(TEXT("nodes done (%d serialized) — root connections"), NodesJson.Num()));
 
     // ── Root (material attribute) connections ────────────────────────────────
     // In UE 5.8 these live on UMaterialEditorOnlyData, NOT on UMaterial itself.
@@ -1371,14 +1494,20 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
     }
 #endif // WITH_EDITORONLY_DATA
 
+    Step(TEXT("root connections done — building response"));
+
     TSharedPtr<FJsonObject> Meta = MakeShared<FJsonObject>();
     Meta->SetStringField(TEXT("materialPath"), Mat->GetPathName());
     Meta->SetStringField(TEXT("resolvedFrom"), ResolvedFrom);
     Meta->SetNumberField(TEXT("nodeCount"), TotalExpressions);
     Meta->SetNumberField(TEXT("returnedNodeCount"), NodesJson.Num());
     Meta->SetBoolField(TEXT("truncated"), TotalExpressions > NodesJson.Num());
+    Meta->SetBoolField(TEXT("timedOut"), bTimedOut);
+    Meta->SetNumberField(TEXT("elapsedSeconds"), FPlatformTime::Seconds() - StartSeconds);
     Meta->SetArrayField(TEXT("nodes"), NodesJson);
     Meta->SetObjectField(TEXT("rootConnections"), RootJson);
+
+    Step(TEXT("done"));
 
     return FAssetCommonUtils::MakeSuccessResponse(TEXT("read"), AssetPath, Meta);
 #endif // WITH_EDITOR

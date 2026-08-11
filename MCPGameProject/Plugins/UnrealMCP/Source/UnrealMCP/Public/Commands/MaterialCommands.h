@@ -117,9 +117,22 @@ private:
      *                               inputs that actually have a source node are listed.
      *   - maxNodes                  (number, optional, default 500): safety cap on the
      *                               number of nodes serialized.
+     *   - timeBudgetSeconds         (number, optional, default 4): wall-clock budget for
+     *                               the node walk. On overrun the traversal stops and a
+     *                               partial graph is returned with meta.timedOut = true,
+     *                               instead of stalling the game thread (and with it the
+     *                               whole MCP bridge, which waits on Future.Get()).
+     *
+     * Never triggers a synchronous asset load while walking: texture references are
+     * read off the TObjectPtr handle (GetPathName/IsResolved) rather than dereferenced,
+     * and the per-node input walk is bounded explicitly instead of via CountInputs()
+     * (whose engine body is `while (GetInput(i)) ++i`, i.e. termination is delegated
+     * to each node's virtual override). Both are game-thread hang vectors that 3.24.0
+     * hit; the time budget below is the backstop for anything else.
      *
      * Result meta:
-     *   - materialPath, resolvedFrom ("material" | "instance"), nodeCount, truncated
+     *   - materialPath, resolvedFrom ("material" | "instance"), nodeCount, truncated,
+     *     timedOut, elapsedSeconds
      *   - nodes[]: { name, class, nodeId, posX, posY, props{}, inputs[] }
      *       props are type-dependent (ParameterName/DefaultValue, SpeedX/SpeedY,
      *       Texture, CoordinateIndex, ConstA/ConstB, Code, …)

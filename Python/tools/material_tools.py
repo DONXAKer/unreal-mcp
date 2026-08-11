@@ -505,6 +505,7 @@ def register_material_tools(mcp: FastMCP) -> None:
         assetPath: str,
         includeUnconnectedInputs: bool = True,
         maxNodes: int = 500,
+        timeBudgetSeconds: float = 4.0,
     ) -> dict[str, Any]:
         """
         Read back a master material graph: every expression node plus its wiring.
@@ -523,10 +524,14 @@ def register_material_tools(mcp: FastMCP) -> None:
                 with a "connected" flag. Set False to list only wired pins.
             maxNodes: Safety cap on serialized nodes (default 500). meta.truncated
                 tells you whether the cap was hit.
+            timeBudgetSeconds: Wall-clock budget for the graph walk (default 4.0, deliberately
+                under the 5s client socket timeout).
+                On overrun a partial graph comes back with meta.timedOut = True
+                instead of the editor game thread stalling.
 
         Returns meta with:
             materialPath, resolvedFrom ("material" | "instance"), nodeCount,
-            returnedNodeCount, truncated,
+            returnedNodeCount, truncated, timedOut, elapsedSeconds,
             nodes: [{name, class, nodeId, posX, posY, props{}, inputs[]}]
               props are type-dependent: ParameterName/DefaultValue (ScalarParameter,
               VectorParameter), SpeedX/SpeedY (Panner), Texture/TexturePath
@@ -552,6 +557,7 @@ def register_material_tools(mcp: FastMCP) -> None:
                 "assetPath": assetPath,
                 "includeUnconnectedInputs": bool(includeUnconnectedInputs),
                 "maxNodes": int(maxNodes),
+                "timeBudgetSeconds": float(timeBudgetSeconds),
             }
             logger.info(f"Reading material graph: {payload}")
             response = unreal.send_command("material_get_graph", payload)
