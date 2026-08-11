@@ -42,41 +42,86 @@ from tests.smoke_pie_full_game import (
 )
 from unreal_mcp_server import UnrealConnection
 
-SHOTS = []
+SHOTS: list[tuple[str, str]] = []
 
 
-def _shot(conn, name: str) -> None:
+def _shot(conn, name: str) -> bool:
+    """Снять кадр PIE. False — кадра нет, и это провал проверки, а не мелочь.
+
+    Прежний вариант при отказе захвата подставлял само имя файла как «путь» и
+    печатал правдоподобное «кадр: X -> X»: тест завершался бодрым ИТОГом с
+    кодом 0, не сняв ни одного кадра, — тот самый молчаливый успех, против
+    которого написан комментарий в цикле траты AP.
+    """
     r = _send(conn, "pie_screenshot", {"filename": name, "show_ui": True,
                                        "controller_index": 0})
-    path = (r or {}).get("assetPath") or (r or {}).get("filename") or name
+    path = (r or {}).get("assetPath")
+    if not path:
+        print(f"    ВНИМАНИЕ: кадр {name} НЕ снят, ответ={r}")
+        return False
     SHOTS.append((name, path))
-    print("    кадр: %s -> %s" % (name, path))
+    print(f"    кадр: {name} -> {path}")
     time.sleep(1.5)  # захват асинхронный, отдаём тик-другой на запись файла
+    return True
+
+
+AP_KEYS = ("ap", "ap_remaining", "apRemaining", "currentAP", "current_ap",
+           "actionPoints", "ActionPoints")
+
+_UNKNOWN = -1
+
+
+def _battle_state(conn) -> dict[str, object]:
+    """Состояние боя или {} при неудачном чтении, с ретраями по таймауту моста.
+
+    Ретраи ЗДЕСЬ, а не в _ap: `_my_turn` читает то же самое состояние, и без
+    общей защиты фикс выходил асимметричным — таймаут превращался в «сейчас не
+    мой ход», и цикл ожидания честно досиживал до дедлайна при живом ходе.
+    """
+    for attempt in range(4):
+        st = _send(conn, "wc_get_battle_state", {"controller_index": 0}) or {}
+        if not st.get("error"):
+            return st
+        time.sleep(1.0 + attempt)
+    print("    ВНИМАНИЕ: состояние боя не прочитано за 4 попытки")
+    return {}
 
 
 def _ap(conn) -> int:
-    st = _send(conn, "wc_get_battle_state", {"controller_index": 0}) or {}
-    # Имя поля не угадываем: печатаем весь стейт при первом чтении.
-    for key in ("ap_remaining", "apRemaining", "ap", "currentAP", "current_ap"):
-        if key in st:
-            return int(st[key])
-    print("    ВНИМАНИЕ: поле AP не найдено, стейт = %s" % st)
-    return -1
+    """Текущий AP или -1 («неизвестно»), но НЕ 0 — это разные вещи.
+
+    Имя поля не одно: сырой мост отдаёт `ap`, официальный toolset UE 5.8 —
+    `ActionPoints`; жёсткая привязка к `ap` молча вернула бы «неизвестно» после
+    перевода харнесса на unreal-ue58.
+
+    ВАЖНО: 0 в ответе НЕ доказывает, что AP исчерпан. `HandleGetBattleState`
+    инициализирует `int32 AP = 0` и кладёт поле даже когда рефлексивный вызов
+    `GetCurrentAP` не удался (WarCardGameCommands.cpp:516-522), поэтому сбой
+    подсистемы выглядит как честный ноль. Отличить их отсюда нельзя — вызывающий
+    обязан подтверждать «AP кончился» вторым признаком, а не одним этим числом.
+    """
+    st = _battle_state(conn)
+    for key in AP_KEYS:
+        value = st.get(key)
+        if isinstance(value, (int, float)):
+            return int(value)
+    if st:
+        print(f"    ВНИМАНИЕ: в состоянии боя нет ни одного из полей AP: {st}")
+    return _UNKNOWN
 
 
 def _my_turn(conn) -> bool:
-    st = _send(conn, "wc_get_battle_state", {"controller_index": 0}) or {}
-    return bool(st.get("my_turn"))
+    return bool(_battle_state(conn).get("my_turn"))
 
 
 def main() -> int:
     ts = int(time.time()) % 1000000
-    ue_user, bot_user = "vc_ue_%d" % ts, "vc_bot_%d" % ts
+    ue_user, bot_user = f"vc_ue_{ts}", f"vc_bot_{ts}"
     pwd = "Test1234"
 
     print("=== verify_cards_ap (AP=0 -> карты затемнены) ===")
-    ensure_test_user(ue_user, pwd, "%s@x.com" % ue_user)
-    ensure_test_user(bot_user, pwd, "%s@x.com" % bot_user)
+    ensure_test_user(ue_user, pwd, f"{ue_user}@x.com")
+    ensure_test_user(bot_user, pwd, f"{bot_user}@x.com")
 
     bot = OpponentBot(get_test_jwt(bot_user, pwd), name="opp")
     if not bot.start():
@@ -106,7 +151,7 @@ def main() -> int:
         while time.monotonic() < dl and not _has_uw_any(conn, "WBP_DeploymentScreen"):
             time.sleep(1.5)
         n = _deploy_client(conn, 0)
-        print("  расставлено: %d/%d" % (n, UNITS_TO_PICK))
+        print(f"  расставлено: {n}/{UNITS_TO_PICK}")
         _send(conn, "wc_confirm_deployment", {"controller_index": 0})
 
         print("\n--- 4b mulligan ---")
@@ -129,8 +174,13 @@ def main() -> int:
             return 1
 
         ap0 = _ap(conn)
-        print("  AP в начале хода: %s" % ap0)
-        _shot(conn, "cards_ap_full.png")
+        print(f"  AP в начале хода: {ap0}")
+        if ap0 <= 0:
+            print(f"=== FAIL: AP на старте {ap0} — сравнивать не с чем ===")
+            return 1
+        if not _shot(conn, "cards_ap_full.png"):
+            print("=== FAIL: кадр 'AP полный' не снят ===")
+            return 1
 
         print("\n--- 7 тратим AP до нуля ---")
         # Успех НЕ определяем по ответу команды: `ok` означает «доставлено в
@@ -138,8 +188,11 @@ def main() -> int:
         # вернули ok, а сервер все отклонил по OUT_OF_RANGE, и AP не двинулся.
         # Единственный надёжный признак — AP реально уменьшился.
         #
-        # Тратим движением, а не атакой: атака требует цели в радиусе, движение
-        # стоит 1 AP всегда (бюджет хода — 3 клетки, ровно 3 AP).
+        # Тратим движением, а не атакой: атака требует цели в радиусе. Но НЕ
+        # «движение стоит 1 AP всегда» — GameConstants.MOVE_AP_COST даёт
+        # HEAVY_TECH = 2, поэтому на танковом ростере можно застрять на AP=1,
+        # где рука ещё активна. Цикл поэтому крутится до нуля, а не до трёх
+        # успешных ходов, и выход по «ничего не прошло» считается провалом.
         spent = 0
         for _ in range(20):
             # Ход «мигает»: бот пасует, и между нашими действиями ход успевает
@@ -154,7 +207,10 @@ def main() -> int:
                     print("  ход не вернулся за 40s — выходим")
                     break
             ap_before = _ap(conn)
-            if ap_before <= 0:
+            if ap_before == _UNKNOWN:
+                print("  AP не читается — состояние неизвестно, прерываем")
+                return 1
+            if ap_before == 0:
                 break
 
             units = [u for u in _battle_units(conn, 0) if u.get("alive")]
@@ -171,11 +227,17 @@ def main() -> int:
                           {"controller_index": 0, "unit_id": u["unitId"],
                            "x": nx, "y": ny})
                     time.sleep(1.2)
-                    if _ap(conn) < ap_before:
+                    # Читаем ОДИН раз и сравниваем это же значение: прежде AP
+                    # читался дважды (в условии и в print), и в лог уходило
+                    # третье значение, которого не видел ни один из сравнений.
+                    ap_after = _ap(conn)
+                    # -1 («неизвестно») НЕ доказательство траты: раньше -1 < 3
+                    # было истинно, и отклонённый сервером ход засчитывался.
+                    if ap_after != _UNKNOWN and ap_after < ap_before:
                         spent += 1
                         moved = True
-                        print("    %s -> (%d,%d), AP %d -> %d"
-                              % (u["unitId"], nx, ny, ap_before, _ap(conn)))
+                        print(f"    {u['unitId']} -> ({nx},{ny}), "
+                              f"AP {ap_before} -> {ap_after}")
                         break
                 if moved:
                     break
@@ -184,12 +246,21 @@ def main() -> int:
                 break
 
         ap1 = _ap(conn)
-        print("  действий выполнено: %d, AP стало: %s, мой ход: %s"
-              % (spent, ap1, _my_turn(conn)))
-        _shot(conn, "cards_ap_spent.png")
+        print(f"  действий выполнено: {spent}, AP стало: {ap1}, "
+              f"мой ход: {_my_turn(conn)}")
+        if not _shot(conn, "cards_ap_spent.png"):
+            print("=== FAIL: кадр 'AP потрачен' не снят ===")
+            return 1
 
-        print("\n=== ИТОГ: AP %s -> %s; кадры: %s ==="
-              % (ap0, ap1, ", ".join(n for n, _ in SHOTS)))
+        # Проверка обязана уметь провалиться. Раньше main() возвращал 0 на всех
+        # путях после начала боя, и прогон с «AP 3 -> 3» рапортовал успех, хотя
+        # проверяемое свойство (карты гаснут при AP=0) не подтверждалось ничем.
+        if ap1 != 0:
+            print(f"\n=== FAIL: AP {ap0} -> {ap1}, до нуля не дошли — кадр 'AP потрачен' "
+                  "снят при активной руке, сравнивать нечего ===")
+            return 1
+
+        print("\n=== ИТОГ: AP {} -> {}; кадры: {} ===".format(ap0, ap1, ", ".join(n for n, _ in SHOTS)))
         return 0
     finally:
         bot.close()
