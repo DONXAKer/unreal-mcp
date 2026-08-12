@@ -69,7 +69,15 @@ def send_command(command: str, params: dict[str, Any] | None = None) -> dict[str
             try:
                 decoded = b"".join(chunks).decode("utf-8")
                 return json.loads(decoded)
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                # FIX-MCP-003: a multi-byte UTF-8 sequence (Cyrillic node
+                # names, HLSL code in material props) regularly splits across
+                # an 8 KB chunk boundary — that is UnicodeDecodeError (a
+                # ValueError), not JSONDecodeError. Left uncaught, it used to
+                # propagate past the outer `except (TimeoutError, OSError)`
+                # (a ValueError is neither) straight out of send_command as an
+                # unhandled traceback, killing the whole smoke run on
+                # perfectly valid data.
                 continue
         raise SmokeFailure(-1, command, "connection closed before complete JSON received")
     except (TimeoutError, OSError) as exc:

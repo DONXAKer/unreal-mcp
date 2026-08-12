@@ -10,16 +10,24 @@ Environment variables:
   MCP_HTTP_PORT - port to listen on for HTTP/SSE (default: 3001)
 """
 
-import json
 import logging
 import os
-import socket
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
+
+# FIX-MCP-003: UnrealConnection + timeout constants moved to
+# unreal_connection.py, shared with unreal_mcp_server.py (used to be a
+# byte-identical copy maintained by hand in both files). This server's own
+# UNREAL_HOST default (host.docker.internal, for the Docker/pipeline case)
+# differs from the stdio server's (127.0.0.1) — see unreal_connection.py's
+# module docstring — so host/port are still resolved HERE and passed
+# explicitly into UnrealConnection(host, port) below, rather than relying on
+# the shared module's own default.
+from unreal_connection import CONNECT_TIMEOUT, RECV_TIMEOUT, UnrealConnection
 
 logging.basicConfig(
     level=logging.INFO,
@@ -31,131 +39,11 @@ logger = logging.getLogger("UnrealMCP-HTTP")
 UNREAL_HOST = os.getenv("UNREAL_HOST", "host.docker.internal")
 UNREAL_PORT = int(os.getenv("UNREAL_PORT", "55557"))
 MCP_HTTP_PORT = int(os.getenv("MCP_HTTP_PORT", "3001"))
-# См. те же константы в unreal_mcp_server.py: приёмный таймаут держим НЕ МЕНЬШЕ
-# `mcp.CommandTimeoutSeconds` моста (300 с), иначе клиент уходит раньше ответа,
-# а команда продолжает выполняться и повторяется ретраем. FIX-MCP-001
-# (2026-08-12): бампнуто 130 -> 330 вместе с потолком моста 120 -> 300.
-RECV_TIMEOUT = float(os.getenv("UNREAL_MCP_RECV_TIMEOUT", "330"))
-CONNECT_TIMEOUT = float(os.getenv("UNREAL_MCP_CONNECT_TIMEOUT", "5"))
 
-logger.info("UnrealMCP HTTP: will connect to Unreal at %s:%d", UNREAL_HOST, UNREAL_PORT)
-
-
-class UnrealConnection:
-    def __init__(self) -> None:
-        self.socket: socket.socket | None = None
-        self.connected = False
-
-    def connect(self) -> bool:
-        try:
-            if self.socket:
-                try:
-                    self.socket.close()
-                except Exception:
-                    pass
-                self.socket = None
-            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.settimeout(CONNECT_TIMEOUT)
-            self.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            self.socket.connect((UNREAL_HOST, UNREAL_PORT))
-            self.connected = True
-            logger.info("Connected to Unreal Engine at %s:%d", UNREAL_HOST, UNREAL_PORT)
-            return True
-        except Exception as e:
-            logger.error("Failed to connect to Unreal at %s:%d: %s", UNREAL_HOST, UNREAL_PORT, e)
-            self.connected = False
-            return False
-
-    def disconnect(self) -> None:
-        if self.socket:
-            try:
-                self.socket.close()
-            except Exception:
-                pass
-        self.socket = None
-        self.connected = False
-
-    def receive_full_response(self, sock: socket.socket, buffer_size: int = 4096) -> bytes:
-        chunks: list[bytes] = []
-        sock.settimeout(RECV_TIMEOUT)
-        try:
-            while True:
-                chunk = sock.recv(buffer_size)
-                if not chunk:
-                    if not chunks:
-                        raise Exception("Connection closed before receiving data")
-                    break
-                chunks.append(chunk)
-                data = b''.join(chunks)
-                # UnicodeDecodeError ловим наравне с JSONDecodeError: разрыв
-                # многобайтовой последовательности на границе чанка — обычное
-                # состояние недочитанного ответа, а не ошибка данных.
-                try:
-                    json.loads(data.decode('utf-8'))
-                    return data
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    continue
-        except TimeoutError:
-            if chunks:
-                data = b''.join(chunks)
-                try:
-                    json.loads(data.decode('utf-8'))
-                    return data
-                except Exception:
-                    pass
-            raise RuntimeError("Timeout receiving Unreal response") from None
-
-        # Unreachable: loop exits via break only when EOF + partial chunks, which
-        # already raises above. Kept to satisfy strict mypy "missing return".
-        return b"".join(chunks)
-
-    def send_command(self, command: str, params: dict[str, Any] = None) -> dict[str, Any] | None:
-        if self.socket:
-            try:
-                self.socket.close()
-            except Exception:
-                pass
-            self.socket = None
-            self.connected = False
-
-        if not self.connect():
-            return {"status": "error", "error": f"Cannot connect to Unreal at {UNREAL_HOST}:{UNREAL_PORT}"}
-        assert self.socket is not None  # connect() set it on success
-
-        try:
-            command_obj = {"type": command, "params": params or {}}
-            command_json = json.dumps(command_obj)
-            self.socket.sendall(command_json.encode('utf-8'))
-            response_data = self.receive_full_response(self.socket)
-            response: dict[str, Any] = json.loads(response_data.decode('utf-8'))
-
-            if response.get("status") == "error":
-                error_message = response.get("error") or response.get("message", "Unknown Unreal error")
-                if "error" not in response:
-                    response["error"] = error_message
-            elif response.get("success") is False:
-                error_message = response.get("error") or response.get("message", "Unknown Unreal error")
-                response = {"status": "error", "error": error_message}
-
-            if self.socket is not None:
-                try:
-                    self.socket.close()
-                except Exception:
-                    pass
-            self.socket = None
-            self.connected = False
-            return response
-        except Exception as e:
-            logger.error("Error sending command: %s", e)
-            self.connected = False
-            if self.socket is not None:
-                try:
-                    self.socket.close()
-                except Exception:
-                    pass
-            self.socket = None
-            return {"status": "error", "error": str(e)}
+logger.info(
+    "UnrealMCP HTTP: will connect to Unreal at %s:%d (recvTimeout=%.0fs, connectTimeout=%.0fs)",
+    UNREAL_HOST, UNREAL_PORT, RECV_TIMEOUT, CONNECT_TIMEOUT,
+)
 
 
 _unreal_connection: UnrealConnection | None = None
@@ -165,7 +53,11 @@ def get_unreal_connection() -> UnrealConnection | None:
     global _unreal_connection
     try:
         if _unreal_connection is None:
-            _unreal_connection = UnrealConnection()
+            # Explicit host/port: this server's UNREAL_HOST default
+            # (host.docker.internal) differs from UnrealConnection's own
+            # bare-constructor default (127.0.0.1) — see the import comment
+            # above.
+            _unreal_connection = UnrealConnection(UNREAL_HOST, UNREAL_PORT)
             if not _unreal_connection.connect():
                 logger.warning("Could not connect to Unreal Engine at %s:%d", UNREAL_HOST, UNREAL_PORT)
                 _unreal_connection = None
