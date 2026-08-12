@@ -4,6 +4,7 @@
 #include "HAL/Runnable.h"
 #include "Sockets.h"
 #include "Interfaces/IPv4/IPv4Address.h"
+#include <atomic>
 
 class UEpicUnrealMCPBridge;
 
@@ -32,5 +33,11 @@ private:
 	UEpicUnrealMCPBridge* Bridge;
 	TSharedPtr<FSocket> ListenerSocket;
 	TSharedPtr<FSocket> ClientSocket;
-	bool bRunning;
-}; 
+
+	// Stop() (game thread, via UEpicUnrealMCPBridge::StopServer) writes this
+	// while Run() (socket thread) reads it in a tight polling loop — needs to
+	// be atomic, not a plain bool. A comment used to claim this "handles" the
+	// interruption; a plain bool gives no such guarantee across threads
+	// without a fence, only the appearance of one.
+	std::atomic<bool> bRunning;
+};

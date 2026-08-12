@@ -171,7 +171,13 @@ def run() -> dict[str, Any]:
     try:
         probe = _call_bridge("asset_exists", {"assetPath": "/Game/__probe__"})
         if isinstance(probe, dict):
-            err = str(probe.get("error", "")) if probe.get("status") == "error" else ""
+            # FIX-MCP-001: probe["error"] can be the bridge's structured
+            # {category, code, message, details} object now, not just a
+            # string — str()'ing it directly used to turn "Unknown command: X"
+            # into a Python-dict repr that never contains that literal
+            # substring, silently defeating this exact check.
+            raw_err = probe.get("error", "") if probe.get("status") == "error" else ""
+            err = raw_err.get("message", str(raw_err)) if isinstance(raw_err, dict) else str(raw_err)
             if "Unknown command" in err:
                 bridge_available = False
                 skip_reason = "plugin not rebuilt (UnrealMCP 1.3.0 required)"

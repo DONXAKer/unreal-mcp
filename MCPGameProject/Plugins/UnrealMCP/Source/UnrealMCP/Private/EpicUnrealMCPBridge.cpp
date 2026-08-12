@@ -251,6 +251,15 @@ void UEpicUnrealMCPBridge::StopServer()
 
     bIsRunning = false;
 
+    // Must be set BEFORE Kill(true) below: that call blocks the game thread
+    // until the socket thread's Run() returns, and Run() will not return
+    // while it is inside a still-waiting ExecuteCommand — which polls this
+    // flag in ~100ms slices instead of one long WaitFor(mcp.CommandTimeoutSeconds).
+    // Without this, closing the editor with a stuck command in flight froze it
+    // for up to the full command timeout (previously up to 2 minutes at 120s;
+    // would be up to 5 minutes at the current 300s ceiling).
+    bShuttingDown.store(true, std::memory_order_relaxed);
+
     // Clean up thread
     if (ServerThread)
     {
@@ -288,9 +297,17 @@ void UEpicUnrealMCPBridge::StopServer()
 // Держать потолок ВЫШЕ клиентского бессмысленно: клиент уходит раньше, ответ
 // COMMAND_TIMEOUT читать становится некому, и наружу вместо внятной ошибки
 // вылезает обрыв связи. Меняешь одно — проверь второе.
+//
+// TODO(FIX-MCP-001): 300 с — консервативная ВРЕМЕННАЯ цифра, поднятая со 120 с
+// (2026-08-12, ревью-12), НЕ измеренная на боевой карте. 120 с было подобрано
+// под старые клиентские 130 с и не укладывало `create_landscape` на 1009×1009
+// (121–180 с наблюдалось живьём). Живого Editor'а для замера в этой сессии не
+// было. Нужна отдельная задача: замерить `create_landscape` и
+// `import_static_mesh` на боевых ассетах и уточнить оба числа (это и клиентский
+// потолок ниже) по факту, а не по запасу.
 static TAutoConsoleVariable<float> CVarMCPCommandTimeoutSeconds(
     TEXT("mcp.CommandTimeoutSeconds"),
-    120.0f,
+    300.0f,
     TEXT("Max seconds the MCP socket thread waits for a command to finish on the game thread. 0 = wait forever."),
     ECVF_Default);
 
@@ -305,6 +322,20 @@ struct FMCPCommandState
 {
     TPromise<FString> Promise;
     std::atomic<bool> bFulfilled{false};
+
+    // Флаг отмены, который ПРОВЕРЯЕТ САМ делегат — замена FTSTicker::RemoveTicker
+    // на пути таймаута. RemoveTicker документированно блокирует вызывающего
+    // busy-Yield-циклом, если делегат в этот момент уже исполняется
+    // (`Ticker.cpp`: `while (ExecutingThreadId != 0) FPlatformProcess::Yield();`),
+    // то есть ровно в сценарии, ради которого таймаут и вводился (команда реально
+    // идёт дольше потолка). bCancelled стоит только СНАРУЖИ, до того как отдать
+    // клиенту COMMAND_TIMEOUT; делегат читает его В САМОМ НАЧАЛЕ, до вызова
+    // обработчика — если тикер к этому моменту ещё не стартовал (обычный случай:
+    // game thread был занят чем-то другим), делегат просто не выполняет команду
+    // и заполняет уже занятый промис no-op'ом через Fulfill. Если тикер УЖЕ
+    // исполняется (внутри обработчика) — флаг проверять поздно, и это ожидаемо:
+    // команда доигрывается сама, а её результат просто никто не забирает.
+    std::atomic<bool> bCancelled{false};
 
     void Fulfill(const FString& Value)
     {
@@ -345,11 +376,26 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
     // thread'а, вне контекста задачи. Оттуда синхронные загрузки и компиляции
     // легальны. Точечные обходы (отложение работы через FTSTicker внутри
     // отдельных handler'ов) больше не нужны: безопасен весь конвейер команд.
-    const FTSTicker::FDelegateHandle TickerHandle = FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
+    // Возврат AddTicker (FDelegateHandle) больше не сохраняется: RemoveTicker
+    // на пути таймаута снят целиком (см. FMCPCommandState::bCancelled и хвост
+    // этой функции) — единственным потребителем хендла был именно тот вызов.
+    FTSTicker::GetCoreTicker().AddTicker(FTickerDelegate::CreateLambda(
         [this, CommandType, Params, StateRef](float) -> bool
     {
+        // Проверка ПЕРВЫМ делом, до какой-либо работы: если вызывающий уже
+        // отдал наружу COMMAND_TIMEOUT (см. хвост ExecuteCommand), выполнять
+        // команду СЕЙЧАС значит выполнить её ВТОРОЙ раз — клиент, получивший
+        // таймаут, уже мог сделать retry по новому TCP-соединению. Не
+        // достижимо, если делегат к моменту отмены уже начал выполняться —
+        // тогда он доигрывает как обычно, а Fulfill ниже становится no-op.
+        if (StateRef->bCancelled.load(std::memory_order_relaxed))
+        {
+            StateRef->Fulfill(FString()); // no-op if the timeout path already fulfilled it
+            return false;   // одноразовый тикер
+        }
+
         TSharedPtr<FJsonObject> ResponseJson = MakeShareable(new FJsonObject);
-        
+
         try
         {
             TSharedPtr<FJsonObject> ResultJson;
@@ -364,7 +410,7 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 // without it. Keep in sync with UnrealMCP.uplugin "VersionName".
                 // Дублирует UnrealMCP.uplugin::VersionName — бампить ОБА места,
                 // иначе ping врёт и handshake Python-клиента сверяет не то.
-                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.25.0"));
+                ResultJson->SetStringField(TEXT("plugin_version"), TEXT("3.26.0"));
             }
             // Editor Commands (including actor manipulation)
             else if (CommandType == TEXT("get_actors_in_level") ||
@@ -570,8 +616,10 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                      CommandType == TEXT("add_anim_transition") ||
                      CommandType == TEXT("add_play_anim_node") ||
                      CommandType == TEXT("add_blend_space_player_node") ||
-                     // MCP-ANIM-001 (v3.23.0)
-                     CommandType == TEXT("import_anim_sequence"))
+                     // MCP-ANIM-001 (реально выпущено как часть 3.24.0, см. CHANGELOG)
+                     CommandType == TEXT("import_anim_sequence") ||
+                     // FIX-ANIM-MCP-001 (v3.26.0) — subject-first алиас, тот же handler
+                     CommandType == TEXT("anim_sequence_import"))
             {
                 ResultJson = AnimationBPCommands->HandleCommand(CommandType, Params);
             }
@@ -642,44 +690,44 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
                 }
             }
             
-            // Check if the result contains an error
-            bool bSuccess = true;
+            // Check if the result contains an error.
+            //
+            // FIX-MCP-001: два независимых дефекта в этом блоке чинятся разом:
+            //  1. `GetBoolField` не проверяет тип поля (`JsonObject.cpp`:
+            //     `GetField<EJson::None>(...)->AsBool()`) — на нестрогом значении
+            //     вроде `{"ok": 1}` тихо отдаёт false вместо честной ошибки типа.
+            //     `TryGetBoolField` (`Field->TryGetBool`) требует ИМЕННО
+            //     JSON-boolean.
+            //  2. `success` проверялся раньше `ok` через `else if` — ответ с
+            //     ОБОИМИ полями судился только по первому найденному. Провалом
+            //     теперь считается ДИЗЪЮНКЦИЯ: `success == false` ИЛИ
+            //     `ok == false`, кто бы из них ни присутствовал.
+            bool bSuccessValue = true;
+            const bool bHasSuccessField = ResultJson->TryGetBoolField(TEXT("success"), bSuccessValue);
+            bool bOkValue = true;
+            const bool bHasOkField = ResultJson->TryGetBoolField(TEXT("ok"), bOkValue);
+
+            const bool bSuccess =
+                !((bHasSuccessField && !bSuccessValue) || (bHasOkField && !bOkValue));
+
             FString ErrorMessage;
             // Структурный error-объект новой asset-схемы {category, code, message, details}.
             TSharedPtr<FJsonObject> StructuredError;
 
-            if (ResultJson->HasField(TEXT("success")))
+            if (!bSuccess)
             {
-                bSuccess = ResultJson->GetBoolField(TEXT("success"));
-                if (!bSuccess && ResultJson->HasField(TEXT("error")))
+                // Структурный error (asset-схема) приоритетнее строкового — там
+                // есть category/code/details, которые иначе теряются.
+                const TSharedPtr<FJsonObject>* ErrObj = nullptr;
+                if (ResultJson->TryGetObjectField(TEXT("error"), ErrObj)
+                    && ErrObj != nullptr && (*ErrObj).IsValid())
                 {
-                    ErrorMessage = ResultJson->GetStringField(TEXT("error"));
+                    StructuredError = *ErrObj;
+                    (*ErrObj)->TryGetStringField(TEXT("message"), ErrorMessage);
                 }
-            }
-            // Asset-команды отвечают через FAssetCommonUtils::MakeFailureResponse,
-            // а он кладёт `ok:false` и НЕ кладёт `success` вовсе. Пока здесь
-            // стояла проверка только по `success`, bSuccess оставался true, и
-            // отказ уезжал наружу как {status:"success", result:{ok:false,...}}:
-            // Python-обёртка видит на верхнем уровне status=success и разбирает
-            // его как успех. Так молча обнулялись ВСЕ коды отказа asset-слоя
-            // (ASSET_NOT_FOUND, INVALID_MAX_NODES, BASE_MATERIAL_IS_ENGINE_DEFAULT,
-            // NO_EDITOR_ONLY_DATA) — гарды срабатывали, а звучали как «ок».
-            else if (ResultJson->HasField(TEXT("ok")))
-            {
-                bSuccess = ResultJson->GetBoolField(TEXT("ok"));
-                if (!bSuccess)
+                else
                 {
-                    const TSharedPtr<FJsonObject>* ErrObj = nullptr;
-                    if (ResultJson->TryGetObjectField(TEXT("error"), ErrObj)
-                        && ErrObj != nullptr && (*ErrObj).IsValid())
-                    {
-                        StructuredError = *ErrObj;
-                        (*ErrObj)->TryGetStringField(TEXT("message"), ErrorMessage);
-                    }
-                    else
-                    {
-                        ResultJson->TryGetStringField(TEXT("error"), ErrorMessage);
-                    }
+                    ResultJson->TryGetStringField(TEXT("error"), ErrorMessage);
                 }
             }
 
@@ -731,52 +779,100 @@ FString UEpicUnrealMCPBridge::ExecuteCommand(const FString& CommandType, const T
     }), /*InDelay=*/0.0f);
 
     const float TimeoutSeconds = CVarMCPCommandTimeoutSeconds.GetValueOnAnyThread();
-    if (TimeoutSeconds > 0.0f && !Future.WaitFor(FTimespan::FromSeconds(TimeoutSeconds)))
+
+    // Ждём короткими слайсами вместо одного Future.WaitFor(TimeoutSeconds) по
+    // двум независимым причинам:
+    //  1. Stop()/StopServer() ставит bShuttingDown ПЕРЕД ServerThread->Kill(true),
+    //     который блокирует game thread до возврата из Run() на сокетном потоке —
+    //     а Run() не вернётся, пока мы тут ждём. Без поллинга закрытие редактора
+    //     с висящей командой замирало на весь TimeoutSeconds (раньше до 2 минут
+    //     при 120с потолке; сейчас было бы до 5 минут при 300с).
+    //  2. Каждый слайс — это и есть проверка "не появился ли уже готовый
+    //     результат" ближе к реальному времени готовности, а не одним поздним
+    //     чтением после целого TimeoutSeconds.
+    bool bCompleted = false;
+    const double DeadlineSeconds = (TimeoutSeconds > 0.0f)
+        ? (FPlatformTime::Seconds() + TimeoutSeconds)
+        : TNumericLimits<double>::Max();
+    constexpr double WaitSliceSeconds = 0.1;
+
+    for (;;)
     {
-        // Снимаем тикер. Если он ещё НЕ сработал (типовой случай: game thread
-        // занят предыдущей командой, наша даже не начиналась) — команда не
-        // выполнится вообще. Без этого она отрабатывала уже после того, как
-        // клиент получил ошибку и по своей retry-логике прислал её повторно:
-        // импорт/спавн/удаление исполнялись ДВАЖДЫ, а лог рапортовал отказ.
-        //
-        // Гонку «тикер сработал прямо сейчас» RemoveTicker не закрывает — её
-        // закрывает Fulfill ниже: он либо заполняет промис за снятый делегат
-        // (иначе ~TPromise падает на check(IsComplete())), либо становится
-        // no-op, если тикер успел заполнить его сам.
-        FTSTicker::GetCoreTicker().RemoveTicker(TickerHandle);
-
-        UE_LOG(LogTemp, Error,
-            TEXT("EpicUnrealMCPBridge: command '%s' exceeded %.0fs on the game thread — cancelling it ")
-            TEXT("(mcp.CommandTimeoutSeconds). If it had already started, it will still finish."),
-            *CommandType, TimeoutSeconds);
-
-        const FString TimeoutMessage = FString::Printf(
-            TEXT("Command '%s' did not finish within %.0f s on the game thread (mcp.CommandTimeoutSeconds)"),
-            *CommandType, TimeoutSeconds);
-
-        // Отдаём код в структурном виде: обёртка разбирает верхнеуровневый `ok`
-        // раньше `status`, поэтому COMMAND_TIMEOUT доходит до вызывающего как
-        // код, а не тонет в безымянном BRIDGE_ERROR. Отличить «команда упала»
-        // от «команда, возможно, ещё идёт — ретраить опасно» иначе нечем.
-        TSharedPtr<FJsonObject> TimeoutError = MakeShareable(new FJsonObject);
-        TimeoutError->SetStringField(TEXT("category"), TEXT("ue_internal"));
-        TimeoutError->SetStringField(TEXT("code"), TEXT("COMMAND_TIMEOUT"));
-        TimeoutError->SetStringField(TEXT("message"), TimeoutMessage);
-        TimeoutError->SetObjectField(TEXT("details"), MakeShared<FJsonObject>());
-
-        TSharedPtr<FJsonObject> TimeoutJson = MakeShareable(new FJsonObject);
-        TimeoutJson->SetStringField(TEXT("status"), TEXT("error"));
-        TimeoutJson->SetBoolField(TEXT("ok"), false);
-        TimeoutJson->SetObjectField(TEXT("error"), TimeoutError);
-        TimeoutJson->SetStringField(TEXT("code"), TEXT("COMMAND_TIMEOUT"));
-
-        FString TimeoutString;
-        TSharedRef<TJsonWriter<>> TimeoutWriter = TJsonWriterFactory<>::Create(&TimeoutString);
-        FJsonSerializer::Serialize(TimeoutJson.ToSharedRef(), TimeoutWriter);
-
-        StateRef->Fulfill(TimeoutString);
-        return TimeoutString;
+        if (bShuttingDown.load(std::memory_order_relaxed))
+        {
+            break;
+        }
+        const double RemainingSeconds = DeadlineSeconds - FPlatformTime::Seconds();
+        if (RemainingSeconds <= 0.0)
+        {
+            break;
+        }
+        const double SliceSeconds = FMath::Min(WaitSliceSeconds, RemainingSeconds);
+        if (Future.WaitFor(FTimespan::FromSeconds(SliceSeconds)))
+        {
+            bCompleted = true;
+            break;
+        }
     }
 
-    return Future.Get();
+    if (bCompleted)
+    {
+        return Future.Get();
+    }
+
+    // Не дождались — из-за истёкшего TimeoutSeconds ИЛИ из-за bShuttingDown.
+    // Финальная проверка на узкое окно "тикер как раз успел выполниться между
+    // последним WaitFor слайсом и этой строкой": раньше готовый результат в
+    // этом окне БЕЗУСЛОВНО отбрасывался в пользу сконструированного
+    // COMMAND_TIMEOUT — ассет создан, assetPath известен, а наружу всё равно
+    // уходил отказ, и вызывающий ретраил уже сделанную работу.
+    if (Future.IsReady())
+    {
+        return Future.Get();
+    }
+
+    // StateRef->bCancelled не отменяет уже исполняющийся делегат (это
+    // невозможно синхронно — команда либо ещё не стартовала, и тогда просто не
+    // выполнится вовсе, либо стартовала и доиграет сама вне зависимости от
+    // этого флага). Мы намеренно НЕ зовём FTSTicker::RemoveTicker: он
+    // документированно блокирует ЭТОТ поток busy-Yield-циклом, если делегат
+    // сейчас исполняется, — то есть тем же ожиданием, которого этот путь
+    // должен избежать.
+    StateRef->bCancelled.store(true, std::memory_order_relaxed);
+
+    const bool bDueToShutdown = bShuttingDown.load(std::memory_order_relaxed);
+    UE_LOG(LogTemp, Error,
+        TEXT("EpicUnrealMCPBridge: command '%s' did not finish within %.0fs on the game thread (%s). ")
+        TEXT("If it had already started, it will still finish in the background — this response is not that result."),
+        *CommandType, TimeoutSeconds, bDueToShutdown ? TEXT("editor shutting down") : TEXT("mcp.CommandTimeoutSeconds"));
+
+    const FString TimeoutMessage = bDueToShutdown
+        ? FString::Printf(TEXT("Command '%s' was still pending when the Editor began shutting down"), *CommandType)
+        : FString::Printf(
+            TEXT("Command '%s' did not finish within %.0f s on the game thread (mcp.CommandTimeoutSeconds)"),
+            *CommandType, TimeoutSeconds);
+    const TCHAR* TimeoutCode = bDueToShutdown ? TEXT("EDITOR_SHUTTING_DOWN") : TEXT("COMMAND_TIMEOUT");
+
+    // Отдаём код в структурном виде: обёртка разбирает верхнеуровневый `ok`
+    // раньше `status`, поэтому COMMAND_TIMEOUT доходит до вызывающего как
+    // код, а не тонет в безымянном BRIDGE_ERROR. Отличить «команда упала»
+    // от «команда, возможно, ещё идёт — ретраить опасно» иначе нечем.
+    TSharedPtr<FJsonObject> TimeoutError = MakeShareable(new FJsonObject);
+    TimeoutError->SetStringField(TEXT("category"), TEXT("ue_internal"));
+    TimeoutError->SetStringField(TEXT("code"), TimeoutCode);
+    TimeoutError->SetStringField(TEXT("message"), TimeoutMessage);
+    TimeoutError->SetObjectField(TEXT("details"), MakeShared<FJsonObject>());
+
+    TSharedPtr<FJsonObject> TimeoutJson = MakeShareable(new FJsonObject);
+    TimeoutJson->SetStringField(TEXT("status"), TEXT("error"));
+    TimeoutJson->SetBoolField(TEXT("ok"), false);
+    TimeoutJson->SetObjectField(TEXT("error"), TimeoutError);
+    TimeoutJson->SetStringField(TEXT("code"), TimeoutCode);
+
+    FString TimeoutString;
+    TSharedRef<TJsonWriter<>> TimeoutWriter = TJsonWriterFactory<>::Create(&TimeoutString);
+    FJsonSerializer::Serialize(TimeoutJson.ToSharedRef(), TimeoutWriter);
+
+    StateRef->Fulfill(TimeoutString);
+    return TimeoutString;
 }

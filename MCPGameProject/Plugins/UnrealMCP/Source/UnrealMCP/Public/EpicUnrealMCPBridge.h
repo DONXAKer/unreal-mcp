@@ -27,6 +27,7 @@
 #include "Commands/EnhancedInputCommands.h"
 #include "Commands/ConsoleCommands.h"
 #include "Commands/LandscapeCommands.h"
+#include <atomic>
 #include "EpicUnrealMCPBridge.generated.h"
 
 class FMCPServerRunnable;
@@ -64,6 +65,13 @@ private:
 	TSharedPtr<FSocket> ListenerSocket;
 	TSharedPtr<FSocket> ConnectionSocket;
 	FRunnableThread* ServerThread;
+
+	// Set by StopServer() BEFORE ServerThread->Kill(true) blocks the game
+	// thread. ExecuteCommand's wait loop polls this in short slices so a
+	// command stuck on the game thread does not force the editor to sit
+	// through the full mcp.CommandTimeoutSeconds during shutdown — see
+	// ExecuteCommand's comment on FMCPCommandState for the full story.
+	std::atomic<bool> bShuttingDown{false};
 
 	// Server configuration
 	FIPv4Address ServerAddress;

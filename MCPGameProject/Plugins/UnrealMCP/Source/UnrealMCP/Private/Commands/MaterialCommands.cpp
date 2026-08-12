@@ -1148,6 +1148,45 @@ namespace MaterialGraphRead
     /** Верхний потолок на maxNodes — защита от переполнения int32. */
     static constexpr int64 MaxNodesHardCap = 100000;
 
+    /**
+     * Верхний потолок на timeBudgetSeconds. Держим заметно ниже потолка моста
+     * (mcp.CommandTimeoutSeconds), иначе гость с большим числом всё равно
+     * упрётся в COMMAND_TIMEOUT моста вместо честного partial-graph ответа
+     * этой команды — обещание "частичный граф вместо стойла" не выполняется.
+     */
+    static constexpr double MaxTimeBudgetSecondsHardCap = 120.0;
+
+    /**
+     * Потолок глубины цепочки Parent при сборе оверрайдов текстур. Страховка
+     * от циклической цепочки (MI_A.Parent=MI_B, MI_B.Parent=MI_A) — редакторный
+     * SetParentInternal такой цикл ловит, но загрузка ассета с диска — нет.
+     */
+    static constexpr int32 MaxParentChainDepth = 64;
+
+    /** "/Game/X/M_Foo.M_Foo" -> "M_Foo@Layer[2]" для non-global параметров;
+     *  просто "M_Foo" для глобальных. Ключ карты — параметры с одинаковым
+     *  Name, но разным Association/Index иначе схлопывались в одну запись. */
+    static FString ParamMapKey(const FMaterialParameterInfo& Info)
+    {
+        if (Info.Association == EMaterialParameterAssociation::GlobalParameter)
+        {
+            return Info.Name.ToString();
+        }
+        const TCHAR* AssocName = (Info.Association == EMaterialParameterAssociation::LayerParameter)
+            ? TEXT("Layer") : TEXT("Blend");
+        return FString::Printf(TEXT("%s@%s[%d]"), *Info.Name.ToString(), AssocName, Info.Index);
+    }
+
+    static FString AssociationToString(EMaterialParameterAssociation Association)
+    {
+        switch (Association)
+        {
+        case EMaterialParameterAssociation::LayerParameter: return TEXT("Layer");
+        case EMaterialParameterAssociation::BlendParameter: return TEXT("Blend");
+        default: return TEXT("Global");
+        }
+    }
+
     /** Фазовый шаг: всегда в лог + флаш. Их порядка десятка на вызов. */
     static void StepPhase(const FString& Message)
     {
@@ -1442,8 +1481,31 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
     double TimeBudgetSeconds = 20.0;
     {
         double Tmp = 0.0;
-        if (Params->TryGetNumberField(TEXT("timeBudgetSeconds"), Tmp) && Tmp > 0.0)
+        if (Params->TryGetNumberField(TEXT("timeBudgetSeconds"), Tmp))
         {
+            // Same shape of guard as maxNodes above: NaN/Infinity used to pass
+            // `Tmp > 0.0` (both comparisons false for NaN, Infinity > 0.0 is
+            // true) and disabled the "partial graph instead of a stall"
+            // guarantee outright — the node loop's time check never trips.
+            if (!FMath::IsFinite(Tmp) || Tmp <= 0.0 || Tmp > MaterialGraphRead::MaxTimeBudgetSecondsHardCap)
+            {
+                TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+                if (FMath::IsFinite(Tmp))
+                {
+                    Details->SetNumberField(TEXT("timeBudgetSeconds"), Tmp);
+                }
+                else
+                {
+                    Details->SetStringField(TEXT("timeBudgetSeconds"), TEXT("non-finite (NaN or Infinity)"));
+                }
+                Details->SetNumberField(TEXT("allowedMax"), MaterialGraphRead::MaxTimeBudgetSecondsHardCap);
+                return FAssetCommonUtils::MakeFailureResponse(
+                    TEXT("user"),
+                    TEXT("INVALID_TIME_BUDGET"),
+                    FString::Printf(TEXT("'timeBudgetSeconds' must be finite and in (0, %.0f]"),
+                        MaterialGraphRead::MaxTimeBudgetSecondsHardCap),
+                    Details);
+            }
             TimeBudgetSeconds = Tmp;
         }
     }
@@ -1459,6 +1521,14 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
     // `timedOut:false` и мелким elapsedSeconds — «уложились», хотя обещание
     // «частичный граф вместо висяка» не выполнялось на первом же шаге.
     const double LoadSeconds = FPlatformTime::Seconds() - StartSeconds;
+    // Момент, ОТ которого дальше отсчитывается TimeBudgetSeconds. Раньше бюджет
+    // считался от StartSeconds (то есть включал LoadSeconds): холодный вызов на
+    // тяжёлом мастере съедал весь бюджет одной загрузкой, обход узлов не
+    // начинался вовсе (nodes:[], timedOut:true), а тёплый повторный вызов
+    // отдавал полный граф — выглядело как флаки-баг ассета, а не как порядок
+    // отсчёта. Оба комментария на LoadSeconds/TimeBudgetSeconds ниже всегда
+    // подразумевали именно это разделение — теперь код ему соответствует.
+    const double NodeWalkStartSeconds = FPlatformTime::Seconds();
     StepPhase(Obj ? TEXT("asset resolved") : TEXT("asset NOT resolved"));
 
     if (!Obj)
@@ -1529,12 +1599,19 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
         Warnings.Add(TEXT("This IS the engine default material, not a project asset."));
     }
 
-    if (LoadSeconds > TimeBudgetSeconds)
+    // Абсолютный порог, НЕ сравнение с TimeBudgetSeconds: бюджет теперь считается
+    // от NodeWalkStartSeconds (после загрузки), поэтому LoadSeconds в него не
+    // входит вовсе, и старое условие `LoadSeconds > TimeBudgetSeconds` почти
+    // никогда не срабатывало бы — предупреждение о медленной загрузке нужно
+    // печатать по факту (загрузка реально долгая), а не по факту сравнения с
+    // чужим бюджетом.
+    constexpr double SlowLoadWarningThresholdSeconds = 3.0;
+    if (LoadSeconds > SlowLoadWarningThresholdSeconds)
     {
         Warnings.Add(FString::Printf(
-            TEXT("Loading the asset alone took %.1fs, over the %.1fs budget — the budget only guards the node walk, "
-                 "not the load. See meta.loadSeconds."),
-            LoadSeconds, TimeBudgetSeconds));
+            TEXT("Loading the asset alone took %.1fs — that time is NOT counted against timeBudgetSeconds "
+                 "(the budget only guards the node walk). See meta.loadSeconds."),
+            LoadSeconds));
     }
 
     // ── Nodes ────────────────────────────────────────────────────────────────
@@ -1566,26 +1643,36 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
     int32 OpaqueBodyCount = 0;
     int32 UnaddressableCount = 0;
     bool bTimedOut = false;
+    bool bAnyNodeInputsTruncated = false;
 
     for (int32 NodeIndex = 0; NodeIndex < Expressions.Num(); ++NodeIndex)
     {
-        if (FPlatformTime::Seconds() - StartSeconds > TimeBudgetSeconds)
+        if (FPlatformTime::Seconds() - NodeWalkStartSeconds > TimeBudgetSeconds)
         {
             bTimedOut = true;
             StepPhase(FString::Printf(TEXT("TIME BUDGET EXCEEDED at node index %d — returning partial graph"), NodeIndex));
             Warnings.Add(TEXT("Time budget exceeded: node list is partial. Raise timeBudgetSeconds."));
 
-            // Досчитываем ОСТАВШИЕСЯ узлы, не сериализуя их. Без этого счётчик
-            // замирал на месте обрыва, nodeCount совпадал с returnedNodeCount,
-            // и `truncated` выходил false: читатель, проверяющий полноту дампа
-            // по этому полю (как предписывает docstring), получал «полный граф»
-            // на 30% узлов и делал вывод «параметра в графе нет».
+            // Досчитываем ОСТАВШИЕСЯ узлы, не сериализуя их, И КЛАССИФИЦИРУЕМ их
+            // так же, как отсечку по maxNodes чуть ниже. Раньше выход по бюджету
+            // только считал TotalExpressions — на графе с 3000 узлов, оборвавшемся
+            // на 400-м, все MaterialFunctionCall в хвосте давали OpaqueBodyCount==0,
+            // и предупреждение "bodies were NOT traversed" не печаталось вовсе,
+            // хотя тело реально не пройдено.
             for (int32 Rest = NodeIndex; Rest < Expressions.Num(); ++Rest)
             {
                 UMaterialExpression* RestE = Expressions[Rest].Get();
                 if (RestE && IsValid(RestE))
                 {
                     ++TotalExpressions;
+                    if (MaterialGraphRead::HasOpaqueBody(RestE))
+                    {
+                        ++OpaqueBodyCount;
+                    }
+                    if (RestE->Desc.IsEmpty())
+                    {
+                        ++UnaddressableCount;
+                    }
                 }
             }
             break;
@@ -1706,6 +1793,17 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
         }
         NodeJson->SetArrayField(TEXT("inputs"), InputsJson);
 
+        // MaxInputsPerNode обрезает выше молча, если не пометить это здесь: у
+        // maxNodes и timeBudgetSeconds есть свой truncated/timedOut флаг, у этой
+        // отсечки не было никакого — узел с 65+ реальными входами выглядел так,
+        // будто входов у него ровно 64.
+        const bool bInputsTruncated = (E->GetInput(MaterialGraphRead::MaxInputsPerNode) != nullptr);
+        NodeJson->SetBoolField(TEXT("inputsTruncated"), bInputsTruncated);
+        if (bInputsTruncated)
+        {
+            bAnyNodeInputsTruncated = true;
+        }
+
         NodesJson.Add(MakeShared<FJsonValueObject>(NodeJson));
     }
 
@@ -1721,6 +1819,12 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
         Warnings.Add(FString::Printf(
             TEXT("%d node(s) have an empty nodeId (Desc) and cannot be targeted by material_connect / material_set_node_param."),
             UnaddressableCount));
+    }
+    if (bAnyNodeInputsTruncated)
+    {
+        Warnings.Add(FString::Printf(
+            TEXT("At least one node has more than %d inputs; extras are silently cut. See per-node inputsTruncated."),
+            MaterialGraphRead::MaxInputsPerNode));
     }
 
     StepPhase(FString::Printf(TEXT("nodes done (%d serialized) — root connections"), NodesJson.Num()));
@@ -1779,7 +1883,7 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
     // Без этой секции проверяющий, позвавший команду на MI_*, видел бы дефолт
     // мастера и считал его фактическим значением инстанса.
     TSharedPtr<FJsonObject> InstanceJson;
-    if (SourceInstance)
+    if (SourceInstance && !bTimedOut)
     {
         StepPhase(TEXT("collecting instance parameter values ..."));
         InstanceJson = MakeShared<FJsonObject>();
@@ -1801,7 +1905,12 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
             TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
             Entry->SetNumberField(TEXT("value"), Value);
             Entry->SetBoolField(TEXT("overridden"), bOverridden);
-            ScalarsJson->SetObjectField(Info.Name.ToString(), Entry);
+            // Association/Index: без них layer-параметр и глобальный параметр с
+            // одинаковым Name схлопывались в одну запись карты — один затирал
+            // другой в зависимости от порядка обхода.
+            Entry->SetStringField(TEXT("association"), MaterialGraphRead::AssociationToString(Info.Association));
+            Entry->SetNumberField(TEXT("layerIndex"), Info.Index);
+            ScalarsJson->SetObjectField(MaterialGraphRead::ParamMapKey(Info), Entry);
         }
         InstanceJson->SetObjectField(TEXT("scalars"), ScalarsJson);
 
@@ -1822,7 +1931,9 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
             TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
             MaterialGraphRead::SetColorField(Entry, TEXT("value"), Value);
             Entry->SetBoolField(TEXT("overridden"), bOverridden);
-            VectorsJson->SetObjectField(Info.Name.ToString(), Entry);
+            Entry->SetStringField(TEXT("association"), MaterialGraphRead::AssociationToString(Info.Association));
+            Entry->SetNumberField(TEXT("layerIndex"), Info.Index);
+            VectorsJson->SetObjectField(MaterialGraphRead::ParamMapKey(Info), Entry);
         }
         InstanceJson->SetObjectField(TEXT("vectors"), VectorsJson);
 
@@ -1839,23 +1950,88 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
         // материала. И там и там путь достаём через .GetPathName() у TObjectPtr.
         TSharedPtr<FJsonObject> TexturesJson = MakeShared<FJsonObject>();
         {
-            // Оверрайды по цепочке инстансов, от ближайшего к дальнему.
-            TMap<FName, FString> OverridePaths;
-            for (const UMaterialInstance* Chain = Cast<UMaterialInstance>(SourceInstance);
-                 Chain != nullptr;
-                 Chain = Cast<UMaterialInstance>(Chain->Parent.Get()))
+            // Оверрайды по цепочке инстансов, от ближайшего к дальнему —
+            // РАЗДЕЛЬНО "оверрайд лежит на самом запрошенном ассете" (Own) и
+            // "оверрайд лежит где-то в цепочке предков" (Nearest). Раньше флаг
+            // `overridden` означал второе, хотя и docstring, и здравый смысл
+            // требуют первого: инструктировать правку в дочерний инстанс, где
+            // параметра на самом деле нет, — это чинить не то место.
+            TMap<FName, FString> NearestOverridePath;
+            TMap<FName, FString> NearestOverrideSourceAsset;
+            TSet<FName> OwnOverrideNames;
+            TSet<const UMaterialInstance*> VisitedChain;
+            bool bChainTruncatedByCycle = false;
+            bool bChainTruncatedByDepth = false;
+            bool bChainTruncatedByUnresolvedParent = false;
+
+            const UMaterialInstance* Chain = Cast<UMaterialInstance>(SourceInstance);
+            int32 ChainDepth = 0;
+            while (Chain != nullptr)
             {
+                if (VisitedChain.Contains(Chain))
+                {
+                    bChainTruncatedByCycle = true;
+                    break;
+                }
+                VisitedChain.Add(Chain);
+
+                if (++ChainDepth > MaterialGraphRead::MaxParentChainDepth)
+                {
+                    bChainTruncatedByDepth = true;
+                    break;
+                }
+
                 for (const FTextureParameterValue& TexParam : Chain->TextureParameterValues)
                 {
                     const FName ParamName = TexParam.ParameterInfo.Name;
-                    if (!OverridePaths.Contains(ParamName))
+                    if (!NearestOverridePath.Contains(ParamName))
                     {
-                        OverridePaths.Add(ParamName, TexParam.ParameterValue.GetPathName());
+                        NearestOverridePath.Add(ParamName, TexParam.ParameterValue.GetPathName());
+                        NearestOverrideSourceAsset.Add(ParamName, Chain->GetPathName());
+                    }
+                    if (Chain == SourceInstance)
+                    {
+                        OwnOverrideNames.Add(ParamName);
                     }
                 }
+
+                // НЕ вызываем Chain->Parent.Get(): на нерезолвнутом TObjectPtr это
+                // синхронная загрузка (FlushAsyncLoading) вне бюджета обхода — тот
+                // самый класс блокировки game thread, которого весь остальной файл
+                // избегает через .GetPathName(). IsResolved() ничего не грузит;
+                // если родитель ещё не в памяти, дальше по цепочке просто не идём
+                // (дальние оверрайды не увидим, но это честная неполнота, а не
+                // зависший редактор).
+                if (!Chain->Parent.IsResolved())
+                {
+                    if (!Chain->Parent.GetPathName().IsEmpty() && Chain->Parent.GetPathName() != TEXT("None"))
+                    {
+                        bChainTruncatedByUnresolvedParent = true;
+                    }
+                    break;
+                }
+                Chain = Cast<UMaterialInstance>(Chain->Parent.Get());
+            }
+
+            if (bChainTruncatedByCycle)
+            {
+                Warnings.Add(TEXT("Parent chain has a cycle; texture-override walk stopped early."));
+            }
+            if (bChainTruncatedByDepth)
+            {
+                Warnings.Add(FString::Printf(
+                    TEXT("Parent chain exceeds %d links; texture-override walk stopped early."),
+                    MaterialGraphRead::MaxParentChainDepth));
+            }
+            if (bChainTruncatedByUnresolvedParent)
+            {
+                Warnings.Add(TEXT("An ancestor in the Parent chain is not currently loaded; "
+                                  "its overrides were not walked (avoided a synchronous load)."));
             }
 
             // Дефолты мастера: имя параметра -> путь текстуры в выражении.
+            // Только выражения ВЕРХНЕГО уровня — параметры внутри тел
+            // MaterialFunctionCall сюда не попадают (см. defaultTraceable ниже).
             TMap<FName, FString> DefaultPaths;
             for (const TObjectPtr<UMaterialExpression>& ExprPtr : Mat->GetExpressions())
             {
@@ -1875,32 +2051,61 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
             SourceInstance->GetAllTextureParameterInfo(TextureInfos, TextureGuids);
             for (const FMaterialParameterInfo& Info : TextureInfos)
             {
-                const FString* OverridePath = OverridePaths.Find(Info.Name);
-                const bool bOverridden = (OverridePath != nullptr);
+                const bool bOwnOverride = OwnOverrideNames.Contains(Info.Name);
+                const FString* NearestPath = NearestOverridePath.Find(Info.Name);
                 const FString* DefaultPath = DefaultPaths.Find(Info.Name);
 
                 FString TexPath;
-                if (bOverridden)
+                bool bDefaultTraceable = true;
+                if (NearestPath != nullptr)
                 {
-                    TexPath = *OverridePath;
+                    TexPath = *NearestPath;
                 }
                 else if (DefaultPath != nullptr)
                 {
                     TexPath = *DefaultPath;
+                }
+                else
+                {
+                    // Живёт внутри тела MaterialFunctionCall — по решению
+                    // FIX-MCP-002 туда не заходим (дороже и тянет обход вглубь);
+                    // честно говорим "не прослеживается" вместо пустой строки,
+                    // неотличимой от «в слоте ничего нет».
+                    bDefaultTraceable = false;
                 }
                 const bool bHasTexture = !TexPath.IsEmpty() && TexPath != TEXT("None");
 
                 TSharedPtr<FJsonObject> Entry = MakeShared<FJsonObject>();
                 Entry->SetStringField(TEXT("value"), bHasTexture ? MaterialGraphRead::ShortNameFromPath(TexPath) : FString());
                 Entry->SetStringField(TEXT("valuePath"), bHasTexture ? TexPath : FString());
-                Entry->SetBoolField(TEXT("overridden"), bOverridden);
-                TexturesJson->SetObjectField(Info.Name.ToString(), Entry);
+                Entry->SetBoolField(TEXT("overridden"), bOwnOverride);
+                if (!bOwnOverride && NearestPath != nullptr)
+                {
+                    const FString* SourceAsset = NearestOverrideSourceAsset.Find(Info.Name);
+                    Entry->SetStringField(TEXT("inheritedFrom"), SourceAsset ? *SourceAsset : FString());
+                }
+                if (!bDefaultTraceable)
+                {
+                    Entry->SetBoolField(TEXT("defaultTraceable"), false);
+                }
+                Entry->SetStringField(TEXT("association"), MaterialGraphRead::AssociationToString(Info.Association));
+                Entry->SetNumberField(TEXT("layerIndex"), Info.Index);
+                TexturesJson->SetObjectField(MaterialGraphRead::ParamMapKey(Info), Entry);
             }
         }
         InstanceJson->SetObjectField(TEXT("textures"), TexturesJson);
 
         Warnings.Add(TEXT("nodes[] and rootConnections describe the BASE material with its defaults; "
                           "actual instance values are in meta.instanceParameters."));
+    }
+    else if (SourceInstance && bTimedOut)
+    {
+        // Раньше время выхода по бюджету не мешало продолжить: второй полный
+        // обход Mat->GetExpressions() ради DefaultPaths и
+        // GetAllTextureParameterInfo() всё равно исполнялись целиком — бюджет
+        // сторожил только цикл узлов чуть выше, а не команду в целом.
+        Warnings.Add(TEXT("Node walk exceeded timeBudgetSeconds; instance parameter dump (meta.instanceParameters) "
+                          "was skipped rather than doing a second unbounded pass over the graph."));
     }
 
     StepPhase(TEXT("root connections done — building response"));
@@ -1915,6 +2120,8 @@ TSharedPtr<FJsonObject> FMaterialCommands::HandleMaterialGetGraph(const TSharedP
     Meta->SetBoolField(TEXT("timedOut"), bTimedOut);
     Meta->SetNumberField(TEXT("elapsedSeconds"), FPlatformTime::Seconds() - StartSeconds);
     Meta->SetNumberField(TEXT("loadSeconds"), LoadSeconds);
+    // Отдельно от elapsedSeconds: именно ЭТО время меряется против timeBudgetSeconds.
+    Meta->SetNumberField(TEXT("nodeWalkSeconds"), FPlatformTime::Seconds() - NodeWalkStartSeconds);
     Meta->SetArrayField(TEXT("nodes"), NodesJson);
     Meta->SetObjectField(TEXT("rootConnections"), RootJson);
     if (InstanceJson.IsValid())

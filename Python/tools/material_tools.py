@@ -518,16 +518,31 @@ def register_material_tools(mcp: FastMCP) -> None:
         Accepts a UMaterial or a UMaterialInstance — for an instance the underlying
         base material is inspected and meta.resolvedFrom is "instance".
 
+        IMPORTANT — meta is nested TWICE in the envelope this tool actually returns.
+        The C++ handler answers `{ok, status, assetPath, meta:{...fields below...}}`;
+        the bridge wraps that in `{status:"success", result:{...}}`; and the outbound
+        envelope wrapper (tools/_envelope.py) copies the C++ response's OWN top-level
+        keys (including its "meta") verbatim into ITS "meta" field instead of
+        flattening them. So every field documented below as `meta.X` is actually at
+        `response["meta"]["meta"]["X"]`, not `response["meta"]["X"]`. This is a
+        property of the shared envelope wrapper, not something material_get_graph
+        does on its own — every command on this ok/status/assetPath/meta contract has
+        the same extra nesting level.
+
         Args:
             assetPath: Full /Game/... path to a UMaterial or UMaterialInstance.
-            maxNodes: Safety cap on serialized nodes (default 500). meta.truncated
-                tells you whether the cap was hit.
-            timeBudgetSeconds: Wall-clock budget for the graph WALK (default 20.0, kept
-                well under the bridge's mcp.CommandTimeoutSeconds). On overrun a
-                partial graph comes back with meta.timedOut = True instead of the
-                editor game thread stalling. NOTE: the budget covers the node walk
-                only — loading a cold asset happens before it and is reported
-                separately as meta.loadSeconds.
+            maxNodes: Safety cap on serialized nodes (default 500, hard cap 100000).
+                meta.truncated tells you whether the cap was hit. Negative or
+                out-of-range values are rejected with INVALID_MAX_NODES rather than
+                silently clamped.
+            timeBudgetSeconds: Wall-clock budget for the graph WALK (default 20.0;
+                must be finite and in (0, 120] — NaN/Infinity/out-of-range are
+                rejected with INVALID_TIME_BUDGET rather than silently disabling the
+                guard). On overrun a partial graph comes back with meta.timedOut =
+                True instead of the editor game thread stalling. NOTE: the budget
+                covers the node walk only — loading a cold asset happens before it
+                and is reported separately as meta.loadSeconds (also NOT counted
+                against the budget; meta.nodeWalkSeconds is what actually is).
             verboseLog: Log every node to the editor log (LogUnrealMCPMaterialGraph)
                 with a forced flush. Off by default: the flush is more expensive
                 than the walk itself and would eat the time budget.
@@ -536,15 +551,30 @@ def register_material_tools(mcp: FastMCP) -> None:
             materialPath, resolvedFrom ("material" | "instance"), nodeCount,
             returnedNodeCount, truncated, timedOut, elapsedSeconds,
             baseIsEngineDefaultMaterial, warnings[] (READ THESE: they flag
-            un-traversed MaterialFunctionCall bodies, empty rootConnections and
+            un-traversed MaterialFunctionCall bodies, empty rootConnections,
+            truncated per-node inputs, a broken/cyclic/too-deep Parent chain, and
             nodes that material_connect cannot address),
-            loadSeconds (time spent resolving/loading the asset, outside the budget),
+            loadSeconds (time spent resolving/loading the asset, NOT counted against
+            timeBudgetSeconds), nodeWalkSeconds (time spent on the node walk itself —
+            THIS is what timeBudgetSeconds actually bounds),
             instanceParameters{scalars,vectors,textures} when assetPath was an
-            instance — nodes[] describe the BASE material with its defaults,
-            the instance's own values live here. All three list EVERY parameter,
-            with "overridden" telling you whether the value is the instance's own
-            or inherited from the master,
-            nodes: [{name, class, nodeId, posX, posY, props{}, inputs[]}]
+            instance AND the node walk did not time out (a timed-out walk skips this
+            section entirely rather than doing a second unbounded pass — see
+            warnings[] for that case) — nodes[] describe the BASE material with its
+            defaults, the instance's own values live here. All three list EVERY
+            parameter known to the instance, keyed by name for global parameters or
+            "name@Layer[i]"/"name@Blend[i]" when Association is layer/blend-scoped
+            (each entry also carries its own "association"/"layerIndex" fields).
+            Each entry has:
+              - "overridden": true only when the override belongs to the REQUESTED
+                asset itself (not an ancestor in the Parent chain).
+              - "inheritedFrom": present (an asset path) when the value comes from an
+                ancestor instance instead — "overridden" stays false in that case.
+              - for textures only, "defaultTraceable": false when the parameter lives
+                inside a MaterialFunctionCall body that this reader does not walk
+                into — an empty "value"/"valuePath" in that case means "not traced",
+                NOT "slot is empty". Absent (implicitly true) otherwise.
+            nodes: [{name, class, nodeId, posX, posY, props{}, inputs[], inputsTruncated}]
               props are type-dependent: ParameterName/DefaultValue (ScalarParameter,
               VectorParameter), SpeedX/SpeedY (Panner), Texture/TexturePath
               (TextureSample, TextureSampleParameter2D), CoordinateIndex/UTiling/
@@ -552,6 +582,8 @@ def register_material_tools(mcp: FastMCP) -> None:
               MaterialFunctionCall / MaterialAttributeLayers carry
               props.bodyTraversed = False: a wire that continues inside them looks
               like a dead end here, so do NOT read that as "not connected".
+              inputsTruncated = True means the node has more than 64 real inputs and
+              the extras were silently cut from inputs[] (see warnings[]).
               inputs: [{index, name, connected, unresolvedPin, fromNode, fromClass,
                         fromNodeId, fromOutputIndex}]
               unresolvedPin = True marks a pin that exists on the node but that UE

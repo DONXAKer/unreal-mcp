@@ -22,14 +22,19 @@ from typing import Any
 
 UNREAL_HOST = "127.0.0.1"
 UNREAL_PORT = 55557
-# UE может быть занят load level / multi-client init / screenshot queue —
-# дефолт повышен с 10s до 30s, чтобы тесты не падали из-за периодических
-# просадок ответа на pie_status / find_widget во время map transition.
-RECV_TIMEOUT_S = 30.0
+# FIX-MCP-001 (2026-08-12): мост гарантирует ответ (успех ИЛИ COMMAND_TIMEOUT)
+# в пределах mcp.CommandTimeoutSeconds (300 с — см. TODO на этой константе в
+# EpicUnrealMCPBridge.cpp, число не проверено на боевой карте). Держать
+# клиентский приёмный таймаут НИЖЕ этого потолка бессмысленно: клиент уходит
+# раньше моста, читать структурный COMMAND_TIMEOUT становится некому, и
+# снаружи вместо внятной ошибки — обрыв соединения. Оба тайм-аута здесь подняты
+# строго выше потолка (330 с с запасом на сериализацию).
+RECV_TIMEOUT_S = 330.0
 
-# Команды, заведомо долгие (multi-client startup, hi-res screenshot).
+# Команды, заведомо долгие (multi-client startup, hi-res screenshot) — тот же
+# потолок, отдельная константа сохранена для читаемости вызывающего кода.
 LONG_COMMANDS = {"pie_start", "pie_stop", "pie_screenshot"}
-LONG_TIMEOUT_S = 60.0
+LONG_TIMEOUT_S = 330.0
 
 
 class SmokeFailure(RuntimeError):
@@ -92,8 +97,13 @@ def assert_success(response: dict[str, Any], step_index: int, step_name: str) ->
         return {}
     if response.get("success") is True:
         return response
+    # FIX-MCP-001: response["error"] can be the bridge's structured
+    # {category, code, message, details} object now, not just a string —
+    # str()'ing it directly used to put a Python-dict repr in the failure
+    # message instead of the actual human-readable text.
     err = response.get("error") or response.get("message") or "unknown error"
-    raise SmokeFailure(step_index, step_name, str(err), response)
+    err_message = err.get("message", str(err)) if isinstance(err, dict) else str(err)
+    raise SmokeFailure(step_index, step_name, err_message, response)
 
 
 def run_steps(label: str, steps: list[tuple[str, Callable[[], dict[str, Any] | None]]]) -> int:

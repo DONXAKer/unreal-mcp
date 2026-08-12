@@ -54,21 +54,59 @@ uint32 FMCPServerRunnable::Run()
                 ClientSocket->SetReceiveBufferSize(SocketBufferSize, SocketBufferSize);
                 
                 uint8 Buffer[8192];
+
+                // FIX-MCP-001: накопительный буфер запроса. Раньше каждый
+                // Recv() (максимум 8191 байт) парсился как САМОСТОЯТЕЛЬНЫЙ
+                // JSON-документ — любой запрос длиннее одного TCP-фрагмента
+                // (material_set_node_param с крупным Custom HLSL-кодом,
+                // import_datatable_from_csv с большой таблицей) ловил
+                // MALFORMED_REQUEST_JSON на первом же фрагменте, отправлял его
+                // клиенту как ОКОНЧАТЕЛЬНЫЙ ответ и никогда не дочитывал
+                // остаток — команда не выполнялась вовсе, а диагностика про
+                // NaN/Infinity уводила разбор в сторону. Теперь парсим ТОЛЬКО
+                // накопленный целиком буфер; поштучный Recv() лишь пополняет
+                // его.
+                //
+                // UTF8-конверсия — тоже только на полном накопленном буфере, а
+                // не на сыром `Buffer` каждого фрагмента: многобайтовая
+                // последовательность (кириллица в имени ноды, HLSL-код в
+                // props) регулярно рвётся серединой на границе 8 КБ-чанка, и
+                // `UTF8_TO_TCHAR` на оборванном хвосте портит текст независимо
+                // от того, распарсился JSON или нет.
+                TArray<uint8> RequestBytes;
+                double RequestAssemblyStartSeconds = 0.0;
+                // Хватает с большим запасом: request-полезная нагрузка на
+                // порядки меньше самых больших ОТВЕТОВ (material_get_graph
+                // отдаёт сотни КБ), а по localhost TCP она приходит за доли
+                // секунды при наличии данных вообще. Долгая сборка означает
+                // мусор на проводе, а не медленную сеть.
+                constexpr double RequestAssemblyTimeoutSeconds = 30.0;
+                constexpr int32 MaxRequestBytes = 64 * 1024 * 1024; // 64 MB safety cap
+
                 while (bRunning)
                 {
                     int32 BytesRead = 0;
-                    if (ClientSocket->Recv(Buffer, sizeof(Buffer) - 1, BytesRead))
+                    if (ClientSocket->Recv(Buffer, sizeof(Buffer), BytesRead))
                     {
                         if (BytesRead == 0)
                         {
+                            if (RequestBytes.Num() > 0)
+                            {
+                                UE_LOG(LogTemp, Warning,
+                                    TEXT("MCPServerRunnable: client disconnected mid-request (%d bytes accumulated, never parsed as JSON)"),
+                                    RequestBytes.Num());
+                            }
                             UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Client disconnected (zero bytes)"));
                             break;
                         }
 
-                        // Convert received data to string
-                        Buffer[BytesRead] = '\0';
-                        FString ReceivedText = UTF8_TO_TCHAR(Buffer);
-                        UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Received: %s"), *ReceivedText);
+                        if (RequestBytes.Num() == 0)
+                        {
+                            RequestAssemblyStartSeconds = FPlatformTime::Seconds();
+                        }
+                        RequestBytes.Append(Buffer, BytesRead);
+                        UE_LOG(LogTemp, Verbose, TEXT("MCPServerRunnable: Received %d bytes (%d accumulated)"),
+                            BytesRead, RequestBytes.Num());
 
                         // Отправка ответа вынесена в лямбду, потому что отвечать
                         // обязаны ВСЕ три пути, а не только удачный. Раньше на
@@ -190,12 +228,34 @@ uint32 FMCPServerRunnable::Run()
                             SendResponse(Out);
                         };
 
-                        // Parse JSON
+                        if (RequestBytes.Num() > MaxRequestBytes)
+                        {
+                            UE_LOG(LogTemp, Error, TEXT("MCPServerRunnable: request exceeded %d MB without producing valid JSON — aborting"),
+                                MaxRequestBytes / (1024 * 1024));
+                            SendProtocolError(TEXT("REQUEST_TOO_LARGE"),
+                                FString::Printf(TEXT("Request exceeded %d MB without ever parsing as valid JSON"),
+                                    MaxRequestBytes / (1024 * 1024)));
+                            RequestBytes.Reset();
+                            break; // malformed/runaway client — do not keep serving this connection
+                        }
+
+                        // Конвертируем и пытаемся распарсить НАКОПЛЕННЫЙ буфер
+                        // целиком — не фрагмент. На неполном сообщении Deserialize
+                        // штатно отдаёт false (тот же признак, на который
+                        // ориентируется Python-приёмник receive_full_response при
+                        // JSONDecodeError) — это НЕ повод отвечать клиенту прямо
+                        // сейчас, а повод дочитать ещё.
+                        FUTF8ToTCHAR Converter(reinterpret_cast<const ANSICHAR*>(RequestBytes.GetData()), RequestBytes.Num());
+                        FString ReceivedText(Converter.Length(), Converter.Get());
+
                         TSharedPtr<FJsonObject> JsonObject;
                         TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ReceivedText);
 
                         if (FJsonSerializer::Deserialize(Reader, JsonObject) && JsonObject.IsValid())
                         {
+                            UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Parsed complete request (%d bytes)"), RequestBytes.Num());
+                            RequestBytes.Reset(); // ready for a possible next message on this connection
+
                             // Get command type
                             FString CommandType;
                             if (JsonObject->TryGetStringField(TEXT("type"), CommandType))
@@ -217,13 +277,25 @@ uint32 FMCPServerRunnable::Run()
                                     TEXT("Request JSON has no 'type' field naming the command."));
                             }
                         }
-                        else
+                        else if (FPlatformTime::Seconds() - RequestAssemblyStartSeconds > RequestAssemblyTimeoutSeconds)
                         {
-                            UE_LOG(LogTemp, Warning, TEXT("MCPServerRunnable: Failed to parse JSON from: %s"), *ReceivedText);
+                            // Собирали дольше разумного и всё ещё не целое
+                            // сообщение — это уже не фрагментация большого
+                            // запроса (та закрывается за миллисекунды по
+                            // localhost), а мусор на проводе (NaN/Infinity,
+                            // оборванное соединение сверху и т.п.). Отвечаем
+                            // ОДИН раз на всё сообщение целиком, не на фрагмент.
+                            UE_LOG(LogTemp, Warning,
+                                TEXT("MCPServerRunnable: Failed to parse request as JSON after %d bytes / %.0fs: %s"),
+                                RequestBytes.Num(), RequestAssemblyTimeoutSeconds, *ReceivedText);
                             SendProtocolError(TEXT("MALFORMED_REQUEST_JSON"),
-                                FString::Printf(TEXT("Could not parse the request as JSON (%d bytes received). ")
-                                                TEXT("Note that NaN/Infinity are not valid JSON."), ReceivedText.Len()));
+                                FString::Printf(TEXT("Could not parse the request as JSON (%d bytes received over %.0fs). ")
+                                                TEXT("Note that NaN/Infinity are not valid JSON."),
+                                                RequestBytes.Num(), RequestAssemblyTimeoutSeconds));
+                            RequestBytes.Reset();
                         }
+                        // else: возможно, просто ещё не всё пришло — читаем дальше,
+                        // ничего не отправляя (см. комментарий над циклом).
                     }
                     else
                     {

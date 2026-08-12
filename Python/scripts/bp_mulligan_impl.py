@@ -12,7 +12,9 @@ PORT = int(os.environ.get("UNREAL_PORT", "55557"))
 
 def send_cmd(cmd_type, params):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.settimeout(15)
+        # FIX-MCP-001 (2026-08-12): must stay above mcp.CommandTimeoutSeconds
+        # (300 s bridge ceiling) — see _subagent_send.py for the same fix.
+        s.settimeout(330)
         s.connect((HOST, PORT))
         msg = json.dumps({"type": cmd_type, "params": params})
         s.sendall(msg.encode('utf-8'))

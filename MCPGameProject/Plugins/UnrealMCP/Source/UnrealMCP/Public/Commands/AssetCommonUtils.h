@@ -4,6 +4,7 @@
 #include "Json.h"
 
 class UWorld;
+class IConsoleVariable;
 
 /**
  * Shared helpers for MCP Asset Pipeline commands (Texture / Material / Mesh / Level / ...).
@@ -188,4 +189,52 @@ public:
         UWorld*& OutWorld,
         bool& bOutOpened,
         FString& OutError);
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // PIE guard (FIX-ANIM-MCP-001)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * True when the Editor is currently in a play session (GEditor->PlayWorld
+     * != nullptr). Asset-mutating commands (Blueprint compiles, imports, saves)
+     * either silently no-op or leave the asset half-mutated while PIE is active
+     * — see root CLAUDE.md "Симптом, который уводит в сторону". Callers should
+     * check this FIRST and return MakePieActiveFailure() instead of proceeding.
+     */
+    static bool IsPieActive();
+
+    /**
+     * Builds a { ok:false, error:{ category:"user", code:"PIE_ACTIVE", ... } }
+     * response. OperationHint, if given, is folded into the message (e.g. the
+     * command name) so the caller doesn't have to guess which command refused.
+     */
+    static TSharedPtr<FJsonObject> MakePieActiveFailure(const FString& OperationHint = FString());
+};
+
+/**
+ * RAII guard that disables the `Interchange.FeatureFlags.Import.FBX` console
+ * variable for the scope's lifetime and restores its previous value in the
+ * destructor — including on early return / exception, unlike a manual
+ * "restore after the call" line that never runs on those paths.
+ *
+ * UE 5.8's Interchange FBX importer re-enters the GameThread TaskGraph from
+ * inside the bridge's own dispatch (RecursionGuard assertion, TaskGraph.cpp
+ * line ~705); forcing this CVar to 0 keeps FBX imports on the synchronous
+ * legacy UFbxFactory path. Shared by MeshCommands.cpp (import_static_mesh,
+ * import_skeletal_mesh) and AnimationBPCommands.cpp (import_anim_sequence) —
+ * three independent copies of the same manual toggle used to live in those
+ * files, each one only restoring the CVar on the happy path.
+ */
+class UNREALMCP_API FScopedInterchangeFbxImportDisable
+{
+public:
+    FScopedInterchangeFbxImportDisable();
+    ~FScopedInterchangeFbxImportDisable();
+
+    FScopedInterchangeFbxImportDisable(const FScopedInterchangeFbxImportDisable&) = delete;
+    FScopedInterchangeFbxImportDisable& operator=(const FScopedInterchangeFbxImportDisable&) = delete;
+
+private:
+    IConsoleVariable* CVar = nullptr;
+    int32 OldValue = 1;
 };

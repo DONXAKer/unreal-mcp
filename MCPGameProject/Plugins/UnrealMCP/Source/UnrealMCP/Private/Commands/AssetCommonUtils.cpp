@@ -13,6 +13,7 @@
 #include "Editor.h"
 #include "Engine/World.h"
 #include "FileHelpers.h" // UEditorLoadingAndSavingUtils
+#include "HAL/IConsoleManager.h"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Asset Registry / lookup
@@ -349,4 +350,44 @@ bool FAssetCommonUtils::ResolveLevelContext(
     OutWorld = Loaded;
     bOutOpened = true;
     return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PIE guard (FIX-ANIM-MCP-001)
+// ─────────────────────────────────────────────────────────────────────────────
+
+bool FAssetCommonUtils::IsPieActive()
+{
+    return GEditor && GEditor->PlayWorld != nullptr;
+}
+
+TSharedPtr<FJsonObject> FAssetCommonUtils::MakePieActiveFailure(const FString& OperationHint)
+{
+    const FString Message = OperationHint.IsEmpty()
+        ? TEXT("Editor is in a play session (PIE); asset-mutating commands are refused until pie_stop")
+        : FString::Printf(
+            TEXT("%s refused: Editor is in a play session (PIE) — call pie_stop first"), *OperationHint);
+    return MakeFailureResponse(TEXT("user"), TEXT("PIE_ACTIVE"), Message);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FScopedInterchangeFbxImportDisable
+// ─────────────────────────────────────────────────────────────────────────────
+
+FScopedInterchangeFbxImportDisable::FScopedInterchangeFbxImportDisable()
+{
+    CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("Interchange.FeatureFlags.Import.FBX"));
+    if (CVar)
+    {
+        OldValue = CVar->GetInt();
+        CVar->Set(0, ECVF_SetByCode);
+    }
+}
+
+FScopedInterchangeFbxImportDisable::~FScopedInterchangeFbxImportDisable()
+{
+    if (CVar)
+    {
+        CVar->Set(OldValue, ECVF_SetByCode);
+    }
 }

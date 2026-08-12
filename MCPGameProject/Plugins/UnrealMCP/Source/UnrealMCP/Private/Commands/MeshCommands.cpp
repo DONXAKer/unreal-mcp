@@ -222,15 +222,10 @@ TSharedPtr<FJsonObject> FMeshCommands::HandleImportStaticMesh(const TSharedPtr<F
     // the bridge's own GameThread dispatch → RecursionGuard assertion in
     // TaskGraph.cpp:705. Setting the CVar to 0 forces ImportAssetsAutomated
     // through the classic UFbxFactory pipeline (fully synchronous, no TaskGraph
-    // re-entry). Restored after import to leave the editor state clean.
-    IConsoleVariable* InterchangeFbxCVar = IConsoleManager::Get()
-        .FindConsoleVariable(TEXT("Interchange.FeatureFlags.Import.FBX"));
-    int32 OldInterchangeVal = 1;
-    if (InterchangeFbxCVar)
-    {
-        OldInterchangeVal = InterchangeFbxCVar->GetInt();
-        InterchangeFbxCVar->Set(0, ECVF_SetByCode);
-    }
+    // re-entry). RAII guard (FIX-ANIM-MCP-001): a manual "restore after the
+    // call" line — the old shape here — does not run on an early return or an
+    // exception; the destructor does, on every path.
+    FScopedInterchangeFbxImportDisable InterchangeGuard;
 
     UAutomatedAssetImportData* ImportData = NewObject<UAutomatedAssetImportData>();
     ImportData->DestinationPath = PackagePath;
@@ -244,11 +239,6 @@ TSharedPtr<FJsonObject> FMeshCommands::HandleImportStaticMesh(const TSharedPtr<F
 
     IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
     TArray<UObject*> Imported = AssetTools.ImportAssetsAutomated(ImportData);
-
-    if (InterchangeFbxCVar)
-    {
-        InterchangeFbxCVar->Set(OldInterchangeVal, ECVF_SetByCode);
-    }
 
     if (Imported.Num() == 0 || !Imported[0])
     {
@@ -767,15 +757,10 @@ TSharedPtr<FJsonObject> FMeshCommands::HandleImportSkeletalMesh(const TSharedPtr
     // ── Disable Interchange for FBX (same fix as import_static_mesh) ─────────
     // In UE 5.8, Interchange re-enters the GameThread TaskGraph → RecursionGuard
     // assertion in TaskGraph.cpp:705. Forcing CVar=0 keeps the classic UFbxFactory
-    // pipeline (fully synchronous, no TaskGraph re-entry).
-    IConsoleVariable* InterchangeFbxCVar = IConsoleManager::Get()
-        .FindConsoleVariable(TEXT("Interchange.FeatureFlags.Import.FBX"));
-    int32 OldInterchangeVal = 1;
-    if (InterchangeFbxCVar)
-    {
-        OldInterchangeVal = InterchangeFbxCVar->GetInt();
-        InterchangeFbxCVar->Set(0, ECVF_SetByCode);
-    }
+    // pipeline (fully synchronous, no TaskGraph re-entry). RAII guard restores it
+    // in its destructor on every path (early return / exception included) — see
+    // FScopedInterchangeFbxImportDisable in AssetCommonUtils.h.
+    FScopedInterchangeFbxImportDisable InterchangeGuard;
 
     // ── Import via UFbxFactory (auto-detects skeletal from armature) ──────────
     // We let UFbxFactory auto-detect the mesh type from the FBX content.
@@ -793,11 +778,6 @@ TSharedPtr<FJsonObject> FMeshCommands::HandleImportSkeletalMesh(const TSharedPtr
 
     IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
     TArray<UObject*> Imported = AssetTools.ImportAssetsAutomated(ImportData);
-
-    if (InterchangeFbxCVar)
-    {
-        InterchangeFbxCVar->Set(OldInterchangeVal, ECVF_SetByCode);
-    }
 
     if (Imported.Num() == 0 || !Imported[0])
     {

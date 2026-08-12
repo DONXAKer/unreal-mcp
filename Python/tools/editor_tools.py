@@ -150,7 +150,17 @@ def register_editor_tools(mcp: FastMCP) -> None:
             
             # Handle error responses correctly
             if response.get("status") == "error":
-                error_message = response.get("error", "Unknown error")
+                # FIX-MCP-001: response["error"] can be the bridge's structured
+                # {category, code, message, details} object now, not just a
+                # string — extract .message so "message" below stays a string
+                # instead of silently becoming a dict that str()-collapses
+                # wherever a caller later interpolates it.
+                error_field = response.get("error", "Unknown error")
+                error_message = (
+                    error_field.get("message", str(error_field))
+                    if isinstance(error_field, dict)
+                    else error_field
+                )
                 logger.error(f"Error creating actor: {error_message}")
                 return {"success": False, "message": error_message}
             

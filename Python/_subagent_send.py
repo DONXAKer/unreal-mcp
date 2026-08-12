@@ -5,8 +5,12 @@ import sys
 
 
 def send(cmd_type: str, params: dict) -> dict:
+    # FIX-MCP-001 (2026-08-12): must stay above mcp.CommandTimeoutSeconds
+    # (300 s bridge ceiling) — a lower client timeout abandons the socket
+    # before the bridge's own COMMAND_TIMEOUT response can arrive, which
+    # looks like a dead connection instead of a real error.
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(15)
+    s.settimeout(330)
     s.connect(("127.0.0.1", 55557))
     payload = {"type": cmd_type, "params": params}
     s.sendall(json.dumps(payload).encode("utf-8"))

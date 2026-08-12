@@ -1,9 +1,12 @@
 """
-Animation Blueprint Tools for Unreal MCP (Phase 3B — v1.16.0).
+Animation Blueprint Tools for Unreal MCP (Phase 3B — v1.16.0; MCP-ANIM-001 +
+FIX-ANIM-MCP-001 — v3.26.0).
 
-7 primitives for authoring UAnimBlueprint assets, state machines, and AnimGraph
-asset-player nodes. All wrappers delegate to the C++ FAnimationBPCommands
-dispatcher; responses follow the unified MCP Content Pipeline contract
+9 primitives for authoring UAnimBlueprint assets, state machines, and AnimGraph
+asset-player nodes (includes anim_sequence_import, the subject-first alias for
+import_anim_sequence — same C++ handler, both names live forever). All
+wrappers delegate to the C++ FAnimationBPCommands dispatcher; responses follow
+the unified MCP Content Pipeline contract
 ({ ok, status, assetPath, meta } / { ok:false, error:{...} }).
 """
 
@@ -204,10 +207,17 @@ def register_animation_tools(mcp: FastMCP) -> None:
         loop: bool = True,
         play_rate: float = 1.0,
         node_position: list[float] | None = None,
+        state_machine_name: str = None,
+        state_name: str = None,
     ) -> dict[str, Any]:
         """
-        Drop a free-standing SequencePlayer node into the AnimGraph and
-        configure its UAnimSequence / loop / play-rate properties.
+        Drop a SequencePlayer node into an AnimGraph and configure its
+        UAnimSequence / loop / play-rate properties.
+
+        With state_name set, the node goes INSIDE that state's BoundGraph and is
+        connected to "Output Animation Pose" — that is the only way to make a
+        state actually return a pose. Without it, the node lands in the root
+        AnimGraph unconnected (composition is up to the caller).
 
         Args:
             blueprint_name: AnimBP short name or /Game/... path.
@@ -215,6 +225,12 @@ def register_animation_tools(mcp: FastMCP) -> None:
             loop: Loop the animation. Default true.
             play_rate: Multiplier. Default 1.0.
             node_position: Optional [x, y] coordinates.
+            state_machine_name: State machine holding the state. Required with state_name.
+            state_name: Target state; node is written into its BoundGraph and wired.
+
+        Example:
+            add_play_anim_node("ABP_Infantry", "/Game/Anim/A_Walk",
+                               state_machine_name="Locomotion", state_name="Walk")
         """
         from unreal_mcp_server import get_unreal_connection
         try:
@@ -229,10 +245,112 @@ def register_animation_tools(mcp: FastMCP) -> None:
             }
             if node_position is not None:
                 payload["node_position"] = node_position
+            if state_machine_name:
+                payload["state_machine_name"] = state_machine_name
+            if state_name:
+                payload["state_name"] = state_name
             response = unreal.send_command("add_play_anim_node", payload)
             return response or {"ok": False, "error": {"message": "No response from Unreal"}}
         except Exception as e:
             logger.exception("add_play_anim_node failed")
+            return {"ok": False, "error": {"message": str(e)}}
+
+    @mcp.tool()
+    def import_anim_sequence(
+        ctx: Context[Any, Any, Any],
+        asset_path: str,
+        source_path: str,
+        skeleton_path: str,
+        if_exists: str = "skip",
+    ) -> dict[str, Any]:
+        """
+        Import a UAnimSequence from an FBX onto an existing skeleton.
+
+        Goes through the legacy UFbxFactory with Interchange disabled: in UE 5.8
+        Interchange re-enters the GameThread TaskGraph and crashes the editor.
+        The skeleton is bound before import, so the animation never spawns a
+        stray skeleton of its own.
+
+        Args:
+            asset_path: /Game/... destination, e.g. "/Game/WarCard/Units/Anim/A_Idle".
+            source_path: Absolute path to a .fbx containing an animation stack.
+            skeleton_path: /Game/... path to the USkeleton to bind to.
+            if_exists: "skip" (default) | "overwrite" | "update" | "fail".
+
+        Example:
+            import_anim_sequence("/Game/WarCard/Units/Anim/A_Idle",
+                                 r"D:\\Anim\\idle.fbx",
+                                 "/Game/WarCard/Units/Skeletal/SK_Rifleman_Skeleton")
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"ok": False, "error": {"message": "Failed to connect to Unreal Engine"}}
+            payload: dict[str, Any] = {
+                "assetPath": asset_path,
+                "sourcePath": source_path,
+                "skeleton_path": skeleton_path,
+                "ifExists": if_exists,
+            }
+            response = unreal.send_command("import_anim_sequence", payload)
+            return response or {"ok": False, "error": {"message": "No response from Unreal"}}
+        except Exception as e:
+            logger.exception("import_anim_sequence failed")
+            return {"ok": False, "error": {"message": str(e)}}
+
+    @mcp.tool()
+    def anim_sequence_import(
+        ctx: Context[Any, Any, Any],
+        assetPath: str,
+        sourcePath: str,
+        skeletonPath: str,
+        ifExists: str = "skip",
+    ) -> dict[str, Any]:
+        """
+        Import a UAnimSequence from an FBX onto an existing skeleton.
+
+        Subject-first alias for import_anim_sequence (unreal-mcp/CLAUDE.md naming
+        convention, v1.17.0+: new commands use <domain>_<verb>). Same C++ handler,
+        same behavior — only the tool name and Python parameter casing differ
+        (camelCase here, matching the sibling import tools in mesh_tools.py).
+        import_anim_sequence is NOT going away; both names are supported forever.
+
+        Goes through the legacy UFbxFactory with Interchange disabled: in UE 5.8
+        Interchange re-enters the GameThread TaskGraph and crashes the editor.
+        The skeleton is bound before import, so the animation never spawns a
+        stray skeleton of its own. A failed rename or an animation with the wrong
+        skeleton / zero sampled keys now returns a real failure code instead of
+        ok:true with a meta flag nobody is required to check (FIX-ANIM-MCP-001).
+
+        Args:
+            assetPath: /Game/... destination, e.g. "/Game/WarCard/Units/Anim/A_Idle".
+            sourcePath: Absolute path to a .fbx containing an animation stack.
+            skeletonPath: /Game/... path to the USkeleton to bind to.
+            ifExists: "skip" (default) | "overwrite" | "update" | "fail".
+
+        Example:
+            anim_sequence_import("/Game/WarCard/Units/Anim/A_Idle",
+                                 r"D:\\Anim\\idle.fbx",
+                                 "/Game/WarCard/Units/Skeletal/SK_Rifleman_Skeleton")
+        """
+        from unreal_mcp_server import get_unreal_connection
+        try:
+            unreal = get_unreal_connection()
+            if not unreal:
+                return {"ok": False, "error": {"message": "Failed to connect to Unreal Engine"}}
+            payload: dict[str, Any] = {
+                "assetPath": assetPath,
+                "sourcePath": sourcePath,
+                # C++ still reads "skeleton_path" — only the Python-side parameter
+                # name is camelCase here, the wire key stays as the handler expects.
+                "skeleton_path": skeletonPath,
+                "ifExists": ifExists,
+            }
+            response = unreal.send_command("anim_sequence_import", payload)
+            return response or {"ok": False, "error": {"message": "No response from Unreal"}}
+        except Exception as e:
+            logger.exception("anim_sequence_import failed")
             return {"ok": False, "error": {"message": str(e)}}
 
     @mcp.tool()
@@ -241,14 +359,27 @@ def register_animation_tools(mcp: FastMCP) -> None:
         blueprint_name: str,
         blend_space_path: str,
         node_position: list[float] | None = None,
+        state_machine_name: str = None,
+        state_name: str = None,
     ) -> dict[str, Any]:
         """
-        Drop a BlendSpacePlayer node into the AnimGraph bound to a UBlendSpace.
+        Drop a BlendSpacePlayer node into an AnimGraph and bind it to a UBlendSpace.
+
+        With state_name set, the node goes INSIDE that state's BoundGraph and is
+        connected to "Output Animation Pose" — mirrors add_play_anim_node's
+        state-targeting behavior. Without it, the node lands in the root AnimGraph
+        unconnected (composition is up to the caller).
 
         Args:
             blueprint_name: AnimBP short name or /Game/... path.
             blend_space_path: /Game/... path to a UBlendSpace.
             node_position: Optional [x, y] coordinates.
+            state_machine_name: State machine holding the state. Required with state_name.
+            state_name: Target state; node is written into its BoundGraph and wired.
+
+        Example:
+            add_blend_space_player_node("ABP_Infantry", "/Game/Anim/BS_Locomotion",
+                                         state_machine_name="Locomotion", state_name="Walk")
         """
         from unreal_mcp_server import get_unreal_connection
         try:
@@ -261,6 +392,10 @@ def register_animation_tools(mcp: FastMCP) -> None:
             }
             if node_position is not None:
                 payload["node_position"] = node_position
+            if state_machine_name:
+                payload["state_machine_name"] = state_machine_name
+            if state_name:
+                payload["state_name"] = state_name
             response = unreal.send_command("add_blend_space_player_node", payload)
             return response or {"ok": False, "error": {"message": "No response from Unreal"}}
         except Exception as e:

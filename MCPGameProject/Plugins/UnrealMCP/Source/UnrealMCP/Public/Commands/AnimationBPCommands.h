@@ -104,9 +104,28 @@ private:
     /**
      * add_blend_space_player_node
      * Params:
-     *   - blueprint_name    (string, required)
-     *   - blend_space_path  (string, required): /Game/... path to a UBlendSpace.
-     *   - node_position     (array, optional)
+     *   - blueprint_name      (string, required)
+     *   - blend_space_path    (string, required): /Game/... path to a UBlendSpace.
+     *   - node_position       (array, optional)
+     *   - state_machine_name  (string, optional): required together with state_name.
+     *   - state_name          (string, optional): if set, the node is written into
+     *                                             that state's BoundGraph and wired
+     *                                             to Output Animation Pose instead of
+     *                                             landing unconnected in the root
+     *                                             AnimGraph.
      */
     TSharedPtr<FJsonObject> HandleAddBlendSpacePlayerNode(const TSharedPtr<FJsonObject>& Params);
+
+    /**
+     * import_anim_sequence
+     * Params:
+     *   - assetPath     (string, required): /Game/... destination for the UAnimSequence.
+     *   - sourcePath    (string, required): absolute path to a .fbx with an animation stack.
+     *   - skeleton_path (string, required): /Game/... path to the USkeleton to bind to.
+     *   - ifExists      (string, optional): "skip" (default) | "overwrite" | "update" | "fail".
+     *
+     * Imports through the legacy UFbxFactory with Interchange disabled — in UE 5.8
+     * Interchange re-enters the GameThread TaskGraph and crashes the editor.
+     */
+    TSharedPtr<FJsonObject> HandleImportAnimSequence(const TSharedPtr<FJsonObject>& Params);
 };

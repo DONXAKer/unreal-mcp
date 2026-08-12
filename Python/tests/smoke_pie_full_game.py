@@ -80,8 +80,15 @@ def _send(conn: UnrealConnection, cmd: str, params: dict[str, Any],
         try:
             resp = conn.send_command(cmd, params)
             if isinstance(resp, dict):
-                return resp.get("result", resp) if resp.get("status") == "success" \
-                    else {"error": resp.get("error", "no error msg"), "_raw": resp}
+                if resp.get("status") == "success":
+                    return resp.get("result", resp)
+                # FIX-MCP-001: resp["error"] can be the bridge's structured
+                # {category, code, message, details} object now, not just a
+                # string — keep "error" as a plain string message so callers
+                # that print/compare it don't get a Python-dict-repr blob.
+                err = resp.get("error", "no error msg")
+                err_message = err.get("message", str(err)) if isinstance(err, dict) else err
+                return {"error": err_message, "_raw": resp}
             return {}
         except Exception as exc:
             last_err = str(exc)

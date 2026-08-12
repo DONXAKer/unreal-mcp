@@ -312,8 +312,17 @@ def _is_success(response: dict[str, Any]) -> bool:
 def _error_message(response: dict[str, Any]) -> str:
     if not isinstance(response, dict):
         return f"non-dict response: {type(response).__name__}"
+    # FIX-MCP-001: response["error"] can now be the bridge's structured
+    # {category, code, message, details} object (new asset-pipeline shape),
+    # not just a string. Pulling it in raw via `or` used to hand that dict
+    # straight to callers typed as `str` — most of them then stringified it
+    # implicitly (f-string / dict-value / JSON-adjacent log line), losing
+    # category/code and printing a Python repr instead of the real message.
+    error_field = response.get("error")
+    if isinstance(error_field, dict):
+        return str(error_field.get("message") or error_field.get("code") or error_field)
     return (response.get("message")
-            or response.get("error")
+            or error_field
             or str(response.get("cause") or response)[:200])
 
 

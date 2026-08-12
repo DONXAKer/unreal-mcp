@@ -32,9 +32,10 @@ UNREAL_HOST = os.getenv("UNREAL_HOST", "host.docker.internal")
 UNREAL_PORT = int(os.getenv("UNREAL_PORT", "55557"))
 MCP_HTTP_PORT = int(os.getenv("MCP_HTTP_PORT", "3001"))
 # См. те же константы в unreal_mcp_server.py: приёмный таймаут держим НЕ МЕНЬШЕ
-# `mcp.CommandTimeoutSeconds` моста, иначе клиент уходит раньше ответа, а
-# команда продолжает выполняться и повторяется ретраем.
-RECV_TIMEOUT = float(os.getenv("UNREAL_MCP_RECV_TIMEOUT", "130"))
+# `mcp.CommandTimeoutSeconds` моста (300 с), иначе клиент уходит раньше ответа,
+# а команда продолжает выполняться и повторяется ретраем. FIX-MCP-001
+# (2026-08-12): бампнуто 130 -> 330 вместе с потолком моста 120 -> 300.
+RECV_TIMEOUT = float(os.getenv("UNREAL_MCP_RECV_TIMEOUT", "330"))
 CONNECT_TIMEOUT = float(os.getenv("UNREAL_MCP_CONNECT_TIMEOUT", "5"))
 
 logger.info("UnrealMCP HTTP: will connect to Unreal at %s:%d", UNREAL_HOST, UNREAL_PORT)
