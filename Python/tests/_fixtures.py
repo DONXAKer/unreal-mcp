@@ -51,16 +51,21 @@ def test_credentials() -> tuple[str, str, str]:
     )
 
 
-def _post_json(path: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
-    """POST JSON, return (status_code, parsed_body). Не бросает на 4xx."""
+def _post_json(
+    path: str,
+    body: dict[str, Any],
+    token: str | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """POST JSON, return (status_code, parsed_body). Не бросает на 4xx.
+
+    token -- bearer-токен, если маршрут требует аутентификации.
+    """
     url = f"{server_url()}{path}"
     data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=data,
-        method="POST",
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-    )
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=data, method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_S) as resp:
             raw = resp.read().decode("utf-8")
@@ -106,14 +111,56 @@ def ensure_test_user(
     raise FixtureError(f"Неожиданный статус регистрации {status}: {body}")
 
 
-def _dev_set_level(login: str, level: int) -> None:
+def _login_token(login: str, password: str | None = None) -> str:
+    """Плоский логин без ensure_test_user — иначе _dev_set_level зациклится.
+
+    ensure_test_user сам зовёт _dev_set_level, поэтому здесь используется только
+    прямой /api/auth/login.
+    """
+    password = password or os.environ.get("WC_TEST_PASSWORD", DEFAULT_PASSWORD)
+    status, body = _post_json("/api/auth/login", {
+        "usernameOrEmail": login,
+        "password": password,
+    })
+    if status != 200:
+        raise FixtureError(f"Login вернул {status}: {body}")
+    token = body.get("token") or body.get("accessToken")
+    if not token:
+        raise FixtureError(f"Login OK, но JWT не найден в ответе: {body}")
+    return token
+
+
+def _dev_set_level(login: str, level: int, password: str | None = None) -> None:
     """PROG-XP-001: тестовые аккаунты получают уровень 6 — полный ростер юнитов
     (гейт прогрессии в драфте не должен ломать smoke/e2e-тесты).
-    Best-effort: dev-эндпоинт есть только при warcard.dev-tools.enabled=true."""
+
+    SEC-DEV-001: /api/dev/** больше НЕ анонимный — маршрут ушёл из permitAll, потому
+    что dev это профиль по умолчанию, и на любом стенде без SPRING_PROFILES_ACTIVE
+    кто угодно мог выставить произвольный уровень любому игроку. Поэтому здесь нужен
+    токен. Отказ больше не глушится молча: без уровня 6 гейт прогрессии урежет ростер
+    в драфте, и тест упадёт далеко от настоящей причины.
+
+    Best-effort остаётся только по НАЛИЧИЮ эндпоинта: при warcard.dev-tools.enabled=false
+    бина нет вовсе (404) — это законная конфигурация, а не сбой.
+    """
     try:
-        _post_json("/api/dev/player/set-level", {"username": login, "level": level})
-    except Exception:
-        pass
+        token = _login_token(login, password)
+    except Exception as exc:  # noqa: BLE001 — до логина юзера может не быть
+        print(f"[fixtures] WARN: не удалось получить токен для set-level ({login}): {exc}")
+        return
+
+    status, body = _post_json(
+        "/api/dev/player/set-level",
+        {"username": login, "level": level},
+        token=token,
+    )
+    if status == 200:
+        return
+    if status == 404:
+        print("[fixtures] INFO: /api/dev/** недоступен (dev-tools выключены) — уровень не выставлен")
+        return
+    print(f"[fixtures] WARN: set-level вернул {status}: {body}. "
+          f"Аккаунт {login} останется с текущим уровнем, драфт может урезать ростер.")
 
 
 def get_test_jwt(
