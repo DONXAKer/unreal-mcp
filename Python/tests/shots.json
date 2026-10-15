@@ -78,6 +78,174 @@
       "steps": 6,
       "fov": 60,
       "reference": "lookdev/environment_orbit_target.png"
+    },
+    {
+      "name": "valley_overview_top",
+      "type": "static",
+      "description": "Долина до ENV-SCENE-003: координаты живой камеры PIE. Baseline снят вручную через native Shot; режим source:pie не реализован.",
+      "level": "/Game/WarCard/Maps/Game_Map",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "camera": {
+        "location": [
+          -588.9413986454911,
+          0.0,
+          6931.630989779784
+        ],
+        "rotation": [
+          -85.00000000000067,
+          0.0,
+          -0.0
+        ],
+        "fov": 90.0
+      },
+      "reference": "lookdev/valley-baseline/valley_overview_top.png"
+    },
+    {
+      "name": "valley_far_default",
+      "type": "static",
+      "description": "Долина до ENV-SCENE-003: координаты живой камеры PIE. Baseline снят вручную через native Shot; режим source:pie не реализован.",
+      "level": "/Game/WarCard/Maps/Game_Map",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "camera": {
+        "location": [
+          -2855.7772823225137,
+          0.0,
+          6324.234145374643
+        ],
+        "rotation": [
+          -65.00000000000018,
+          0.0,
+          -0.0
+        ],
+        "fov": 90.0
+      },
+      "reference": "lookdev/valley-baseline/valley_far_default.png"
+    },
+    {
+      "name": "valley_bridge_north_low",
+      "type": "static",
+      "description": "Долина до ENV-SCENE-003: координаты живой камеры PIE. Baseline снят вручную через native Shot; режим source:pie не реализован.",
+      "level": "/Game/WarCard/Maps/Game_Map",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "camera": {
+        "location": [
+          -329.2214454993256,
+          -1250.0,
+          133.69649175592164
+        ],
+        "rotation": [
+          -7.999999999999998,
+          0.0,
+          -0.0
+        ],
+        "fov": 90.0
+      },
+      "reference": "lookdev/valley-baseline/valley_bridge_north_low.png"
+    },
+    {
+      "name": "valley_bridge_south_low",
+      "type": "static",
+      "description": "Долина до ENV-SCENE-003: координаты живой камеры PIE. Baseline снят вручную через native Shot; режим source:pie не реализован.",
+      "level": "/Game/WarCard/Maps/Game_Map",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "camera": {
+        "location": [
+          170.77855450067437,
+          1250.0,
+          124.12814118574936
+        ],
+        "rotation": [
+          -7.999999999999998,
+          0.0,
+          -0.0
+        ],
+        "fov": 90.0
+      },
+      "reference": "lookdev/valley-baseline/valley_bridge_south_low.png"
+    },
+    {
+      "name": "valley_center_2x2",
+      "type": "static",
+      "description": "Долина до ENV-SCENE-003: координаты живой камеры PIE. Baseline снят вручную через native Shot; режим source:pie не реализован.",
+      "level": "/Game/WarCard/Maps/Game_Map",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "camera": {
+        "location": [
+          -917.722298161674,
+          0.0,
+          1510.6432708623865
+        ],
+        "rotation": [
+          -54.99999999999992,
+          0.0,
+          -0.0
+        ],
+        "fov": 90.0
+      },
+      "reference": "lookdev/valley-baseline/valley_center_2x2.png"
+    },
+    {
+      "name": "valley_river_exit",
+      "type": "static",
+      "description": "Долина до ENV-SCENE-003: координаты живой камеры PIE. Baseline снят вручную через native Shot; режим source:pie не реализован.",
+      "level": "/Game/WarCard/Maps/Game_Map",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "camera": {
+        "location": [
+          250.0,
+          111.69591142201625,
+          1320.1472155060478
+        ],
+        "rotation": [
+          -35.00000000000004,
+          90.00000000000004,
+          -3.88274033329695e-15
+        ],
+        "fov": 90.0
+      },
+      "reference": "lookdev/valley-baseline/valley_river_exit.png"
+    },
+    {
+      "name": "valley_world_edge",
+      "type": "static",
+      "description": "Долина до ENV-SCENE-003: координаты живой камеры PIE. Baseline снят вручную через native Shot; режим source:pie не реализован.",
+      "level": "/Game/WarCard/Maps/Game_Map",
+      "resolution": [
+        1920,
+        1080
+      ],
+      "camera": {
+        "location": [
+          -6691.582712194082,
+          0.0,
+          1140.4406198518486
+        ],
+        "rotation": [
+          -7.999999999999998,
+          0.0,
+          -0.0
+        ],
+        "fov": 90.0
+      },
+      "reference": "lookdev/valley-baseline/valley_world_edge.png"
     }
   ],
 
