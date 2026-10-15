@@ -382,6 +382,8 @@ class OpponentBot:
         self._readied_phases: set[str] = set()
         self._deployed = False
         self._pulse_started = False
+        self._stop_draft_pulse = threading.Event()
+        self._draft_requests: dict[tuple[str, int], str] = {}
         self._reached_battle = threading.Event()
         self._verbose = verbose
         self._lock = threading.Lock()
@@ -466,10 +468,12 @@ class OpponentBot:
         return self._game_over.wait(timeout)
 
     def close(self) -> None:
+        self._stop_draft_pulse.set()
         stop = getattr(self, "_stop_requeue", None)
         if stop is not None:
             stop.set()
-        self.stomp.close()
+        with self._lock:
+            self.stomp.close()
 
     # --- обработка входящих ---
     def _on_turn_changed(self, body: dict[str, Any]) -> None:
@@ -597,6 +601,7 @@ class OpponentBot:
         success = bool(body.get("success"))
         data = body.get("data")
         if isinstance(data, dict):
+            self._confirm_draft_picks(data)
             self._capture_hand_from_state_data(data)
         # разбудить ожидающего отправителя боевой команды (request/response)
         pend = self._pending.pop(ct, None)
@@ -633,6 +638,7 @@ class OpponentBot:
     def _on_state_snapshot(self, body: dict[str, Any]) -> None:
         """/state = GameStateSnapshotDto: gamePhase, activePlayerId, turnNumber,
         apRemaining, units[] (с матрицей урона). Источник истины для боя."""
+        self._confirm_draft_picks(body)
         phase = body.get("gamePhase")
         if isinstance(phase, str):
             self.battle = body
@@ -658,32 +664,56 @@ class OpponentBot:
         освежают чей ход, и пропустивший апдейт UE-клиент восстанавливается (топик
         /draft-update не реплеится). Стартуем по первому draft-update — игра уже в
         DRAFT, поэтому нет гонки со start-game (которой опасается _delayed_kick)."""
-        if self._pulse_started or not self.game_id:
-            return
-        self._pulse_started = True
-        self._draft_pulse(self.game_id)
+        with self._lock:
+            if self._pulse_started or not self.game_id or self._stop_draft_pulse.is_set():
+                return
+            self._pulse_started = True
+            gid = self.game_id
+        threading.Thread(target=self._draft_pulse, args=(gid,),
+                         name="bot-draft-pulse", daemon=True).start()
 
     def _draft_pulse(self, gid: str) -> None:
-        # Стоп, когда драфт закончился (наступил DEPLOYMENT) или игра сменилась.
-        if self.game_id != gid or self._deployed:
-            return
-        self.stomp.send_json("/app/game/phase-ready", {"gameId": gid, "phase": "DRAFT"})
-        threading.Timer(3.0, self._draft_pulse, args=(gid,)).start()
+        # Event прерывает ожидание при close; daemon не удерживает процесс smoke.
+        while not self._stop_draft_pulse.is_set():
+            with self._lock:
+                if self._stop_draft_pulse.is_set() or self.game_id != gid or self._deployed:
+                    return
+                try:
+                    self.stomp.send_json("/app/game/phase-ready", {"gameId": gid, "phase": "DRAFT"})
+                except Exception as exc:
+                    self._log(f"draft pulse остановлен: {exc}")
+                    return
+            if self._stop_draft_pulse.wait(3.0):
+                return
+
+    def _confirm_draft_picks(self, body: dict[str, Any]) -> None:
+        """Состав деплоя пополняется только подтверждёнными сервером пиками."""
+        with self._lock:
+            for key in ("picksA", "picksB", "draftPicksA", "draftPicksB"):
+                for unit_id in body.get(key) or []:
+                    if unit_id in self.faction_ids and unit_id not in self.my_picks:
+                        self.my_picks.append(unit_id)
 
     def _on_draft_update(self, body: dict[str, Any]) -> None:
         self._ensure_draft_pulse()
+        self._confirm_draft_picks(body)
         with self._lock:
             pick_number = body.get("pickNumber", 0)
             current = body.get("currentPickPlayerId", "")
-            if pick_number >= 10 or current != self.my_id:
+            request = (self.game_id, pick_number)
+            if (not self.game_id or self._stop_draft_pulse.is_set()
+                    or pick_number >= 10 or current != self.my_id
+                    or request in self._draft_requests):
                 return
             taken = set(body.get("picksA") or []) | set(body.get("picksB") or [])
             taken |= set(self.my_picks)
+            taken.update(self._draft_requests.values())
             candidate = next((u for u in self.faction_ids if u not in taken), None)
             if not candidate:
                 self._log("драфт: нет доступного кандидата (?)")
                 return
-            self.my_picks.append(candidate)
+            # Резервируем номер до отправки: повторный broadcast не создаёт второй SEND.
+            self._draft_requests[request] = candidate
             self.stomp.send_json("/app/game/select-unit",
                                  {"gameId": self.game_id, "unitId": candidate})
             self._log(f"draft pick #{pick_number} -> {candidate}")

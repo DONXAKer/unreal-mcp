@@ -45,7 +45,7 @@ from tests.smoke_pie_full_game import (
     _send,
     _suffix,
 )
-from unreal_mcp_server import UnrealConnection
+from tests._official_bridge import OfficialBridge
 
 
 def _battle_units(conn, ctrl: int = 0) -> list[dict]:
@@ -298,7 +298,7 @@ def main() -> int:
         return 1
     time.sleep(2.0)
 
-    conn = UnrealConnection()
+    conn = OfficialBridge()
     conn.connect()
 
     try:
