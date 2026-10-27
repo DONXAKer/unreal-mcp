@@ -15,6 +15,74 @@ Bump rules:
 
 Pending work; will be cut into the next minor or patch release.
 
+## [3.28.0] - 2026-10-13
+
+Закрытие gap-анализа MCP ↔ активные задачи WarCard: стабильность моста
+(FIX-MCP-005), гигиена ассетов (FIX-CLEANUP-003), UMG-типы под SETTINGS/META,
+`game_view` для lookdev (TOOL-SHOT-001).
+
+### Added
+
+- **`get_asset_references`** / **`rename_asset`** — C++ (`AssetCommands`) + Python
+  tools/primitives. Reference Viewer package list и rename через
+  `UEditorAssetLibrary` (не filesystem `mv`).
+- **UMG типы в `add_widget_to_umg`:** CheckBox, ComboBox/ComboBoxString,
+  EditableText, EditableTextBox, ListView, ScaleBox, RichTextBlock.
+- **`viewport_capture(game_view=bool)`** — временно включает
+  `FLevelEditorViewportClient::SetGameView` на время кадра, затем восстанавливает.
+
+### Changed
+
+- **README** — Current version **v3.28.0** (было устаревшее v2.1.0), ~170 tools,
+  release checklist (версия + Description + CHANGELOG + README).
+- **`.uplugin` `Description`** — отражает scope 3.28 (asset refs/rename, game_view,
+  bridge retry).
+- **`docs/MCP_ROUTING.md`** — контракт unreal-mcp vs unreal-ue58 для UITERM.
+
+### Fixed
+
+- **FIX-MCP-005 (Python):** `send_command` ретраит транзиентные обрывы моста
+  (`UNREAL_MCP_SEND_MAX_ATTEMPTS`, default 3; delay
+  `UNREAL_MCP_SEND_RETRY_DELAY_MS`, default 75). Исключения не пробрасываются —
+  stdio-сессия MCP не умирает от одного TCP fail.
+- **FIX-MCP-005 (C++):** лог различает «empty connection / no request»
+  (Warning, гонка) и «client closed after response» (Display, нормальный
+  connect-per-call).
+
+### Why
+
+- Задачи ссылались на `get_asset_references`/`rename_asset` как на существующие —
+  их не было. UITERM/SETTINGS нуждались в ComboBox/CheckBox/ListView.
+  Lookdev-харнесс требовал `game_view` без гизмо. README/Description больше не
+  отстают от `VersionName`.
+
+## [3.27.0] - 2026-08-16
+
+`add_widget_to_umg` не умел создавать `Slider`: карта типов
+`FUnrealMCPUMGCommands::GetWidgetClassByType` содержала 14 записей, и слайдер
+в неё не входил — команда отбивала `Unknown widget type: 'Slider'`. Из-за этого
+экран настроек WarCard (задача `FIX-UI-018`, вкладка «Звук») было нечем собрать
+командой моста: оставался только обход через `construct_widget` в Python внутри
+Editor. Правило проекта — дорабатывать плагин, а не уходить в ручной шаг.
+
+### Added
+
+- **Тип виджета `Slider`** в `add_widget_to_umg`
+  (`Private/Commands/UMGCommands.cpp`): запись `{ TEXT("Slider"),
+  USlider::StaticClass() }` в `TypeMap` плюс `#include "Components/Slider.h"`.
+  Команда и её allow-list в мосте не менялись — это новый тип внутри
+  существующей команды, а не новая команда.
+
+### Fixed
+
+- **Перечень поддерживаемых типов разъезжался в трёх местах.** Он дублируется
+  в карте типов, в тексте ошибки `Unknown widget type … Supported:`
+  (`UMGCommands.cpp`) и в docstring `add_widget_to_umg`
+  (`Python/tools/umg_tools.py`). Первые два обновлены до нового состава, третий
+  отставал ещё сильнее — в нём не было даже `WidgetSwitcher`, добавленного
+  раньше. Теперь все три совпадают, а docstring несёт ссылку на источник
+  правды, чтобы следующая правка не разошлась снова.
+
 ## [3.26.0] - 2026-08-12
 
 Ревью-12 нашло три независимых дефекта надёжности инструментария, объединённые

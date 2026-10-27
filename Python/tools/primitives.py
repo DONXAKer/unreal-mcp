@@ -190,6 +190,14 @@ def delete_asset(assetPath: str, ifMissing: str = "skip") -> dict[str, Any]:
     return _call("delete_asset", {"assetPath": assetPath, "ifMissing": ifMissing})
 
 
+def get_asset_references(assetPath: str) -> dict[str, Any]:
+    return _call("get_asset_references", {"assetPath": assetPath})
+
+
+def rename_asset(assetPath: str, newAssetPath: str) -> dict[str, Any]:
+    return _call("rename_asset", {"assetPath": assetPath, "newAssetPath": newAssetPath})
+
+
 # ── DataTable / SoundWave primitives (MCP-CONTENT-005) ───────────────────────
 
 def import_datatable_from_csv(

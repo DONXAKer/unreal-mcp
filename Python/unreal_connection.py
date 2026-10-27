@@ -91,6 +91,33 @@ RECV_TIMEOUT = _parse_positive_timeout("UNREAL_MCP_RECV_TIMEOUT", "330")
 # Установка соединения — операция быстрая; долго ждать её незачем.
 CONNECT_TIMEOUT = _parse_positive_timeout("UNREAL_MCP_CONNECT_TIMEOUT", "5")
 
+# FIX-MCP-005: connect-per-call + быстрые последовательные вызовы иногда
+# дают Accept без байт запроса («zero bytes»). Ретрай на Python-стороне
+# закрывает гонку без переписывания протокола; одиночный сбой не роняет
+# stdio-сессию MCP (send_command всегда возвращает dict, не raise).
+def _parse_positive_int(env_name: str, default: str) -> int:
+    raw = os.environ.get(env_name, default)
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"{env_name}={raw!r} is not a valid integer. "
+            f"Unset the variable to use the default ({default})."
+        ) from exc
+    if value <= 0:
+        raise ValueError(
+            f"{env_name}={raw!r} must be a positive integer. "
+            f"Unset it to use the default ({default})."
+        )
+    return value
+
+
+SEND_MAX_ATTEMPTS = _parse_positive_int("UNREAL_MCP_SEND_MAX_ATTEMPTS", "3")
+# Пауза между попытками (секунды). Env — миллисекунды для удобства оператора.
+SEND_RETRY_DELAY_SECONDS = (
+    _parse_positive_timeout("UNREAL_MCP_SEND_RETRY_DELAY_MS", "75") / 1000.0
+)
+
 # Дефолтный host/port для голого `UnrealConnection()` — используется
 # исторически десятками tests/_diag_*.py и tests/test_*.py через
 # `from unreal_mcp_server import UnrealConnection`. Совпадает с тем, что
@@ -307,90 +334,102 @@ class UnrealConnection:
         # guessing here.
         return b"".join(chunks)
 
-    def send_command(self, command: str, params: dict[str, Any] = None) -> dict[str, Any] | None:
-        """Send a command to Unreal Engine and get the response."""
-        # Always reconnect for each command, since Unreal closes the connection after each command
-        # This is different from Unity which keeps connections alive
-        if self.socket:
+    @staticmethod
+    def _is_transient_bridge_error(error: BaseException | str) -> bool:
+        """Errors that FIX-MCP-005 retries — empty Accept / race, not business failures."""
+        text = str(error).lower()
+        needles = (
+            "connection closed before receiving data",
+            "cannot connect to unreal",
+            "failed to connect",
+            "timed out",
+            "timeout receiving unreal",
+            "connection reset",
+            "broken pipe",
+            "winerror 10054",
+            "winerror 10053",
+            "errno 104",
+            "errno 32",
+        )
+        return any(n in text for n in needles)
+
+    def _close_socket(self) -> None:
+        if self.socket is not None:
             try:
                 self.socket.close()
             except Exception:
                 pass
-            self.socket = None
-            self.connected = False
+        self.socket = None
+        self.connected = False
+
+    def _send_command_once(self, command: str, params: dict[str, Any] | None) -> dict[str, Any]:
+        """One connect→send→recv→close attempt. Always returns a dict (never raises)."""
+        self._close_socket()
 
         if not self.connect():
             logger.error("Failed to connect to Unreal Engine for command")
-            # FIX-MCP-003: consolidated on the HTTP server's prior behavior —
-            # a structured `{status:"error", error:"..."}` dict (the shape
-            # tools/_envelope.py's `_normalize_outbound` already recognizes)
-            # instead of a bare `None`. Every tool wrapper forwards whatever
-            # `send_command` returns via `return response` once its own
-            # `if not response:` guard passes — nothing branches on the
-            # return being `None` specifically, and this carries host:port,
-            # which the old generic "No response from Unreal Engine" did not.
-            return {"status": "error", "error": f"Cannot connect to Unreal at {self.host}:{self.port}"}
-        assert self.socket is not None  # connect() set it on success
+            return {
+                "status": "error",
+                "error": f"Cannot connect to Unreal at {self.host}:{self.port}",
+            }
+        assert self.socket is not None
 
         try:
-            # Match Unity's command format exactly
             command_obj = {
-                "type": command,  # Use "type" instead of "command"
-                "params": params or {}  # Use Unity's params or {} pattern
+                "type": command,
+                "params": params or {},
             }
-
-            # Send without newline, exactly like Unity
             command_json = json.dumps(command_obj)
             logger.info(f"Sending command: {command_json}")
-            self.socket.sendall(command_json.encode('utf-8'))
+            self.socket.sendall(command_json.encode("utf-8"))
 
-            # Read response using improved handler
             response_data = self.receive_full_response(self.socket)
-            response: dict[str, Any] = json.loads(response_data.decode('utf-8'))
-
-            # Log complete response for debugging
+            response: dict[str, Any] = json.loads(response_data.decode("utf-8"))
             logger.info(f"Complete response from Unreal: {response}")
 
-            # Check for both error formats: {"status": "error", ...} and {"success": false, ...}
             if response.get("status") == "error":
                 error_message = response.get("error") or response.get("message", "Unknown Unreal error")
                 logger.error(f"Unreal error (status=error): {error_message}")
-                # We want to preserve the original error structure but ensure error is accessible
                 if "error" not in response:
                     response["error"] = error_message
             elif response.get("success") is False:
-                # This format uses {"success": false, "error": "message"} or {"success": false, "message": "message"}
                 error_message = response.get("error") or response.get("message", "Unknown Unreal error")
                 logger.error(f"Unreal error (success=false): {error_message}")
-                # Convert to the standard format expected by higher layers
-                response = {
-                    "status": "error",
-                    "error": error_message
-                }
+                response = {"status": "error", "error": error_message}
 
-            # Always close the connection after command is complete
-            # since Unreal will close it on its side anyway
-            if self.socket is not None:
-                try:
-                    self.socket.close()
-                except Exception:
-                    pass
-            self.socket = None
-            self.connected = False
-
+            self._close_socket()
             return response
 
         except Exception as e:
             logger.error(f"Error sending command: {e}")
-            # Always reset connection state on any error
-            self.connected = False
-            if self.socket is not None:
-                try:
-                    self.socket.close()
-                except Exception:
-                    pass
-            self.socket = None
-            return {
-                "status": "error",
-                "error": str(e)
-            }
+            self._close_socket()
+            return {"status": "error", "error": str(e)}
+
+    def send_command(self, command: str, params: dict[str, Any] = None) -> dict[str, Any] | None:
+        """Send a command to Unreal Engine and get the response.
+
+        FIX-MCP-005: до SEND_MAX_ATTEMPTS попыток на транзиентных обрывах моста.
+        Исключения наружу не пробрасываются — stdio MCP-сессия не падает от
+        одного TCP fail; вызывающий всегда получает `{status, error}` dict.
+        """
+        last: dict[str, Any] = {
+            "status": "error",
+            "error": "send_command: no attempts executed",
+        }
+        for attempt in range(1, SEND_MAX_ATTEMPTS + 1):
+            last = self._send_command_once(command, params)
+            if last.get("status") != "error":
+                return last
+            err = last.get("error", "")
+            if attempt >= SEND_MAX_ATTEMPTS or not self._is_transient_bridge_error(err):
+                return last
+            logger.warning(
+                "Transient bridge error on attempt %d/%d for %s: %s — retrying in %.0fms",
+                attempt,
+                SEND_MAX_ATTEMPTS,
+                command,
+                err,
+                SEND_RETRY_DELAY_SECONDS * 1000,
+            )
+            time.sleep(SEND_RETRY_DELAY_SECONDS)
+        return last

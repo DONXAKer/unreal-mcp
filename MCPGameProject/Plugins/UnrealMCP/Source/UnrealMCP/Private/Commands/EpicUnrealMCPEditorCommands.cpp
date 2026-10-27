@@ -1091,6 +1091,25 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleViewportCapture(cons
         Filename += TEXT(".png");
     }
 
+    // TOOL-SHOT-001: game_view убирает гизмо/иконки акторов из editor-кадра
+    // (FLevelEditorViewportClient::SetGameView). Опционально; по умолчанию false,
+    // чтобы не менять поведение существующих скриптов.
+    bool bGameView = false;
+    Params->TryGetBoolField(TEXT("game_view"), bGameView);
+    const bool bWasGameView = Client->IsInGameView();
+    const bool bTemporarilyEnabledGameView = bGameView && !bWasGameView;
+    if (bTemporarilyEnabledGameView)
+    {
+        Client->SetGameView(true);
+    }
+    auto RestoreGameView = [Client, bTemporarilyEnabledGameView]()
+    {
+        if (bTemporarilyEnabledGameView)
+        {
+            Client->SetGameView(false);
+        }
+    };
+
     const FString ShotDir = FPaths::ProjectSavedDir() / TEXT("Screenshots");
     IFileManager::Get().MakeDirectory(*ShotDir, /*Tree=*/true);
     const FString FullPath = FPaths::ConvertRelativePathToFull(ShotDir / Filename);
@@ -1103,6 +1122,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleViewportCapture(cons
     const FIntPoint Size = Viewport->GetSizeXY();
     if (Size.X <= 0 || Size.Y <= 0)
     {
+        RestoreGameView();
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Viewport has zero size"));
     }
 
@@ -1110,10 +1130,12 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleViewportCapture(cons
     const FIntRect Rect(0, 0, Size.X, Size.Y);
     if (!Viewport->ReadPixels(Pixels, FReadSurfaceDataFlags(RCM_UNorm, CubeFace_MAX), Rect))
     {
+        RestoreGameView();
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Viewport ReadPixels failed"));
     }
     if (Pixels.Num() < Size.X * Size.Y)
     {
+        RestoreGameView();
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("Viewport returned fewer pixels than expected"));
     }
 
@@ -1128,13 +1150,17 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleViewportCapture(cons
     FImageUtils::PNGCompressImageArray(Size.X, Size.Y, TArrayView64<const FColor>(Pixels.GetData(), Pixels.Num()), PngData);
     if (PngData.Num() == 0)
     {
+        RestoreGameView();
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(TEXT("PNG compression produced no data"));
     }
 
     if (!FFileHelper::SaveArrayToFile(PngData, *FullPath))
     {
+        RestoreGameView();
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(FString::Printf(TEXT("Failed to write %s"), *FullPath));
     }
+
+    RestoreGameView();
 
     TSharedPtr<FJsonObject> ResultObj = MakeShared<FJsonObject>();
     ResultObj->SetStringField(TEXT("status"), TEXT("created"));
@@ -1143,6 +1169,7 @@ TSharedPtr<FJsonObject> FEpicUnrealMCPEditorCommands::HandleViewportCapture(cons
     ResultObj->SetNumberField(TEXT("width"), Size.X);
     ResultObj->SetNumberField(TEXT("height"), Size.Y);
     ResultObj->SetNumberField(TEXT("bytes"), PngData.Num());
+    ResultObj->SetBoolField(TEXT("game_view"), bGameView);
     // В отличие от take_screenshot захват синхронный — polling не нужен.
     ResultObj->SetStringField(TEXT("note"), TEXT("Synchronous capture; file exists on return. Size follows the viewport."));
     return ResultObj;

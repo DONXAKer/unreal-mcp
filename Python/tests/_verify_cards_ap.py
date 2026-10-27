@@ -95,11 +95,13 @@ def _battle_state(conn) -> dict[str, object]:
     попытки — самый частый режим отказа не ретраился вовсе, а диагностика
     молчала.
     """
-    for attempt in range(3):
+    attempts = 3
+    for attempt in range(attempts):
         st = _send(conn, "wc_get_battle_state", {"controller_index": 0}) or {}
         if st and not st.get("error"):
             return st
-        time.sleep(1.0 + attempt)
+        if attempt < attempts - 1:
+            time.sleep(1.0 + attempt)
     print("    ВНИМАНИЕ: состояние боя не прочитано за 3 попытки")
     return {}
 
@@ -133,7 +135,10 @@ def _ap(conn) -> int:
             return int(value)
         if isinstance(value, str):
             try:
-                return int(value.strip())
+                # float() перед int(): официальный toolset может отдать "3.0",
+                # а int("3.0") бросает ValueError и молча уходит к следующему
+                # ключу, теряя единственное поле, где AP реально есть.
+                return int(float(value.strip()))
             except ValueError:
                 continue
     if st:
@@ -144,8 +149,13 @@ def _ap(conn) -> int:
 def _my_turn(conn) -> bool:
     st = _battle_state(conn)
     for key in TURN_KEYS:
-        if key in st:
-            return bool(st[key])
+        if key not in st or st[key] is None:
+            # None — тот же режим отказа, что и у _ap: официальный toolset
+            # положил ключ, но рефлексивный вызов не удался. Останавливаться
+            # на нём и трактовать как False значит никогда не увидеть
+            # достоверное значение из следующего ключа (сырой мост).
+            continue
+        return bool(st[key])
     return False
 
 
@@ -248,14 +258,11 @@ def main() -> int:
             if ap_before == 0:
                 # Ноль ДО первой траты — не «дошли до нуля», а подозрительное
                 # состояние: `HandleGetBattleState` кладёт AP = 0 и когда
-                # рефлексивный GetCurrentAP не удался. Раньше этот выход
-                # проскакивал финальный гард `ap1 != 0` и давал успех, не
-                # потратив ни одного очка, — кадр «AP потрачен» снимался при
-                # полной активной руке.
-                if spent == 0:
-                    print(f"=== FAIL: AP упал в 0 без единой траты (было {ap0}) — "
-                          "похоже на сбой чтения AP, а не на исчерпание ===")
-                    return 1
+                # рефлексивный GetCurrentAP не удался. Финальный гард
+                # `spent == 0` ниже (после снятия кадра) ловит эту же
+                # ситуацию — дублировать его здесь незачем, разница была
+                # только в том, что ранний return пропускал кадр
+                # 'cards_ap_spent.png', нужный для диагностики.
                 break
 
             units = [u for u in _battle_units(conn, 0) if u.get("alive")]
@@ -310,6 +317,15 @@ def main() -> int:
         if spent == 0:
             print(f"\n=== FAIL: AP {ap0} -> {ap1}, ни одно действие не сняло AP — "
                   "проверять затемнение руки не на чем ===")
+            return 1
+        if ap1 == _UNKNOWN:
+            # Отдельная ветка от "до нуля не дошли": -1 значит "состояние не
+            # прочитано", а не "AP остался". Раньше `ap1 != 0` ловил и этот
+            # случай, и диагноз про тяжёлую технику уводил в сторону — ростер
+            # тут ни при чём, просадка на стороне моста/чтения состояния.
+            print(f"\n=== FAIL: AP после трат не читается (ap1={_UNKNOWN}, "
+                  f"было {ap0}, действий: {spent}) — состояние боя не прочитано, "
+                  "а не 'AP не дошёл до нуля' ===")
             return 1
         if ap1 != 0:
             print(f"\n=== FAIL: AP {ap0} -> {ap1} за {spent} действий, до нуля не дошли. "

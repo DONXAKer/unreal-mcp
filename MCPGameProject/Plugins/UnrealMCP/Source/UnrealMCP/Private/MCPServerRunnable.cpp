@@ -42,7 +42,7 @@ uint32 FMCPServerRunnable::Run()
         {
             UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Client connection pending, accepting..."));
             
-            ClientSocket = MakeShareable(ListenerSocket->Accept(TEXT("MCPClient")));
+                ClientSocket = MakeShareable(ListenerSocket->Accept(TEXT("MCPClient")));
             if (ClientSocket.IsValid())
             {
                 UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Client connection accepted"));
@@ -82,6 +82,12 @@ uint32 FMCPServerRunnable::Run()
                 // мусор на проводе, а не медленную сеть.
                 constexpr double RequestAssemblyTimeoutSeconds = 30.0;
                 constexpr int32 MaxRequestBytes = 64 * 1024 * 1024; // 64 MB safety cap
+                // FIX-MCP-005: различаем «пустой Accept без запроса» (гонка /
+                // probe — Python ретраит) и «клиент закрыл после ответа»
+                // (нормальный connect-per-call). Recv(0) = FIN, не «данных ещё
+                // нет» (то — SE_EWOULDBLOCK ниже); grace-spin тут вреден.
+                bool bCompletedAtLeastOneCommand = false;
+                const double ConnectionStartSeconds = FPlatformTime::Seconds();
 
                 while (bRunning)
                 {
@@ -96,7 +102,21 @@ uint32 FMCPServerRunnable::Run()
                                     TEXT("MCPServerRunnable: client disconnected mid-request (%d bytes accumulated, never parsed as JSON)"),
                                     RequestBytes.Num());
                             }
-                            UE_LOG(LogTemp, Display, TEXT("MCPServerRunnable: Client disconnected (zero bytes)"));
+                            else if (!bCompletedAtLeastOneCommand)
+                            {
+                                const double ElapsedMs =
+                                    (FPlatformTime::Seconds() - ConnectionStartSeconds) * 1000.0;
+                                UE_LOG(LogTemp, Warning,
+                                    TEXT("MCPServerRunnable: empty connection closed after %.0fms with no request bytes (connect-before-send race or probe; Python retries)"),
+                                    ElapsedMs);
+                            }
+                            else
+                            {
+                                // Обычное закрытие клиентом после ответа
+                                // (Python connect-per-call) — не ошибка.
+                                UE_LOG(LogTemp, Display,
+                                    TEXT("MCPServerRunnable: Client disconnected after response (zero bytes, normal connect-per-call close)"));
+                            }
                             break;
                         }
 
@@ -269,12 +289,14 @@ uint32 FMCPServerRunnable::Run()
                                         : MakeShared<FJsonObject>();
 
                                 SendResponse(Bridge->ExecuteCommand(CommandType, Params));
+                                bCompletedAtLeastOneCommand = true;
                             }
                             else
                             {
                                 UE_LOG(LogTemp, Warning, TEXT("MCPServerRunnable: Missing 'type' field in command"));
                                 SendProtocolError(TEXT("MISSING_COMMAND_TYPE"),
                                     TEXT("Request JSON has no 'type' field naming the command."));
+                                bCompletedAtLeastOneCommand = true; // ответили — закрытие клиентом штатное
                             }
                         }
                         else if (FPlatformTime::Seconds() - RequestAssemblyStartSeconds > RequestAssemblyTimeoutSeconds)

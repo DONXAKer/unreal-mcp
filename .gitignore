@@ -1,6 +1,10 @@
 # Unreal MCP
 Python/unreal_mcp.log
 Python/*.log
+Python/*.err
+
+# FIX-CLEANUP-001: пустые артефакты, мимо .gitignore проникшие в рабочее дерево
+/GeneratedClass
 
 # AI-related files
 .cursorrules

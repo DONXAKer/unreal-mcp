@@ -410,7 +410,12 @@ def register_umg_tools(mcp: FastMCP) -> None:
             blueprint_path: Full /Game/... path of the Widget Blueprint.
             widget_type: Class name. Supported: CanvasPanel, TextBlock, Button,
                 VerticalBox, HorizontalBox, ScrollBox, SizeBox, Spacer, SpinBox,
-                Image, Overlay, Border, ProgressBar.
+                Image, Overlay, Border, ProgressBar, WidgetSwitcher, Slider,
+                CheckBox, ComboBox, ComboBoxString, EditableText, EditableTextBox,
+                ListView, ScaleBox, RichTextBlock.
+                Source of truth: FUnrealMCPUMGCommands::GetWidgetClassByType
+                (Private/Commands/UMGCommands.cpp) — keep this list in sync with it
+                and with the "Supported:" text of its error message.
             widget_name: Unique name for the new widget within the blueprint.
             parent_name: Optional existing widget name to nest under. When empty
                 the widget becomes the root (or is added to the existing root panel).

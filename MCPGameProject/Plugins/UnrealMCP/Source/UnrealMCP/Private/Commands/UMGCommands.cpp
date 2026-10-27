@@ -27,6 +27,14 @@
 #include "Components/Border.h"
 #include "Components/BorderSlot.h"
 #include "Components/ProgressBar.h"
+#include "Components/Slider.h"
+#include "Components/CheckBox.h"
+#include "Components/ComboBoxString.h"
+#include "Components/EditableText.h"
+#include "Components/EditableTextBox.h"
+#include "Components/ListView.h"
+#include "Components/ScaleBox.h"
+#include "Components/RichTextBlock.h"
 #include "Components/PanelWidget.h"
 #include "Components/Widget.h"
 #include "Components/PanelSlot.h"
@@ -319,20 +327,29 @@ UClass* FUnrealMCPUMGCommands::GetWidgetClassByType(const FString& WidgetType)
     // Not static: UClass* in static storage without UPROPERTY is GC-unsafe by convention,
     // even though engine built-in classes carry RF_Native and are never collected in practice.
     const TMap<FString, UClass*> TypeMap = {
-        { TEXT("CanvasPanel"),    UCanvasPanel::StaticClass()    },
-        { TEXT("TextBlock"),      UTextBlock::StaticClass()      },
-        { TEXT("Button"),         UButton::StaticClass()         },
-        { TEXT("VerticalBox"),    UVerticalBox::StaticClass()    },
-        { TEXT("HorizontalBox"),  UHorizontalBox::StaticClass()  },
-        { TEXT("ScrollBox"),      UScrollBox::StaticClass()      },
-        { TEXT("SizeBox"),        USizeBox::StaticClass()        },
-        { TEXT("Spacer"),         USpacer::StaticClass()         },
-        { TEXT("SpinBox"),        USpinBox::StaticClass()        },
-        { TEXT("Image"),          UImage::StaticClass()          },
-        { TEXT("Overlay"),        UOverlay::StaticClass()        },
-        { TEXT("Border"),         UBorder::StaticClass()         },
-        { TEXT("ProgressBar"),    UProgressBar::StaticClass()   },
-        { TEXT("WidgetSwitcher"), UWidgetSwitcher::StaticClass() },
+        { TEXT("CanvasPanel"),     UCanvasPanel::StaticClass()     },
+        { TEXT("TextBlock"),       UTextBlock::StaticClass()       },
+        { TEXT("Button"),          UButton::StaticClass()          },
+        { TEXT("VerticalBox"),     UVerticalBox::StaticClass()     },
+        { TEXT("HorizontalBox"),   UHorizontalBox::StaticClass()   },
+        { TEXT("ScrollBox"),       UScrollBox::StaticClass()       },
+        { TEXT("SizeBox"),         USizeBox::StaticClass()         },
+        { TEXT("Spacer"),          USpacer::StaticClass()          },
+        { TEXT("SpinBox"),         USpinBox::StaticClass()         },
+        { TEXT("Image"),           UImage::StaticClass()           },
+        { TEXT("Overlay"),         UOverlay::StaticClass()         },
+        { TEXT("Border"),          UBorder::StaticClass()          },
+        { TEXT("ProgressBar"),     UProgressBar::StaticClass()     },
+        { TEXT("WidgetSwitcher"),  UWidgetSwitcher::StaticClass()  },
+        { TEXT("Slider"),          USlider::StaticClass()          },
+        { TEXT("CheckBox"),        UCheckBox::StaticClass()        },
+        { TEXT("ComboBox"),        UComboBoxString::StaticClass()  },
+        { TEXT("ComboBoxString"),  UComboBoxString::StaticClass()  },
+        { TEXT("EditableText"),    UEditableText::StaticClass()    },
+        { TEXT("EditableTextBox"), UEditableTextBox::StaticClass() },
+        { TEXT("ListView"),        UListView::StaticClass()        },
+        { TEXT("ScaleBox"),        UScaleBox::StaticClass()        },
+        { TEXT("RichTextBlock"),   URichTextBlock::StaticClass()   },
     };
 
     UClass* const* Found = TypeMap.Find(WidgetType);
@@ -380,7 +397,9 @@ TSharedPtr<FJsonObject> FUnrealMCPUMGCommands::HandleAddWidgetToUMG(const TShare
     if (!WidgetClass)
         return FEpicUnrealMCPCommonUtils::CreateErrorResponse(
             FString::Printf(TEXT("Unknown widget type: '%s'. Supported: CanvasPanel, TextBlock, Button, "
-                "VerticalBox, HorizontalBox, ScrollBox, SizeBox, Spacer, SpinBox, Image, Overlay, Border, ProgressBar, WidgetSwitcher"),
+                "VerticalBox, HorizontalBox, ScrollBox, SizeBox, Spacer, SpinBox, Image, Overlay, Border, "
+                "ProgressBar, WidgetSwitcher, Slider, CheckBox, ComboBox, ComboBoxString, EditableText, "
+                "EditableTextBox, ListView, ScaleBox, RichTextBlock"),
                 *WidgetType));
 
     // ── Check name uniqueness ─────────────────────────────────────────────────

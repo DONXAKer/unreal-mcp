@@ -4,10 +4,15 @@
 [![Unreal Engine](https://img.shields.io/badge/Unreal%20Engine-5.5%2B-orange)](https://www.unrealengine.com)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-yellow)](https://www.python.org)
 
-Bridges an MCP client (Claude Desktop, Cursor, Windsurf, AI-Workflow pipelines) to a running Unreal Editor over TCP. Lets AI agents create and modify assets — Blueprints, materials, UMG widgets, levels, Niagara systems, Blueprint graphs — instead of clicking through the Editor manually.
+Bridges an MCP client (Claude Desktop, Cursor, Windsurf, AI-Workflow pipelines) to a running Unreal Editor over TCP. Lets AI agents create and modify assets — Blueprints, materials, UMG widgets, levels, Niagara systems, Blueprint graphs, asset hygiene (references/rename) — instead of clicking through the Editor manually.
 
-→ Current version: **v2.1.0** (see [CHANGELOG.md](CHANGELOG.md))
+→ Current version: **v3.28.0** (see [CHANGELOG.md](CHANGELOG.md); `UnrealMCP.uplugin` `VersionName`)
+→ Routing with WarCard gameplay MCP: [docs/MCP_ROUTING.md](docs/MCP_ROUTING.md)
 → Setup for existing projects: [PLUGIN_SETUP.md](PLUGIN_SETUP.md)
+
+**3.28.0 highlights:** bridge retry on transient TCP races (FIX-MCP-005);
+`get_asset_references` / `rename_asset`; UMG types CheckBox / ComboBox /
+EditableText* / ListView / ScaleBox / RichTextBlock; `viewport_capture(game_view=True)`.
 
 ## How it fits together
 
@@ -23,7 +28,7 @@ UE5 Editor + UnrealMCP C++ plugin
 
 Two layers of capability:
 
-- **Primitives** — ~122 low-level `@mcp.tool()` commands wrapping individual UE Editor operations (`create_blueprint`, `import_texture`, `add_blueprint_function_node`, `set_pin_default_value`, …). Defined in `Python/tools/*.py`, dispatched to C++ over TCP.
+- **Primitives** — ~170 low-level `@mcp.tool()` commands wrapping individual UE Editor operations (`create_blueprint`, `import_texture`, `add_widget_to_umg`, `get_asset_references`, `viewport_capture`, …). Defined in `Python/tools/*.py`, dispatched to C++ over TCP `:55557`.
 - **Recipes** — project-specific workflows composed from primitives, registered automatically from `<UE-project>/Content/Python/recipes/*.py`. Adding a recipe never requires plugin or server changes — `reload_recipes()` picks it up.
 - **Graph Builder** (since v2.1) — `build_blueprint_graph` MCP tool builds a whole Blueprint EventGraph from one declarative JSON spec. Replaces 15-30 sequential `add_blueprint_*_node` + `connect_blueprint_nodes` calls with one atomic operation (with rollback). See [`Python/tools/graph_builder.py`](Python/tools/graph_builder.py) docstring for the spec schema.
 
@@ -161,12 +166,20 @@ Supported node types: `Event`, `FunctionCall`, `VariableGet`, `VariableSet`, `Br
 | `Python/tools/*.py` (a primitive, the framework, the graph builder) | Restart the Python server (`uv run`) or `docker restart` the HTTP server container |
 | C++ command (`Commands/*.cpp`, `EpicUnrealMCPBridge.cpp`) | Close Editor → rebuild plugin in Development Editor → reopen Editor. Live Coding does NOT reload the dispatch table. |
 
-Version bumps (`UnrealMCP.uplugin` `VersionName`):
-- C++ bug fix without signature change → **patch**
-- New command or new Python tool → **minor**
-- Removed command or changed signature → **major**
+### Release checklist (обязателен при любом bump)
 
-Then record the change in [CHANGELOG.md](CHANGELOG.md) under the matching version.
+В **том же** изменении, что и код:
+
+1. Bump `Version` + `VersionName` в `MCPGameProject/Plugins/UnrealMCP/UnrealMCP.uplugin`
+   - C++ bug fix without signature change → **patch**
+   - New command or new Python tool → **minor**
+   - Removed command or changed signature → **major**
+2. Обновить `Description` в `.uplugin`, если изменился scope плагина.
+3. Запись в [CHANGELOG.md](CHANGELOG.md) (`### Added` / `### Changed` / `### Fixed` / `### Why`).
+4. Обновить этот README: строка **Current version** + краткий highlights при minor/major.
+5. При смене маршрутизации tools ↔ WarCard — [docs/MCP_ROUTING.md](docs/MCP_ROUTING.md).
+
+PR / handoff без пунктов 1–4 считается incomplete.
 
 ## Testing
 

@@ -1,9 +1,9 @@
 {
 	"FileVersion": 3,
-	"Version": 111,
-	"VersionName": "3.26.0",
+	"Version": 113,
+	"VersionName": "3.28.0",
 	"FriendlyName": "UnrealMCP",
-	"Description": "Model Context Protocol implementation for Unreal Engine",
+	"Description": "UnrealMCP 3.28 — MCP content bridge (TCP :55557): Blueprint/UMG/Material/Mesh/Niagara/DT/Level, asset refs+rename, viewport_capture(game_view), bridge retry. ~170 Python tools.",
 	"Category": "Editor",
 	"CreatedBy": "DONXAKer",
 	"CreatedByURL": "",

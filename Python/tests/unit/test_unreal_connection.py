@@ -234,3 +234,74 @@ def test_receive_full_response_timeout_with_partial_data_still_raises(monkeypatc
     conn = UnrealConnection()
     with pytest.raises(RuntimeError, match="Timeout receiving Unreal response"):
         conn.receive_full_response(sock)  # type: ignore[arg-type]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# send_command retry (FIX-MCP-005)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_is_transient_bridge_error_detects_empty_accept() -> None:
+    assert UnrealConnection._is_transient_bridge_error(
+        "Connection closed before receiving data"
+    )
+    assert UnrealConnection._is_transient_bridge_error(
+        "Cannot connect to Unreal at 127.0.0.1:55557"
+    )
+    assert not UnrealConnection._is_transient_bridge_error("Unknown widget type: Slider")
+
+
+def test_send_command_retries_transient_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(unreal_connection, "SEND_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(unreal_connection, "SEND_RETRY_DELAY_SECONDS", 0.0)
+    conn = UnrealConnection()
+    calls = {"n": 0}
+
+    def _once(command: str, params: dict | None) -> dict:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return {"status": "error", "error": "Connection closed before receiving data"}
+        return {"status": "success", "result": {"ok": True}}
+
+    monkeypatch.setattr(conn, "_send_command_once", _once)
+    result = conn.send_command("ping", {})
+    assert result is not None
+    assert result.get("status") == "success"
+    assert calls["n"] == 3
+
+
+def test_send_command_does_not_retry_business_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(unreal_connection, "SEND_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr(unreal_connection, "SEND_RETRY_DELAY_SECONDS", 0.0)
+    conn = UnrealConnection()
+    calls = {"n": 0}
+
+    def _once(command: str, params: dict | None) -> dict:
+        calls["n"] += 1
+        return {"status": "error", "error": "Unknown widget type: 'Foo'"}
+
+    monkeypatch.setattr(conn, "_send_command_once", _once)
+    result = conn.send_command("add_widget_to_umg", {})
+    assert result is not None
+    assert result.get("status") == "error"
+    assert calls["n"] == 1
+
+
+def test_send_command_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FIX-MCP-005: одиночный TCP fail не должен ронять stdio MCP-сессию."""
+    monkeypatch.setattr(unreal_connection, "SEND_MAX_ATTEMPTS", 2)
+    monkeypatch.setattr(unreal_connection, "SEND_RETRY_DELAY_SECONDS", 0.0)
+    conn = UnrealConnection()
+
+    def _boom(command: str, params: dict | None) -> dict:
+        raise RuntimeError("should be caught inside _send_command_once")
+
+    # _send_command_once already catches; simulate it returning error dicts.
+    monkeypatch.setattr(
+        conn,
+        "_send_command_once",
+        lambda c, p: {"status": "error", "error": "Connection closed before receiving data"},
+    )
+    result = conn.send_command("ping")
+    assert isinstance(result, dict)
+    assert result.get("status") == "error"

@@ -21,6 +21,14 @@ TSharedPtr<FJsonObject> FAssetCommands::HandleCommand(const FString& CommandType
     {
         return HandleDeleteAsset(Params);
     }
+    if (CommandType == TEXT("get_asset_references"))
+    {
+        return HandleGetAssetReferences(Params);
+    }
+    if (CommandType == TEXT("rename_asset"))
+    {
+        return HandleRenameAsset(Params);
+    }
 
     return FAssetCommonUtils::MakeFailureResponse(
         TEXT("ue_internal"),
@@ -131,4 +139,113 @@ TSharedPtr<FJsonObject> FAssetCommands::HandleDeleteAsset(const TSharedPtr<FJson
     TSharedPtr<FJsonObject> Meta = MakeShared<FJsonObject>();
     Meta->SetBoolField(TEXT("deleted"), true);
     return FAssetCommonUtils::MakeSuccessResponse(TEXT("updated"), AssetPath, Meta);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// get_asset_references
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FAssetCommands::HandleGetAssetReferences(const TSharedPtr<FJsonObject>& Params)
+{
+    FString AssetPath;
+    TSharedPtr<FJsonObject> ParamFailure;
+    if (!FAssetCommonUtils::RequireAssetPath(Params, AssetPath, ParamFailure))
+    {
+        return ParamFailure;
+    }
+
+    if (!FAssetCommonUtils::AssetExistsInRegistry(AssetPath))
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetStringField(TEXT("assetPath"), AssetPath);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"),
+            TEXT("ASSET_NOT_FOUND"),
+            FString::Printf(TEXT("No asset exists at '%s'"), *AssetPath),
+            Details);
+    }
+
+    // Prefer EditorAssetLibrary — same surface Content Browser uses for
+    // "Reference Viewer" package list (hard + soft package deps on this asset).
+    TArray<FString> Referencers = UEditorAssetLibrary::FindPackageReferencersForAsset(AssetPath, /*bLoadAssetsToConfirm=*/false);
+
+    TArray<TSharedPtr<FJsonValue>> RefValues;
+    RefValues.Reserve(Referencers.Num());
+    for (const FString& Ref : Referencers)
+    {
+        RefValues.Add(MakeShared<FJsonValueString>(Ref));
+    }
+
+    TSharedPtr<FJsonObject> Meta = MakeShared<FJsonObject>();
+    Meta->SetArrayField(TEXT("references"), RefValues);
+    Meta->SetNumberField(TEXT("count"), Referencers.Num());
+    return FAssetCommonUtils::MakeSuccessResponse(TEXT("updated"), AssetPath, Meta);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// rename_asset
+// ─────────────────────────────────────────────────────────────────────────────
+
+TSharedPtr<FJsonObject> FAssetCommands::HandleRenameAsset(const TSharedPtr<FJsonObject>& Params)
+{
+    FString AssetPath;
+    TSharedPtr<FJsonObject> ParamFailure;
+    if (!FAssetCommonUtils::RequireAssetPath(Params, AssetPath, ParamFailure))
+    {
+        return ParamFailure;
+    }
+
+    FString NewAssetPath;
+    if (!Params.IsValid() || !Params->TryGetStringField(TEXT("newAssetPath"), NewAssetPath) || NewAssetPath.IsEmpty())
+    {
+        // Also accept snake_case for Python callers.
+        if (!Params.IsValid() || !Params->TryGetStringField(TEXT("new_asset_path"), NewAssetPath) || NewAssetPath.IsEmpty())
+        {
+            return FAssetCommonUtils::MakeFailureResponse(
+                TEXT("user"),
+                TEXT("MISSING_NEW_ASSET_PATH"),
+                TEXT("Param 'newAssetPath' (or 'new_asset_path') is required"));
+        }
+    }
+
+    if (!FAssetCommonUtils::AssetExistsInRegistry(AssetPath))
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetStringField(TEXT("assetPath"), AssetPath);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"),
+            TEXT("ASSET_NOT_FOUND"),
+            FString::Printf(TEXT("No asset exists at '%s'"), *AssetPath),
+            Details);
+    }
+
+    if (FAssetCommonUtils::AssetExistsInRegistry(NewAssetPath))
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetStringField(TEXT("newAssetPath"), NewAssetPath);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("user"),
+            TEXT("DESTINATION_EXISTS"),
+            FString::Printf(TEXT("Destination already exists: '%s'"), *NewAssetPath),
+            Details);
+    }
+
+    const bool bRenamed = UEditorAssetLibrary::RenameAsset(AssetPath, NewAssetPath);
+    if (!bRenamed)
+    {
+        TSharedPtr<FJsonObject> Details = MakeShared<FJsonObject>();
+        Details->SetStringField(TEXT("assetPath"), AssetPath);
+        Details->SetStringField(TEXT("newAssetPath"), NewAssetPath);
+        return FAssetCommonUtils::MakeFailureResponse(
+            TEXT("ue_internal"),
+            TEXT("RENAME_FAILED"),
+            FString::Printf(TEXT("UEditorAssetLibrary::RenameAsset failed for '%s' → '%s'"), *AssetPath, *NewAssetPath),
+            Details);
+    }
+
+    TSharedPtr<FJsonObject> Meta = MakeShared<FJsonObject>();
+    Meta->SetStringField(TEXT("oldAssetPath"), AssetPath);
+    Meta->SetStringField(TEXT("newAssetPath"), NewAssetPath);
+    Meta->SetBoolField(TEXT("renamed"), true);
+    return FAssetCommonUtils::MakeSuccessResponse(TEXT("updated"), NewAssetPath, Meta);
 }

@@ -574,6 +574,7 @@ def register_editor_tools(mcp: FastMCP) -> None:
     def viewport_capture(
         ctx: Context[Any, Any, Any],
         filename: str = "MCPViewport.png",
+        game_view: bool = False,
     ) -> dict[str, Any]:
         """Capture the level viewport synchronously to a PNG.
 
@@ -586,6 +587,9 @@ def register_editor_tools(mcp: FastMCP) -> None:
 
         Args:
             filename: PNG name written under <ProjectSaved>/Screenshots/.
+            game_view: If True, temporarily enable FLevelEditorViewportClient
+                game view (hides editor gizmos/actor icons) for the capture,
+                then restore the previous mode. Needed for TOOL-SHOT-001 lookdev.
 
         The captured size follows the viewport, so it is not settable here — for
         an exact output size use PIE plus `take_screenshot` with
@@ -593,14 +597,17 @@ def register_editor_tools(mcp: FastMCP) -> None:
 
         Example:
             viewport_set_camera(location=[0, -2500, 2100], rotation=[-48, 90, 0])
-            viewport_capture(filename="board_overview.png")
+            viewport_capture(filename="board_overview.png", game_view=True)
         """
         from unreal_mcp_server import get_unreal_connection
         try:
             unreal = get_unreal_connection()
             if not unreal:
                 return {"success": False, "message": "Failed to connect to Unreal Engine"}
-            response = unreal.send_command("viewport_capture", {"filename": filename})
+            response = unreal.send_command(
+                "viewport_capture",
+                {"filename": filename, "game_view": game_view},
+            )
             if not response:
                 return {"success": False, "message": "No response from Unreal Engine"}
             return response
